@@ -1,16 +1,38 @@
 # Mascot
 
-A small Clawd (the Claude Code mascot) floats over the desktop and shows what Auren is doing.
+A small character floats over the desktop and shows what Auren is doing: **Clawd** (the Claude Code
+mascot, the default), **Veyra** (a fox spirit) or **Auren** (a hover-bot). Pick one on the bar panel's
+Mascot page, or set `mascot` in `~/.config/auren/mascot.json`; it switches live.
 
 | | |
 |---|---|
-| Code | `mascot/shell.qml` (windows, input, bubble), `mascot/mascots/clawd/` (the character) |
+| Code | `mascot/shell.qml` (windows, input, bubble), `mascot/mascots/<name>/` (the characters), `mascot/mascots/common/` (what they share) |
 | Runs as | `auren-mascot.service`, a systemd user service: `qs -n -p ~/Projects/auren/mascot` |
 | Reads | `$XDG_RUNTIME_DIR/auren/state.json` (state, live transcript, activity, caption, yes/no question), `$XDG_RUNTIME_DIR/auren/level` (mic or voice loudness, ~20/s) |
 | Remembers | `~/.local/state/auren/mascot.json` (place, size, hidden) |
-| Preferences | `~/.config/auren/mascot.json` (optional): `idleOpacity` 0.45, `fadeAfter` 12 s, `sleepAfter` 240 s, `bubble` true, `sleepAnimation` true |
+| Preferences | `~/.config/auren/mascot.json` (optional): `mascot` clawd, `idleOpacity` 0.45, `fadeAfter` 12 s, `sleepAfter` 240 s, `bubble` true, `sleepAnimation` true, `matchVoice` true (read by the bar panel) |
+
+## The characters
+
+![Clawd, Veyra and Auren in each mood](images/mascots.png)
+
+| | Clawd | Veyra | Auren |
+|---|---|---|---|
+| Is | the Claude Code logo's blocks, walking | a lavender fox spirit: big ears, glossy eyes with lashes, a gold star on her forehead, a fluffy tail | a cobalt hover-bot: dark glass visor with gold LED eyes, antenna, floating hands, thruster glow |
+| Listening | stands tall, rings | ears perk and twitch with your voice, the star glows, rings | radio rings from the antenna, a hand cupped at his ear |
+| Thinking | sways, three dots | looks up, tail curls, sparkles twinkle | hand on his chin, two sparks orbit the antenna |
+| Working | walks, arms typing | paws tapping, tail wagging fast | types on a hologram keyboard; eyes narrow to a scan |
+| Using the mouse | a clicking cursor by its arm | the same, by her side | holds the pointer in his right hand |
+| Speaking | bounces and waves | mouth opens with the voice, little hops | the mouth is a little equalizer |
+| Yes/no | head tilt, "?" | head tilt, one ear folded, "?" | head tilt, scratching his head, "?" |
+| Error | shakes, X eyes | ears flat, X eyes | red visor, X eyes, sparks |
+| Asleep | eyes shut, z's | ears droop, eyes ‿ ‿, tail wrapped down | sinks to the ground, thruster off, dim eyes |
+| Voice (if "voice follows mascot") | F2 | F2 | M3 |
+| Colour (bar icon, panel accents) | orange `#D77757` | lavender `#A08BF7` | gold `#F5B83D` (body cobalt) |
 
 ## What it shows
+
+The table uses Clawd; the others do the same in their own way (above).
 
 | Auren is | Clawd | Bubble |
 |---|---|---|
@@ -37,7 +59,7 @@ After a reply it smiles (^ ^, blush).
 Remote control (for the bar plugin):
 
 ```bash
-qs -p ~/Projects/auren/mascot ipc call mascot toggle   # show, hide, poke, reset, state
+qs -p ~/Projects/auren/mascot ipc call mascot toggle   # show, hide, poke, reset, state, size 1.2
 systemctl --user restart auren-mascot
 ```
 
@@ -52,7 +74,11 @@ systemctl --user restart auren-mascot
   compositor round trip per mouse move; on release it shrinks back to Clawd's size at the new place.
 - **Animation:** every pose is oscillators driven by one clock × mood weights that fade in and out,
   so moods blend instead of jumping. The clock runs every frame only while Auren is doing something.
-  Idle breathing is stepped at 10 fps, and the clock stops once Clawd has faded.
+  Idle breathing is stepped at 10 fps, and the clock stops once the mascot has faded. All of this is in
+  `mascots/common/MascotBase.qml`; each character only adds its pose and drawing.
+- **Fading** draws the mascot as one picture (`layer.enabled` while its opacity is below 1). Without it,
+  Qt fades each part on its own and overlapping parts (Veyra's ears and tail, Auren's hands) show
+  through the body.
 - **Captions and bounce:** the voice keeps a timeline of when each sentence's audio actually plays and
   its loudness envelope; a small thread reports the current sentence and level (`src/auren/voice.py`).
   The mic level comes from the audio chunks the ears already read (`src/auren/ears.py`).
@@ -88,12 +114,28 @@ systemctl --user restart auren-mascot
 - Quickshell hot-reloads on save, but a reload can leave a layer surface's margins stale until the next
   change; restart the service to be sure.
 
-## More mascots
+## Making a mascot
 
-A mascot is a folder under `mascot/mascots/` with an item that follows the contract at the top of
-`Clawd.qml`:
-- **in:** mood, level, drowsy, asleep, mouse, awaiting, hovered, pointer, off;
-- **out:** size, hitbox, bubble anchor;
-- **functions:** `poke()`, `cheer()`.
+A mascot is a folder under `mascot/mascots/<name>/` with `<Name>.qml`, whose root is a `MascotBase`
+(`mascots/common/`). The base holds the contract with `shell.qml` and the bar panel:
+- **in:** u, mood, level, drowsy, asleep, sleepAnimation, mouse, awaiting, hovered, pointerX/Y, off;
+- **out:** implicitWidth/Height, padX/padTop (where its stage starts), hitbox (an Item on the stage, the
+  input mask), bubbleAnchorY, accent;
+- **functions:** `poke()`, `cheer()`;
+- **for drawing:** the clock `t`, `osc(hz, phase)`, `pulse()`, `mix()`, mood weights (`wListen`, `wSway`,
+  `wWork`, `wSpeak`, `wAsk`, `wSleep`, `wError`…), `lv` (smoothed loudness), `hopA`/`squashA`/`shakeA`,
+  `happy`, `blink`, `lookX/Y`, `eyeShape`, `breath`. Shared pieces: `Zzz`, `Pointer`, `Sparkle`.
 
-Choosing one from preferences comes with the next mascot.
+Then add it to `kind` and the components in `shell.qml`, `mascots` in the bar panel, and pixels in
+`omarchy-plugin/MiniMascot.qml`.
+
+To see every mascot in every mood (it's how Veyra and Auren were drawn and checked):
+
+```bash
+qs -p mascot/gallery.qml                                    # on screen; right-click one to poke it
+GALLERY_OUT=/tmp/g.png qs -p mascot/gallery.qml             # save a PNG and quit
+GALLERY_U=10 GALLERY_ONLY=idle,speaking GALLERY_BG=#efece4 GALLERY_OUT=/tmp/g.png qs -p mascot/gallery.qml
+```
+
+Quickshell only knows a folder's QML types when that folder is imported somewhere, so `shell.qml` and
+`gallery.qml` import every mascot folder even though they load them by name.

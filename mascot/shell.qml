@@ -11,13 +11,17 @@
 //   right-click     a poke
 //   scroll          make it bigger or smaller
 //
-// Faded when idle, asleep after a while. Remote control for the bar plugin:
-//   qs -p ~/Projects/auren/mascot ipc call mascot toggle|show|hide|poke|reset
+// Faded when idle, asleep after a while. Which character shows is `mascot` in ~/.config/auren/mascot.json:
+// clawd, veyra or auren (folders under mascots/, all built on mascots/common/MascotBase.qml); it switches live.
+// Remote control for the bar plugin:
+//   qs -p ~/Projects/auren/mascot ipc call mascot toggle|show|hide|poke|reset|size <0.6..2.2>
 import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import "mascots/clawd"
+import "mascots/veyra"
+import "mascots/auren"
 
 ShellRoot {
   id: root
@@ -39,6 +43,7 @@ ShellRoot {
       property int sleepAfter: 240        // seconds of quiet before falling asleep
       property bool bubble: true          // speech bubble with transcript and captions
       property bool sleepAnimation: true  // keep breathing (and drifting z's) when faded or asleep; false saves CPU
+      property string mascot: "clawd"     // clawd, veyra or auren
     }
   }
 
@@ -164,6 +169,29 @@ ShellRoot {
   }
   onUChanged: clampPos()
 
+  // ---- the character -------------------------------------------------------------------------
+  readonly property string kind: ["clawd", "veyra", "auren"].indexOf(prefs.mascot) >= 0 ? prefs.mascot : "clawd"
+  readonly property Item mascot: mascotLoader.item || placeholder
+  Item { id: placeholder; property real u: 6; property real padX: 4; property real padTop: 6; implicitWidth: 144; implicitHeight: 108
+         property Item hitbox: placeholder; property real bubbleAnchorY: 0; property string mood: "idle"
+         function poke() {} }
+  Component { id: clawdComponent; Clawd {} }
+  Component { id: veyraComponent; Veyra {} }
+  Component { id: aurenComponent; Auren {} }
+  function bindMascot(m) {
+    m.u = Qt.binding(() => root.u)
+    m.mood = Qt.binding(() => root.mood === "off" ? "idle" : root.mood)
+    m.off = Qt.binding(() => root.mood === "off")
+    m.level = Qt.binding(() => root.level)
+    m.drowsy = Qt.binding(() => root.drowsy)
+    m.asleep = Qt.binding(() => root.asleep)
+    m.sleepAnimation = Qt.binding(() => prefs.sleepAnimation)
+    m.mouse = Qt.binding(() => root.st.mouse === true)
+    m.awaiting = Qt.binding(() => root.awaiting)
+    m.hovered = Qt.binding(() => root.hovered)
+    Qt.callLater(root.clampPos)
+  }
+
   PanelWindow {
     id: win
     visible: !place.hidden
@@ -189,21 +217,14 @@ ShellRoot {
       y: win.full ? root.posY : 0
       width: mascot.implicitWidth
       height: mascot.implicitHeight
+      opacity: root.mood === "off" ? 0.4 : root.drowsy ? prefs.idleOpacity : 1
+      Behavior on opacity { NumberAnimation { duration: 700; easing.type: Easing.InOutQuad } }
+      layer.enabled: opacity < 0.999      // fade as one picture, so overlapping parts don't show through
 
-      Clawd {
-        id: mascot
-        u: root.u
-        mood: root.mood === "off" ? "idle" : root.mood
-        off: root.mood === "off"
-        level: root.level
-        drowsy: root.drowsy
-        asleep: root.asleep
-        sleepAnimation: prefs.sleepAnimation
-        mouse: root.st.mouse === true
-        awaiting: root.awaiting
-        hovered: root.hovered
-        opacity: root.mood === "off" ? 0.4 : root.drowsy ? prefs.idleOpacity : 1
-        Behavior on opacity { NumberAnimation { duration: 700; easing.type: Easing.InOutQuad } }
+      Loader {
+        id: mascotLoader
+        sourceComponent: root.kind === "veyra" ? veyraComponent : root.kind === "auren" ? aurenComponent : clawdComponent
+        onLoaded: root.bindMascot(item)
       }
 
       MouseArea {
@@ -397,6 +418,7 @@ ShellRoot {
     function hide(): string { place.hidden = true; return "hidden" }
     function toggle(): string { place.hidden = !place.hidden; return place.hidden ? "hidden" : "shown" }
     function poke(): string { mascot.poke(); return "poked" }
+    function size(value: real): string { place.size = Math.max(0.6, Math.min(2.2, value)); return String(place.size) }
     function reset(): string {
       place.size = 1
       root.posX = win.screen.width - mascot.implicitWidth - 40
@@ -404,6 +426,6 @@ ShellRoot {
       root.savePos()
       return "reset"
     }
-    function state(): string { return JSON.stringify({ hidden: place.hidden, size: place.size, x: root.posX, y: root.posY, mood: mascot.mood }) }
+    function state(): string { return JSON.stringify({ hidden: place.hidden, size: place.size, x: root.posX, y: root.posY, mood: mascot.mood, mascot: root.kind }) }
   }
 }
