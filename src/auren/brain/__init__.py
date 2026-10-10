@@ -54,6 +54,7 @@ class ClaudeBrain:
     def __init__(self, model: str = "haiku", effort: str = "low", think: bool = True):
         self.model, self.effort, self.think = model, effort, think
         self.profile = Profile()
+        self.language, self.speaker = "en", "female"      # reply language and the voice's gender (set by Brain)
         self.proc: subprocess.Popen | None = None
         self.context_tokens = 0
         self._stderr: list[str] = []
@@ -102,7 +103,7 @@ class ClaudeBrain:
         if self.proc is None or self.proc.poll() is not None or self.context_tokens > MAX_CONTEXT:
             self.start()
         safety.next_turn()     # a new user message: confirmations from earlier turns become redeemable
-        msg = prompt.user_message(transcript, self.profile.live_context())
+        msg = prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker)
         sent = time.perf_counter()
         self.proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": msg}}) + "\n")
         self.proc.stdin.flush()
@@ -171,6 +172,7 @@ class CodexBrain:
     def __init__(self, model: str = "gpt-6.1-sol", effort: str = "low"):
         self.model, self.effort = model, effort
         self.profile = Profile()
+        self.language, self.speaker = "en", "female"
         self.history: list[tuple[str, str]] = []
 
     def stop(self) -> None:
@@ -186,7 +188,7 @@ class CodexBrain:
             prompt.system_prompt(self.profile.static_context()),
             "Use only the auren tools to act; do not run shell commands yourself.",
             f"Recent conversation:\n{recent}" if recent else "",
-            prompt.user_message(transcript, self.profile.live_context())) if x)
+            prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker)) if x)
         cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
                "-m", self.model, "-c", f"model_reasoning_effort={self.effort}", "-c", "project_doc_max_bytes=0",
                "-c", f'mcp_servers.auren.command="{sys.executable}"',
@@ -236,9 +238,10 @@ class Brain:
 
     RETRY_AFTER = 30 * 60
     MODES = ("auto", "claude", "codex")
+    EFFORTS = ("low", "medium", "high", "xhigh", "max")      # Claude Code's --effort; low is decision 0003's
 
-    def __init__(self, model: str = "haiku", think: bool = True, mode: str = "auto"):
-        self.primary = ClaudeBrain(model=model, think=think)
+    def __init__(self, model: str = "haiku", think: bool = True, mode: str = "auto", effort: str = "low"):
+        self.primary = ClaudeBrain(model=model, think=think, effort=effort if effort in self.EFFORTS else "low")
         self.backup = CodexBrain()
         self.limited_since: float | None = None
         self.mode = mode if mode in self.MODES else "auto"
@@ -271,6 +274,24 @@ class Brain:
     def stop(self) -> None:
         self.primary.stop()
         self.backup.stop()
+
+    def set_language(self, language: str, speaker: str = "female") -> None:
+        """Reply language (en, hi) and the voice's gender; both brains use them from the next request on."""
+        if language not in prompt.LANGUAGES:
+            raise ValueError(f"language must be one of {', '.join(prompt.LANGUAGES)}")
+        for b in (self.primary, self.backup):
+            b.language, b.speaker = language, speaker
+
+    @property
+    def language(self) -> str:
+        return self.primary.language
+
+    def set_effort(self, effort: str) -> None:
+        """Claude's effort is fixed when its process starts: restart it (warm), which starts a fresh conversation."""
+        if effort not in self.EFFORTS:
+            raise ValueError(f"effort must be one of {', '.join(self.EFFORTS)}")
+        self.primary.effort = effort
+        self.forget()
 
     def forget(self) -> None:
         """Start a fresh conversation: a new Claude process (warmed up now, so the next answer isn't slow)

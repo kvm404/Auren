@@ -1,0 +1,125 @@
+import json
+
+from auren import daemon
+from auren.voice import tuning
+
+
+def test_tuning_defaults_are_decision_0001():
+    assert tuning() == {"speed": 1.05, "steps": 5, "volume": 1.0, "pause": 0.0}
+
+
+def test_tuning_clamps_rounds_and_ignores_junk():
+    t = tuning({"speed": "2", "steps": "4.6", "volume": "loud", "pause": -1, "other": 3})
+    assert t == {"speed": 1.6, "steps": 5, "volume": 1.0, "pause": 0.0}
+
+
+class _Quiet(daemon.Daemon):
+    """Only what the tts command touches: no voice model, no brain."""
+
+    def __init__(self):
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", **tuning()}
+        self.voice = None
+        self.refreshed = 0
+
+    def _refresh_state(self):
+        self.refreshed += 1
+
+
+def test_tts_command_saves_and_resets(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    d = _Quiet()
+    assert d._tts(["speed", "1.2", "pause", "0.3"]) == "tts speed 1.2 steps 5 volume 1.0 pause 0.3"
+    saved = json.loads((tmp_path / "settings.json").read_text())
+    assert saved["speed"] == 1.2 and saved["pause"] == 0.3 and saved["voiceName"] == "F2"
+    assert d._tts(["reset"]).startswith("tts speed 1.05 steps 5")
+    assert d.refreshed == 2
+
+
+def test_tts_command_rejects_bad_input(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    d = _Quiet()
+    for words in ([], ["speed"], ["pitch", "2"]):
+        assert d._tts(words).startswith("usage:")
+    assert not (tmp_path / "settings.json").exists()
+
+
+class _FakeBrain:
+    EFFORTS = daemon.Brain.EFFORTS
+    mode, using_backup = "auto", False
+
+    def __init__(self):
+        self.efforts = []
+
+    def set_effort(self, level):
+        self.efforts.append(level)
+
+
+def test_effort_command_saves_and_restarts_the_brain(tmp_path, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, *a, **k: None)
+    monkeypatch.setattr(daemon.Daemon, "_history", lambda self, record: None)
+    monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": None)
+
+    async def run():
+        d = _Quiet()
+        d.brain, d.busy = _FakeBrain(), asyncio.Lock()
+        assert (await d.command("effort turbo")).startswith("usage:")
+        assert await d.command("effort high") == "effort high"
+        await asyncio.sleep(0.05)                     # the restart runs in the background
+        return d
+
+    d = asyncio.run(run())
+    assert d.brain.efforts == ["high"]
+    assert json.loads((tmp_path / "settings.json").read_text())["effort"] == "high"
+
+
+def test_settings_ignore_an_unknown_effort(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    (tmp_path / "settings.json").write_text('{"effort": "ludicrous"}')
+    assert daemon.load_settings()["effort"] == "low"
+
+
+def test_hindi_sentences_split_on_the_danda_and_pick_hindi_mode():
+    from auren.voice import language_of, sentences
+
+    text = "ठीक है, मैं अभी Firefox खोल रही हूँ। बस दो second। Done?"
+    assert sentences(text) == ["ठीक है, मैं अभी Firefox खोल रही हूँ।", "बस दो second।", "Done?"]
+    assert [language_of(s) for s in sentences(text)] == ["hi", "hi", "en"]
+    assert language_of("Okay, fresh start.") == "en"
+
+
+def test_reply_language_note():
+    from auren.brain import prompt
+
+    assert prompt.reply_language("en") == ""
+    female, male = prompt.reply_language("hi", "female"), prompt.reply_language("hi", "male")
+    assert "Devanagari" in female and "रही हूँ" in female and "रहा हूँ" in male
+    msg = prompt.user_message("open whatsapp", "time: now", "hi", "male")
+    assert msg.index("<reply_language>") < msg.index("Transcript: open whatsapp")
+    assert "<reply_language>" not in prompt.user_message("open whatsapp", "time: now")
+
+
+class _LangBrain(_FakeBrain):
+    def __init__(self):
+        super().__init__()
+        self.set = []
+
+    def set_language(self, language, speaker="female"):
+        self.set.append((language, speaker))
+
+
+def test_language_command_follows_the_voice_gender(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    d = _Quiet()
+    d.settings["language"] = "en"
+    d.brain = _LangBrain()
+    assert d._refresh_state() is None
+    import asyncio
+    assert asyncio.run(d.command("language fr")).startswith("usage:")
+    assert asyncio.run(d.command("language hi")) == "language hi"
+    d.settings["voiceName"] = "M3"
+    assert asyncio.run(d.command("language hi")) == "language hi"
+    assert d.brain.set == [("hi", "female"), ("hi", "male")]
+    assert json.loads((tmp_path / "settings.json").read_text())["language"] == "hi"

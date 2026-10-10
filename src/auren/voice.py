@@ -4,6 +4,14 @@ Speech is generated sentence by sentence and piped into pw-cat, so the first
 sentence plays while the rest is still being generated. `stop()` cuts it off
 (the user pressed the talk key again).
 
+Adjustable (the bar panel's Voice page, `auren-ctl tts ...`): speed, steps
+(quality: more steps cost more CPU), volume (scales the samples, relative to the
+system volume) and a pause between sentences.
+
+Hindi (decision 0001): a sentence with Devanagari in it is spoken in Hindi mode,
+English words in Latin letters included; anything else in English mode. So the
+brain's Hindi replies and the daemon's own English phrases both sound right.
+
 For the mascot, a small clock thread follows the playback: it reports which
 sentence is being heard (captions) and how loud it is (the mascot bounces), using
 each sentence's loudness envelope and when its audio starts playing.
@@ -23,22 +31,44 @@ from .live import envelope
 
 LATENCY = 0.12        # pw-cat's start-up and buffering, roughly
 
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# name: (default, lowest, highest). The defaults are decision 0001's (speed 1.05 is Supertonic's own).
+TUNING = {"speed": (1.05, 0.7, 1.6), "steps": (5, 2, 12), "volume": (1.0, 0.1, 1.0), "pause": (0.0, 0.0, 1.0)}
+
+
+def tuning(values: dict | None = None) -> dict:
+    """Speed, steps, volume and pause from `values`, each clamped to its range (defaults for the rest)."""
+    out = {}
+    for name, (default, low, high) in TUNING.items():
+        try:
+            v = float((values or {}).get(name, default))
+        except (TypeError, ValueError):
+            v = default
+        v = min(high, max(low, v))
+        out[name] = int(round(v)) if name == "steps" else round(v, 2)
+    return out
+
+_SENTENCE_END = re.compile(r"(?<=[.!?।])\s+")       # । is the Hindi full stop
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
 
 
 def sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_END.split(text.strip()) if s.strip()]
 
 
+def language_of(sentence: str) -> str:
+    """Supertonic's language for a sentence: Hindi if it has Devanagari in it, otherwise English."""
+    return "hi" if _DEVANAGARI.search(sentence) else "en"
+
+
 class Voice:
-    def __init__(self, voice: str = "F2", steps: int = 5, speed: float | None = None,
+    def __init__(self, voice: str = "F2", steps: int = 5, speed: float = 1.05, volume: float = 1.0, pause: float = 0.0,
                  on_level: Callable[[float], None] | None = None, on_sentence: Callable[[str], None] | None = None):
         from supertonic import TTS          # loads the ONNX models (~380 MB, cached in ~/.cache/supertonic3)
 
         self.tts = TTS(auto_download=True)
         self.name = voice
         self.style = self.tts.get_voice_style(voice_name=voice)
-        self.steps, self.speed = steps, speed
+        self.steps, self.speed, self.volume, self.pause = steps, speed, volume, pause
         self.rate = int(getattr(self.tts, "sample_rate", 44100))
         self._player: subprocess.Popen | None = None
         self._stop = threading.Event()
@@ -57,17 +87,23 @@ class Voice:
             clock = threading.Thread(target=self._follow, daemon=True)
             clock.start()
             try:
-                extra = {"speed": self.speed} if self.speed else {}
-                for sentence in sentences(text):
+                gap = np.zeros(int(self.pause * self.rate), dtype=np.float32)
+                for i, sentence in enumerate(sentences(text)):
                     if self._stop.is_set():
                         break
                     wav, _ = self.tts.synthesize(text=sentence, voice_style=self.style, total_steps=self.steps,
-                                                 lang="en", **extra)
+                                                 speed=self.speed, lang=language_of(sentence))
                     if self._stop.is_set():
                         break
                     audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+                    env = envelope(audio, self.rate)            # before the volume, so the mascot bounces the same
+                    if self.volume < 1:
+                        audio = audio * np.float32(self.volume)
+                    if i and gap.size:                          # the pause goes before every sentence but the first
+                        audio = np.concatenate([gap, audio])
+                        env = [0.0] * int(self.pause * 20) + env
                     start = max(time.monotonic() + LATENCY, self._timeline[-1][1] if self._timeline else 0)
-                    self._timeline.append((start, start + len(audio) / self.rate, envelope(audio, self.rate), sentence))
+                    self._timeline.append((start, start + len(audio) / self.rate, env, sentence))
                     self._player.stdin.write(audio.tobytes())
                     self._player.stdin.flush()
                 self._player.stdin.close()
@@ -103,6 +139,11 @@ class Voice:
     @property
     def names(self) -> list[str]:
         return sorted(self.tts.voice_style_names)
+
+    def tune(self, values: dict) -> None:
+        """Apply speed, steps, volume and pause (clamped); used from the next sentence on."""
+        t = tuning(values)
+        self.speed, self.steps, self.volume, self.pause = t["speed"], t["steps"], t["volume"], t["pause"]
 
     def set_voice(self, name: str) -> None:
         if name not in self.tts.voice_style_names:

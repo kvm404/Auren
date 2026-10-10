@@ -25,9 +25,11 @@ scripts in `experiments/tts/`.
 - The only tested engine that speaks Hindi properly.
 - Custom voices are possible later via Supertonic Voice Builder (JSON export).
 
-## Hindi and Hinglish (deferred)
+## Hindi and Hinglish
 
-Out of scope for now; English comes first. Tested and working if picked up later:
+Picked up on 2026-10-10 as a reply-language setting (`auren-ctl language hi`, the panel's Voice page): the
+brain writes option C below (Hindi in Devanagari, English names in Latin) and each sentence with
+Devanagari is synthesized with `lang="hi"`. What the original test found:
 
 - Hindi must be written in **Devanagari** and synthesized with `lang="hi"`.
 - Hinglish in Roman letters ("main abhi Firefox khol raha hoon") is spoken badly by every engine tested.

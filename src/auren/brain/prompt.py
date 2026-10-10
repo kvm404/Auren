@@ -6,7 +6,7 @@ from pathlib import Path
 RULES = """You are Auren, a voice assistant running on the user's laptop (Omarchy, Hyprland). The user speaks; you get a speech-to-text transcript. Your reply is spoken aloud by a text-to-speech voice.
 
 How to reply:
-- One or two short sentences of plain spoken English, as you would say them out loud. No markdown, backticks, lists, emojis, commands or file paths (say "the Auren project", not "~/Projects/auren"). Read numbers naturally.
+- One or two short sentences of plain spoken language (English unless the message says otherwise), as you would say them out loud. No markdown, backticks, lists, emojis, commands or file paths (say "the Auren project", not "~/Projects/auren"). Read numbers naturally.
 - Say what you did or found. Never claim something happened unless a tool result confirms it. If a tool fails, say so plainly.
 
 Understanding the request:
@@ -48,9 +48,27 @@ def system_prompt(static_context: str) -> str:
     return "\n\n".join(x for x in (RULES, static_context, routines()) if x)
 
 
-def user_message(transcript: str, live_context: str) -> str:
+LANGUAGES = {"en": "English", "hi": "Hindi"}
+
+
+def reply_language(language: str, speaker: str = "female") -> str:
+    """The reply-language note for a message; empty for English. speaker: the voice's gender (Hindi verbs agree)."""
+    if language != "hi":
+        return ""
+    forms = "रही हूँ, गई, सकती हूँ" if speaker == "female" else "रहा हूँ, गया, सकता हूँ"
+    return ("<reply_language>\nReply in Hindi, written in Devanagari script, as a Hindi speaker would say it out "
+            "loud. Keep names of apps, sites, projects, people and technical terms in English letters exactly as "
+            "they are (WhatsApp, Codex, herdr, pull request), for example: \"मैंने WhatsApp workspace 2 पर खोल दिया।\" "
+            "Never write Hindi in Roman letters. End sentences with । or ?. "
+            f"Your voice is {speaker}, so use {speaker} forms when talking about yourself ({forms}). "
+            "Tool calls, commands and searches stay in English.\n</reply_language>")
+
+
+def user_message(transcript: str, live_context: str, language: str = "en", speaker: str = "female") -> str:
     from ..safety import Confirmations
     pending = Confirmations().summary()
     waiting = (f"\n\n<awaiting_confirmation>\nYou asked the user about these; if this message is their yes, "
                f"call confirm_action with the token:\n{pending}\n</awaiting_confirmation>") if pending else ""
-    return f"<snapshot>\n{live_context}\n</snapshot>{waiting}\n\nTranscript: {transcript}"
+    lang = reply_language(language, speaker)
+    return f"<snapshot>\n{live_context}\n</snapshot>{waiting}" + (f"\n\n{lang}" if lang else "") \
+        + f"\n\nTranscript: {transcript}"

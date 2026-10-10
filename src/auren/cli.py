@@ -53,12 +53,20 @@ def main() -> None:
     for sp in (sub.choices["chat"], sub.choices["ask"]):
         sp.add_argument("--model", default="haiku")
         sp.add_argument("--no-think", action="store_true")
+        sp.add_argument("--effort", default="low", choices=Brain.EFFORTS)
+        sp.add_argument("--language", default="en", choices=["en", "hi"], help="reply language")
+        sp.add_argument("--male", action="store_true", help="Hindi: male verb forms (for an M voice)")
         sp.add_argument("--backup", action="store_true", help="use the backup brain (Codex) directly")
     a = p.parse_args()
     if a.cmd == "daemon":
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
-    brain = CodexBrain() if a.backup else Brain(model=a.model, think=not a.no_think)
+    brain = CodexBrain() if a.backup else Brain(model=a.model, think=not a.no_think, effort=a.effort)
+    if a.language != "en":
+        if isinstance(brain, Brain):
+            brain.set_language(a.language, "male" if a.male else "female")
+        else:
+            brain.language, brain.speaker = a.language, "male" if a.male else "female"
     try:
         if a.cmd == "ask":
             handle(brain, " ".join(a.text))

@@ -8,8 +8,11 @@
     auren-ctl say <text> | cancel | status | quit
     auren-ctl forget        # a fresh conversation (also by voice: "start fresh", "forget everything")
     auren-ctl voice on|off|toggle     # spoken replies (off: replies only in the mascot's bubble)
-    auren-ctl voice-name F1..F5|M1..M5 # which Supertonic voice (says a short sample)
+    auren-ctl voice-name F1..F5|M1..M5 [sample] # which Supertonic voice (says the sample, or a short default one)
+    auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/settings.json)
+    auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
+    auren-ctl language en|hi          # reply language: Hindi replies are in Devanagari, spoken in Hindi
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
 state (idle, listening, thinking, working, speaking, error) is written to
@@ -31,11 +34,13 @@ import subprocess
 import time
 
 from .brain import Brain, BrainError
+from .brain.prompt import LANGUAGES
 from .config import RUNTIME_DIR, SETTINGS, SOCKET, STATE_DIR, STATE_FILE
 from .ears import Listening, vocabulary
 from .live import Level, describe
 from .profile import Profile
 from .safety import Confirmations
+from .voice import TUNING, tuning
 
 log = logging.getLogger("auren")
 MIN_HOLD = 0.35          # shorter key taps are ignored
@@ -80,7 +85,9 @@ def load_settings() -> dict:
     except (OSError, json.JSONDecodeError):
         s = {}
     return {"voice": s.get("voice", True) is not False, "brain": s.get("brain", "auto"),
-            "voiceName": s.get("voiceName", "F2")}
+            "effort": s.get("effort") if s.get("effort") in Brain.EFFORTS else "low",
+            "language": s.get("language") if s.get("language") in LANGUAGES else "en",
+            "voiceName": s.get("voiceName", "F2"), **tuning(s)}
 
 
 def save_settings(settings: dict) -> None:
@@ -94,7 +101,8 @@ class Daemon:
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
         self.profile = Profile()
-        self.brain = Brain(mode=self.settings["brain"])
+        self.brain = Brain(mode=self.settings["brain"], effort=self.settings["effort"])
+        self.brain.set_language(self.settings["language"], self.speaker)
         self.voice = None
         self.speak_enabled = speak                    # False: started with --quiet, the voice isn't even loaded
         self.vocab = vocabulary(self.profile)
@@ -112,12 +120,19 @@ class Daemon:
         tmp = STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
                                    "brain": "codex" if self.brain.using_backup else "claude",
-                                   "mode": self.brain.mode, "voice": self.voice_on,
+                                   "mode": self.brain.mode, "effort": self.brain.primary.effort, "voice": self.voice_on,
+                                   "language": self.settings["language"],
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
-                                   "voices": self.voice.names if self.voice else [], **extra}))
+                                   "voices": self.voice.names if self.voice else [],
+                                   "tts": tuning(self.settings), **extra}))
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
+
+    @property
+    def speaker(self) -> str:
+        """The voice's gender, for Hindi verb forms: Supertonic's voices are F1..F5 and M1..M5."""
+        return "male" if self.settings["voiceName"].startswith("M") else "female"
 
     @property
     def voice_on(self) -> bool:
@@ -127,7 +142,8 @@ class Daemon:
         """A setting changed: rewrite the state file so the mascot and the bar see it."""
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
-                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "voice", "voiceName", "voices")}
+                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "language", "voice", "voiceName",
+                                  "voices", "tts")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)
@@ -142,6 +158,7 @@ class Daemon:
         if self.speak_enabled:
             from .voice import Voice
             self.voice = await asyncio.to_thread(Voice, on_level=self.level.set, on_sentence=self._caption)
+            self.voice.tune(self.settings)
             try:
                 self.voice.set_voice(self.settings["voiceName"])
             except ValueError as e:
@@ -165,16 +182,20 @@ class Daemon:
         if cmd == "voice-name":
             if not self.voice:
                 return "the voice isn't loaded"
+            name, _, sample = arg.strip().partition(" ")
             try:
-                self.voice.set_voice(arg.strip())
+                self.voice.set_voice(name)
             except ValueError as e:
                 return str(e)
             self.settings["voiceName"] = self.voice.name
             save_settings(self.settings)
+            self.brain.set_language(self.settings["language"], self.speaker)
             self._refresh_state()
             if self.state == "idle":
-                asyncio.create_task(self.say(f"Hi, this is voice {self.voice.name}."))
+                asyncio.create_task(self.say(sample.strip() or f"Hi, this is voice {self.voice.name}."))
             return "voice " + self.voice.name
+        if cmd == "tts":
+            return self._tts(arg.split())
         if cmd == "cancel":
             await self.cancel()
             return "cancelled"
@@ -205,14 +226,47 @@ class Daemon:
             save_settings(self.settings)
             self._refresh_state()
             return "brain " + mode
+        if cmd == "language":
+            lang = arg.strip()
+            if lang not in LANGUAGES:
+                return "usage: language " + "|".join(LANGUAGES)
+            self.settings["language"] = lang
+            save_settings(self.settings)
+            self.brain.set_language(lang, self.speaker)
+            self._refresh_state()
+            return "language " + lang
+        if cmd == "effort":
+            level = arg.strip()
+            if level not in Brain.EFFORTS:
+                return "usage: effort " + "|".join(Brain.EFFORTS)
+            self.settings["effort"] = level
+            save_settings(self.settings)
+            asyncio.create_task(self._set_effort(level))
+            return "effort " + level
         if cmd == "status":
             return json.dumps({"state": self.state, "detail": self.detail,
                                "brain": "codex" if self.brain.using_backup else "claude",
-                               "mode": self.brain.mode, "voice": self.voice_on})
+                               "mode": self.brain.mode, "effort": self.brain.primary.effort,
+                               "language": self.settings["language"], "voice": self.voice_on})
         if cmd == "quit":
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
         return f"unknown command: {cmd}"
+
+    def _tts(self, words: list[str]) -> str:
+        """tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 (several at once is fine) | reset"""
+        if words == ["reset"]:
+            values = tuning()
+        else:
+            if not words or len(words) % 2 or any(k not in TUNING for k in words[::2]):
+                return "usage: tts speed 0.7..1.6 | steps 2..12 | volume 0.1..1 | pause 0..1 | reset"
+            values = tuning({**self.settings, **dict(zip(words[::2], words[1::2]))})
+        self.settings.update(values)
+        save_settings(self.settings)
+        if self.voice:
+            self.voice.tune(values)
+        self._refresh_state()
+        return "tts " + " ".join(f"{k} {v}" for k, v in values.items())
 
     async def press(self, fresh: bool = False) -> str:
         if self.listening:
@@ -240,6 +294,15 @@ class Daemon:
         if self.listening is session:
             log.info("listening stopped after %ss", MAX_LISTEN)
             await self.release()
+
+    async def _set_effort(self, level: str) -> None:
+        async with self.busy:              # after the current answer, if there is one
+            self.set_state("thinking", f"Switching to {level} effort…")
+            await asyncio.to_thread(self.brain.set_effort, level)
+            log.info("effort %s (fresh conversation)", level)
+            self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"(effort {level})",
+                           "tools": [], "brain": "claude"})
+        self.idle()
 
     async def _forget_quietly(self) -> None:
         async with self.busy:

@@ -8,11 +8,14 @@
 | Ears | AssemblyAI streaming, Universal-3.5 Pro, push-to-talk settings from decision 0002. The connection is open only while the key is held. The text is returned as soon as the final turn arrives after release (~0.3 s) | `src/auren/ears.py` |
 | Vocabulary | 100 terms: core names (herdr, Voisu, Codex, Claude Code, Omarchy…), then Chrome bookmark names (MLP, Tools in Data Science…), web apps, recent projects, apps | `ears.vocabulary()`, `src/auren/data/vocab.txt` |
 | Brain | `Brain`: Claude Haiku through Claude Code kept warm; Codex backup on a usage limit. One request at a time; later ones wait | `src/auren/brain/` |
-| Voice | Supertonic 3, F2, 5 steps. Sentence by sentence into `pw-cat`, so the first sentence plays while the rest is generated | `src/auren/voice.py` |
+| Voice | Supertonic 3, F2, 5 steps, speed 1.05. Sentence by sentence into `pw-cat`, so the first sentence plays while the rest is generated | `src/auren/voice.py` |
 | Interrupting | Pressing Super+A while Auren is speaking stops the voice and starts listening | |
-| Voice choice | `auren-ctl voice-name F2` (also from the bar panel: F2, M3, F1, M1, the voices picked in decision 0001); saved in `~/.config/auren/settings.json`, says a short sample | `Voice.set_voice()` |
+| Voice choice | `auren-ctl voice-name F2 [sample]` (also from the bar panel: F2, M3, F1, M1, the voices picked in decision 0001); saved in `~/.config/auren/settings.json`, says the sample (or "Hi, this is voice F2") when idle. Picking a mascot in the panel uses this to switch to its voice and say hello | `Voice.set_voice()` |
+| Reply language | `auren-ctl language en\|hi` (also the panel's Voice page). Hindi: every message to the brain carries a `<reply_language>` note (`prompt.reply_language()`): reply in Devanagari, names and technical terms in English letters, verb forms matching the voice's gender (F voices female, M voices male). No restart; the next request uses it, Claude or Codex. The voice speaks each sentence with Devanagari in Hindi mode and the rest in English (`voice.language_of()`), so the daemon's own English phrases still sound right. Speech recognition stays English (decision 0002) | `Brain.set_language()`, `voice.language_of()` |
+| Claude's effort | `auren-ctl effort low\|medium\|high\|xhigh\|max` (also the panel's Brain page). Claude Code's `--effort` is fixed when its process starts, so this restarts the brain (warm, ~1 s), which starts a fresh conversation; it waits for an answer in progress. Saved in `settings.json`, shown in `state.json` as `effort`. Low is decision 0003's default | `Brain.set_effort()`, `Daemon._set_effort()` |
+| Voice tuning | `auren-ctl tts speed 1.1 steps 5 volume 0.8 pause 0.2` (any of them, in any order) or `tts reset`. Ranges: speed 0.7–1.6, steps 2–12 (quality; 8 costs ~45% more CPU than 5), volume 0.1–1 (scales the samples, so it's relative to the system volume), pause 0–1 s of silence between sentences. Saved in `settings.json`, shown in `state.json` as `tts`; the panel's Voice page sets them | `voice.tuning()`, `Voice.tune()`, `Daemon._tts()` |
 | Feedback | The mascot ([mascot.md](mascot.md)). When it isn't running, the Omarchy OSD shows "Listening…", "Thinking…", "Didn't catch that" | `daemon.osd()` |
-| State | `$XDG_RUNTIME_DIR/auren/state.json`: `{state: starting, idle, listening, thinking, working, speaking, error or off; detail (live transcript, activity phrase or the sentence being spoken); since; pid; brain; transcript, tool, mouse, reply, awaiting + question + until}`, for the mascot and the bar plugin. `$XDG_RUNTIME_DIR/auren/level`: mic/voice loudness 0..1 | `src/auren/live.py` |
+| State | `$XDG_RUNTIME_DIR/auren/state.json`: `{state: starting, idle, listening, thinking, working, speaking, error or off; detail (live transcript, activity phrase or the sentence being spoken); since; pid; brain; mode; voice, voiceName, voices, tts; transcript, tool, mouse, reply, awaiting + question + until}`, for the mascot and the bar plugin. `$XDG_RUNTIME_DIR/auren/level`: mic/voice loudness 0..1 | `src/auren/live.py` |
 | Logs | `~/.local/state/auren/daemon.log`; every exchange in `~/.local/state/auren/history.jsonl` (transcript, reply, tools, timings, which brain) | |
 
 ## Fresh conversation
@@ -45,6 +48,9 @@ bin/auren-ctl ask "what time is it"    # typed request, spoken reply
 bin/auren-ctl say "hello"
 bin/auren-ctl cancel                    # stop listening or speaking
 bin/auren-ctl forget                    # fresh conversation (same as saying "start fresh")
+bin/auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
+bin/auren-ctl language hi               # replies in Hindi (Devanagari), spoken in Hindi; language en to go back
+bin/auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
 ```
 
 ## Measured (2026-10-10)
@@ -56,6 +62,5 @@ bin/auren-ctl forget                    # fresh conversation (same as saying "st
 
 ## Not yet
 
-- The bar plugin (piece 8).
 - Telling the user when a background job (a Codex agent in herdr) finishes.
 - A wake word; dictation mode.
