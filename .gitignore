@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets (keys live in ~/.config/auren/secrets.env, never in the repo)
+.env
+*.env
+secrets*
+
+# Backups and editor files
+*.bak
+*.bak.*
+*~
+.DS_Store
