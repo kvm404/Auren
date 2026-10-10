@@ -1,0 +1,169 @@
+"""The ears: AssemblyAI streaming (Universal-3.5 Pro), push-to-talk (decision 0002).
+
+    session = Listening(vocab)
+    await session.start()        # key pressed: mic + websocket open, partial text arrives
+    text = await session.finish()  # key released: ForceEndpoint, final text in ~0.3 s
+
+Settings that matter (all measured in experiments/stt):
+- speech_model universal-3-5-pro (3.6 Pro answered in Hindi script on this voice)
+- min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
+- keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
+- audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import signal
+import time
+from collections.abc import Callable
+from urllib.parse import urlencode
+
+import numpy as np
+import websockets
+
+from .config import DATA, secret
+from .live import loudness
+
+RATE, CHUNK = 16000, 1600                  # 50 ms of 16-bit mono
+MIN_SEND, MAX_SEND = 1600, 32000           # AssemblyAI wants 50-1000 ms per message
+URL = "wss://streaming.assemblyai.com/v3/ws"
+
+
+def vocabulary(profile=None, limit: int = 100) -> list[str]:
+    """Terms to bias recognition toward: the base list, then names from this laptop."""
+    terms: list[str] = []
+    for line in (DATA / "vocab.txt").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            terms.append(line.strip())
+    if profile is not None:      # most useful first: bookmarks, web apps, projects, then apps
+        s = profile.static()
+        for names in (s.get("bookmarks") or {}).values() if isinstance(s.get("bookmarks"), dict) else []:
+            terms += [n.split("/")[-1] for n in names]
+        apps = s.get("apps", {}) if isinstance(s.get("apps"), dict) else {}
+        terms += [a["name"] for a in apps.get("webapps", [])]
+        terms += [p["name"] for p in s.get("projects", [])[:15]] if isinstance(s.get("projects"), list) else []
+        terms += [a["name"] for a in apps.get("apps", [])]
+    seen, out = set(), []
+    for t in terms:
+        k = t.lower()
+        if k not in seen and 2 <= len(t) <= 40 and not t.lower().startswith(("libreoffice ", "openjdk")):
+            seen.add(k)
+            out.append(t)
+    return out[:limit]
+
+
+class Listening:
+    """One push-to-talk turn."""
+
+    def __init__(self, vocab: list[str], on_partial: Callable[[str], None] | None = None, source: list[str] | None = None,
+                 on_level: Callable[[float], None] | None = None):
+        self.vocab, self.on_partial, self.on_level = vocab, on_partial, on_level
+        self.source = source or []           # extra pw-record args (e.g. --target) for testing
+        self.mic: asyncio.subprocess.Process | None = None
+        self.ws = None
+        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.finals: list[str] = []
+        self.partial = ""
+        self.opened_at = 0.0
+        self.released_at = 0.0
+        self._tasks: list[asyncio.Task] = []
+        self._done = asyncio.Event()
+        self._final = asyncio.Event()     # a final turn arrived after the key was released
+        self.error: str | None = None
+
+    async def start(self) -> None:
+        key = secret("ASSEMBLYAI_API_KEY")
+        if not key:
+            raise RuntimeError("no AssemblyAI key (ASSEMBLYAI_API_KEY in ~/.config/auren/secrets.env)")
+        self.opened_at = time.perf_counter()
+        # The mic starts first so nothing said while the socket connects is lost.
+        self.mic = await asyncio.create_subprocess_exec(
+            "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        self._tasks.append(asyncio.create_task(self._read_mic()))
+        params = {"sample_rate": RATE, "encoding": "pcm_s16le", "speech_model": "universal-3-5-pro",
+                  "min_turn_silence": 10000, "max_turn_silence": 10000}
+        if self.vocab:
+            params["keyterms_prompt"] = json.dumps(self.vocab[:100])
+        self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(params)}", key)))
+
+    async def _read_mic(self) -> None:
+        while chunk := await self.mic.stdout.read(CHUNK):
+            await self.queue.put(chunk)
+            if self.on_level and len(chunk) >= 2:
+                samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
+                self.on_level(loudness(samples))
+        await self.queue.put(None)
+
+    async def _stream(self, url: str, key: str) -> None:
+        try:
+            async with websockets.connect(url, additional_headers={"Authorization": key}, open_timeout=10) as ws:
+                self.ws = ws
+                await ws.recv()                                   # Begin
+
+                async def send():
+                    pending = bytearray()
+                    while (chunk := await self.queue.get()) is not None:
+                        pending.extend(chunk)
+                        while len(pending) >= MIN_SEND:
+                            n = min(len(pending), MAX_SEND)
+                            await ws.send(bytes(pending[:n]))
+                            del pending[:n]
+                    if pending:                                   # pad the tail to the 50 ms minimum
+                        await ws.send(bytes(pending) + b"\0" * (MIN_SEND - len(pending)))
+                    await ws.send(json.dumps({"type": "ForceEndpoint"}))
+                    await ws.send(json.dumps({"type": "Terminate"}))
+
+                sender = asyncio.create_task(send())
+                async for raw in ws:
+                    msg = json.loads(raw)
+                    if msg.get("type") == "Turn":
+                        text = msg.get("transcript", "")
+                        if msg.get("end_of_turn"):
+                            self.finals.append(text.strip())
+                            if self.released_at:
+                                self._final.set()
+                        elif text and self.on_partial:
+                            self.partial = text
+                            self.on_partial(text)
+                    elif msg.get("type") == "Termination":
+                        break
+                    elif msg.get("type") == "Error" or "error" in msg:
+                        self.error = str(msg)[:200]
+                await sender
+        except Exception as e:  # noqa: BLE001 - reported to the user, never crashes the daemon
+            self.error = f"{type(e).__name__}: {e}"[:200]
+        finally:
+            self._done.set()
+
+    async def finish(self, timeout: float = 8) -> str:
+        """Key released: stop the mic, let the last audio and ForceEndpoint through, return the text."""
+        self.released_at = time.perf_counter()
+        if self.mic and self.mic.returncode is None:
+            self.mic.send_signal(signal.SIGINT)
+        # Return as soon as the final turn is in; don't wait for the connection to close.
+        waits = [asyncio.create_task(self._final.wait()), asyncio.create_task(self._done.wait())]
+        done, pending = await asyncio.wait(waits, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if not done and not self.finals:
+            self.error = self.error or "speech service didn't answer in time"
+        await self.cancel()
+        return " ".join(f for f in self.finals if f).strip()
+
+    async def cancel(self) -> None:
+        if self.mic and self.mic.returncode is None:
+            self.mic.send_signal(signal.SIGINT)
+            try:
+                await asyncio.wait_for(self.mic.wait(), 2)
+            except asyncio.TimeoutError:
+                self.mic.kill()
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+
+    @property
+    def held_seconds(self) -> float:
+        return (self.released_at or time.perf_counter()) - self.opened_at

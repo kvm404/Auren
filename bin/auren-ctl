@@ -1,0 +1,6 @@
+#!/bin/sh
+# Send one command to the auren daemon: start | stop | cancel | status | ask <text> | say <text> | quit
+# (used by the Super+A key binding: start on press, stop on release)
+sock="${XDG_RUNTIME_DIR:-/tmp}/auren/auren.sock"
+[ -S "$sock" ] || { echo "auren daemon isn't running" >&2; exit 1; }
+printf '%s\n' "$*" | socat -t 30 - UNIX-CONNECT:"$sock"
