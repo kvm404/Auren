@@ -104,7 +104,7 @@ def close_window(window: str) -> str:
 
 @server.tool()
 def open_url(url: str, app_mode: bool = False, browser: str = "") -> str:
-    """Just show a URL to the user: in the default browser (Brave), or in a named one (chrome, brave).
+    """Just show a URL to the user: in the default browser, or in a named one (chrome, brave).
     app_mode=True opens it as a standalone web-app window. To read or act on a page, use browser_open."""
     return _run(desktop.open_url, url, app_mode, browser)
 
@@ -259,8 +259,8 @@ def show_agent(agent: str, hint: str = "") -> str:
 @server.tool()
 def browser_open(url: str, browser: str = "chrome") -> str:
     """Open a page in a new auren tab of the user's real browser and read it: text plus numbered clickable
-    items. url can be 'bookmark:<name or folder/name>'. browser: chrome (has the user's IITM course login
-    and bookmarks) or brave (the default browser). If the browser isn't open, this starts it and waits for it
+    items. url can be 'bookmark:<name or folder/name>'. browser: chrome or brave (the user's routines may
+    say which). If the browser isn't open, this starts it and waits for it
     to connect (up to ~25 s): don't launch it first."""
     out = _run(web.browser_open, url, browser)
     return out if out.startswith("error:") else safety.untrusted(out, "web page")

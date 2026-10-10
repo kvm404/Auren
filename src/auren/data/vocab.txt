@@ -32,26 +32,4 @@ uv sync
 npm
 bun
 subagents
-OmarchyPlugins
-SIH107
-agents analytics
-finman
-finman web
-godfolio
-influnza
-kaggle ext
-kaushalai
-krgandharv
-kvm404
-myportfolio
-newportfolio
-onesocial
 Auren
-phonecam
-railreel
-sarvam test
-sih 2026
-tejas
-tejas web
-voicebench
-vyom
