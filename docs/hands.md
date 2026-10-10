@@ -27,12 +27,19 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 |---|---|
 | `list_agents()` | Every running agent: kind, status (idle, working, blocked, done), folder, workspace and tab; Auren's own marked |
 | `read_agent(agent, hint)` | The agent pane's recent output |
-| `prompt_agent(agent, text, hint, wait)` | Send a prompt. With `wait`, return the agent's reply (the text after the echoed prompt, minus the TUI footer) once it settles |
-| `start_agent(kind, cwd, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task |
+| `prompt_agent(agent, text, hint, wait)` | Send a prompt, after switching the user's view to the agent (see below). With `wait`, return the agent's reply (the text after the echoed prompt, minus the TUI footer) once it settles |
+| `start_agent(kind, cwd, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab as soon as it exists |
 | `run_command(command, cwd, name, wait)` | New tab in `auren`, run a shell command; the exit code comes from a split marker (`echo "AUREN""_EXIT=$?"`), so the typed command never matches it |
 | `command_result(job, timeout_s)` | Wait for a command job to finish; exit code and output |
 | `close_job(job)` | Close one of Auren's own tabs |
-| `focus(agent, hint)` | Switch herdr's view to that pane |
+| `focus(agent, hint)` | Switch herdr's view to that pane and bring herdr's window up |
+
+**Watching agents work.** Giving an agent a task (`start_agent`, `prompt_agent`) brings it in front of the
+user right away: herdr's view switches to the agent's tab (`herdr tab focus` / `herdr agent focus`) and
+`desktop.show_herdr()` brings herdr's window up, showing the scratchpad if it's hidden. herdr's window is
+found as the window whose process is an ancestor of a `herdr` client (not `herdr server`). It is best
+effort: if herdr isn't open in a window, the task still goes through. Quick questions with `wait=True`
+show the agent too, before Auren waits for the reply.
 
 ### Measured (2026-10-10)
 
