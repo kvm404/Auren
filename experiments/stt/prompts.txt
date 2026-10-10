@@ -1,0 +1,17 @@
+# One command per line. Say each one naturally, the way you'd talk to the assistant.
+# Lines starting with # are ignored. Edit freely; record.py reads this file.
+Open Firefox on workspace two.
+Ask the Codex pane in herdr to review the Voisu pull request.
+Prompt Claude Code to fix the failing tests in the parth project.
+Open my GitHub notifications in Brave.
+Switch the TTS voice to F2 and make it a little slower.
+Run uv sync in the experiments folder and tell me when it finishes.
+Restart the Voisu daemon with systemctl.
+Take a screenshot of this Hyprland window and save it to Downloads.
+What is my battery percentage and how much RAM is free?
+Tell OpenCode to summarize the README of the Omarchy laser pointer plugin.
+Move Spotify to workspace five and pause the music.
+Check if the STT experiment finished and compare Deepgram with Groq.
+Create a new herdr tab called supertonic and start Codex there.
+Search the web for Kyutai Pocket TTS benchmarks.
+Copy my API key from the env file into the quick setup script.
