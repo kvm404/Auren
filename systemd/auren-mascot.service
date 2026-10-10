@@ -1,0 +1,13 @@
+[Unit]
+Description=Auren mascot (floating Clawd that shows what Auren is doing)
+After=wayland-session-waitenv.service
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+ExecStart=/usr/bin/qs -n -p @REPO@/mascot
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
