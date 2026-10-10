@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "krvm.auren",
+  "name": "Auren",
+  "version": "0.1.0",
+  "author": "krvm",
+  "license": "MIT",
+  "description": "Control Auren, the voice assistant: on/off, voice, brain, mascot, fresh start.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Auren",
+    "description": "A tiny Clawd that shows what Auren is doing. Click for controls; right-click to start a fresh conversation.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "aurenDir": "~/Projects/auren"
+    },
+    "schema": [
+      {
+        "key": "aurenDir",
+        "type": "string",
+        "label": "Auren folder",
+        "defaultValue": "~/Projects/auren",
+        "description": "Where the Auren project lives (bin/auren-ctl, mascot/)."
+      }
+    ]
+  }
+}
