@@ -230,7 +230,7 @@ def _show(*focus: str) -> None:
     try:
         herdr(*focus)
         desktop.show_herdr()
-    except (HerdrError, desktop.DesktopError, OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001 - showing is a nicety; never let it stop the task
         pass
 
 
@@ -295,7 +295,8 @@ def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: 
                 wait: bool = False, timeout_s: int = 1800, agent_args: list[str] | None = None,
                 show: bool = False) -> dict:
     """Start a new agent in its own tab of the auren workspace, optionally with a first task. show:
-    switch the user's view to the new tab as soon as it exists."""
+    switch the user's view to the new tab once the agent runs (not before: keys the user is still
+    typing would land in the tab's shell)."""
     kind = KINDS.get(kind.strip().lower(), kind.strip().lower())
     cwd = str(Path(os.path.expanduser(cwd)).resolve())
     if not Path(cwd).is_dir():
@@ -306,11 +307,11 @@ def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: 
     all_jobs = _load_jobs()
     all_jobs[name] = Job(name=name, tab_id=tab_id, pane_id=pane_id, cwd=cwd, kind=kind, task=task)
     _save_jobs(all_jobs)
-    if show:
-        _show("tab", "focus", tab_id)
     _wait_for_shell(pane_id)
     herdr("agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", "60000",
           *(["--", *agent_args] if agent_args else []), timeout=90)
+    if show:
+        _show("tab", "focus", tab_id)
     out = {"job": name, "kind": kind, "cwd": cwd, "tab": tab_id, "pane": pane_id, "status": "started"}
     if task:
         out.update(prompt_agent(name, task, wait=wait, timeout_s=timeout_s))

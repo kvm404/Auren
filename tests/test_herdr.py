@@ -67,10 +67,10 @@ def test_slug_is_a_valid_unique_agent_name():
 
 @pytest.fixture
 def fake_herdr(monkeypatch):
-    """Record herdr commands and window raises instead of running them."""
+    """Record herdr commands (with their target) and window raises instead of running them."""
     calls = []
     def fake(*args, **kwargs):
-        calls.append(args[:2])
+        calls.append(args[:3] if args[1] == "focus" else args[:2])
         return {"agent": {"agent_status": "working"}}
     monkeypatch.setattr(herdr, "herdr", fake)
     monkeypatch.setattr(herdr, "agents", lambda: LIVE)
@@ -80,7 +80,7 @@ def fake_herdr(monkeypatch):
 
 def test_prompt_agent_shows_the_agent_before_sending(fake_herdr):
     herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
-    assert fake_herdr == [("agent", "focus"), ("window", "up"), ("agent", "prompt")]
+    assert fake_herdr == [("agent", "focus", "wT:p2Z"), ("window", "up"), ("agent", "prompt")]
 
 
 def test_prompt_agent_without_show_leaves_the_view(fake_herdr):
@@ -88,19 +88,20 @@ def test_prompt_agent_without_show_leaves_the_view(fake_herdr):
     assert fake_herdr == [("agent", "prompt")]
 
 
-def test_start_agent_shows_the_new_tab_first(fake_herdr, monkeypatch, tmp_path):
+def test_start_agent_shows_the_tab_once_the_agent_runs(fake_herdr, monkeypatch, tmp_path):
     monkeypatch.setattr(herdr, "jobs", lambda: [])
     monkeypatch.setattr(herdr, "_load_jobs", lambda: {})
     monkeypatch.setattr(herdr, "_save_jobs", lambda jobs: None)
     monkeypatch.setattr(herdr, "_new_tab", lambda label, cwd: ("t9", "w9:p9"))
     monkeypatch.setattr(herdr, "_wait_for_shell", lambda pane: None)
     herdr.start_agent("codex", str(tmp_path), name="notes-job", show=True)
-    assert fake_herdr == [("tab", "focus"), ("window", "up"), ("agent", "start")]
+    assert fake_herdr == [("agent", "start"), ("tab", "focus", "t9"), ("window", "up")]
 
 
-def test_showing_never_blocks_the_task(fake_herdr, monkeypatch):
+@pytest.mark.parametrize("error", [herdr.desktop.DesktopError("hyprland: no"), ValueError("bad JSON"), KeyError("pid")])
+def test_showing_never_blocks_the_task(fake_herdr, monkeypatch, error):
     def broken():
-        raise herdr.desktop.DesktopError("hyprland: no")
+        raise error
     monkeypatch.setattr(herdr.desktop, "show_herdr", broken)
     out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert out["status"] == "working" and fake_herdr[-1] == ("agent", "prompt")

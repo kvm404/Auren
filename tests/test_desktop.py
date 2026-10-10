@@ -79,11 +79,32 @@ def test_herdr_window_is_the_terminal_herdr_runs_in(monkeypatch):
     assert d.herdr_window() is None
 
 
-@pytest.mark.parametrize("showing, toggles", [("", True), ("special:scratchpad", False)])
+def test_herdr_window_with_one_terminal_process_for_all_windows(monkeypatch):
+    monkeypatch.setattr(d, "_herdr_clients", lambda: [202])
+    monkeypatch.setattr(d, "_parent", {202: 200, 200: 1}.get)
+    monkeypatch.setattr(d, "windows", lambda: [dict(w, pid=200) for w in WINDOWS])
+    assert d.herdr_window()["address"] == "0x2"           # the one on the scratchpad
+    monkeypatch.setattr(d, "windows", lambda: [dict(w, pid=200) for w in WINDOWS if w["address"] != "0x2"])
+    assert d.herdr_window() is None                       # can't tell which: don't guess
+
+
+def test_herdr_clients_skip_the_server_and_one_off_commands(monkeypatch):
+    monkeypatch.setattr(d, "sh", lambda cmd, check=True: "4415 /usr/bin/herdr server\n936038 herdr\n"
+                                                         "937000 herdr agent list\n938000 herdr --session work\n"
+                                                         "939000 herdr session attach work\n")
+    assert d._herdr_clients() == [936038, 938000, 939000]
+
+
+@pytest.mark.parametrize("showing, toggles", [
+    ([""], True),                              # hidden: show it
+    (["special:scratchpad"], False),           # showing on the focused monitor
+    (["", "special:scratchpad"], False),       # showing on another monitor: don't move it
+])
 def test_show_herdr_opens_the_scratchpad_only_when_hidden(monkeypatch, showing, toggles):
     sent = []
     monkeypatch.setattr(d, "herdr_window", lambda: WINDOWS[1])
-    monkeypatch.setattr(d, "_showing_special", lambda: showing)
+    monkeypatch.setattr(d, "monitors", lambda: [{"focused": i == 0, "specialWorkspace": {"name": n}}
+                                                for i, n in enumerate(showing)])
     monkeypatch.setattr(d, "dispatch", sent.append)
     assert d.show_herdr()
     assert sent[-1] == 'hl.dsp.focus({ window = "address:0x2" })'

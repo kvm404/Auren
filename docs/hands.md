@@ -28,16 +28,20 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | `list_agents()` | Every running agent: kind, status (idle, working, blocked, done), folder, workspace and tab; Auren's own marked |
 | `read_agent(agent, hint)` | The agent pane's recent output |
 | `prompt_agent(agent, text, hint, wait)` | Send a prompt, after switching the user's view to the agent (see below). With `wait`, return the agent's reply (the text after the echoed prompt, minus the TUI footer) once it settles |
-| `start_agent(kind, cwd, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab as soon as it exists |
+| `start_agent(kind, cwd, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab once the agent is running |
 | `run_command(command, cwd, name, wait)` | New tab in `auren`, run a shell command; the exit code comes from a split marker (`echo "AUREN""_EXIT=$?"`), so the typed command never matches it |
 | `command_result(job, timeout_s)` | Wait for a command job to finish; exit code and output |
 | `close_job(job)` | Close one of Auren's own tabs |
 | `focus(agent, hint)` | Switch herdr's view to that pane and bring herdr's window up |
 
 **Watching agents work.** Giving an agent a task (`start_agent`, `prompt_agent`) brings it in front of the
-user right away: herdr's view switches to the agent's tab (`herdr tab focus` / `herdr agent focus`) and
+user: herdr's view switches to the agent's tab (`herdr tab focus` / `herdr agent focus`) and
 `desktop.show_herdr()` brings herdr's window up, showing the scratchpad if it's hidden. herdr's window is
-found as the window whose process is an ancestor of a `herdr` client (not `herdr server`). It is best
+found as the window whose process is an ancestor of a `herdr` client (`herdr` with no subcommand). A
+terminal that runs every window in one process (foot --server, Ghostty) is ambiguous: then the window
+on a special workspace is taken, or none. A scratchpad already showing on another monitor is left
+there. A new agent's tab is shown once the agent runs, not before, so keys the user is still typing
+don't land in its shell. It is best
 effort: if herdr isn't open in a window, the task still goes through. Quick questions with `wait=True`
 show the agent too, before Auren waits for the reply.
 
