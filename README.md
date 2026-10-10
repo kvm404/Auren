@@ -59,7 +59,7 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 ## Install
 
 ```bash
-git clone git@github.com:kvm404/Auren.git ~/Projects/auren
+git clone https://github.com/kvm404/Auren.git ~/Projects/auren
 cd ~/Projects/auren
 ./install.sh --check     # what's missing
 ./install.sh             # Python env, services, bar plugin, secrets file
