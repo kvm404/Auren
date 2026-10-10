@@ -17,16 +17,20 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - **Hands:** about 40 tools over MCP, covering apps, windows, workspaces, media, volume, shell commands,
   herdr agents and jobs, the browser (Open Browser Use), screen control (look, click, drag, type) and
   saved routines.
-- **Voice:** Supertonic 3, running locally on the CPU, voice F2.
+- **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English or Hindi
+  (Devanagari, names kept in English). Speed, quality, volume and the pause between sentences are
+  adjustable.
 - **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first. Text from
   screens and web pages is treated as untrusted.
-- **Mascot:** Clawd floats over every workspace. It listens, thinks, walks while working, bounces to
-  the voice and shows captions in a speech bubble. Drag it anywhere; it fades and falls asleep when
-  idle.
-- **Bar plugin:** a tiny Clawd in the Omarchy bar. Its panel has on/off switches, voice, brain,
-  fresh start, stop and the last exchange.
+- **Mascot:** pick one of three: Clawd (the Claude Code mascot), Veyra (a fox spirit) or Auren (a
+  hover-bot). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
+  captions in a speech bubble. Drag it anywhere; it fades and falls asleep when idle.
+- **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has four pages: Home (talk, last
+  exchange, quick switches), Mascot, Voice (voice and tuning) and Brain (who answers, Claude's effort).
 
 <br clear="right">
+
+![The three mascots, Clawd, Veyra and Auren, in each mood](docs/images/mascots.png)
 
 ## How it works
 
@@ -79,17 +83,17 @@ Then:
 | Super+Shift+A | The same, in a fresh conversation (or say "start fresh") |
 | Click the mascot | Talk (same as Super+A); while it speaks, stop it |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
-| Bar icon | Open the panel; right-click for a fresh conversation |
+| Bar icon | Open the panel (Home, Mascot, Voice, Brain); right-click for a fresh conversation |
 | `auren chat` | Type requests in a terminal and see the tool calls |
-| `bin/auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `brain auto\|claude\|codex`, `forget`, `quit` |
+| `bin/auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `language en\|hi`, `forget`, `quit` |
 
 Files:
 
 | Path | What |
 |---|---|
 | `~/.config/auren/secrets.env` | API keys (chmod 600) |
-| `~/.config/auren/settings.json` | Voice on/off, voice name, brain mode (written by the panel and `auren-ctl`) |
-| `~/.config/auren/mascot.json` | Mascot preferences: `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation` |
+| `~/.config/auren/settings.json` | Voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort, reply language (written by the panel and `auren-ctl`) |
+| `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (clawd, veyra, auren), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |
 
@@ -97,7 +101,8 @@ Files:
 
 ```
 src/auren/         daemon, ears, voice, brain/, hands/, server (MCP tools), safety, profile/
-mascot/            the floating mascot (Quickshell); mascots/clawd/ is the character
+mascot/            the floating mascot (Quickshell); mascots/{clawd,veyra,auren}/ are the characters,
+                   mascots/common/ what they share, gallery.qml shows them all
 omarchy-plugin/    the bar plugin (krvm.auren)
 systemd/           unit templates (install.sh fills in the path)
 bin/auren-ctl      send a command to the daemon
@@ -116,8 +121,8 @@ tests/             uv run pytest
 
 ## Credits
 
-- Clawd is the Claude Code mascot by Anthropic, drawn here for personal use. Auren's own mascots,
-  Veyra and Auren, are planned.
+- Clawd is the Claude Code mascot by Anthropic, drawn here for personal use. Veyra and Auren are
+  Auren's own mascots.
 - [Supertonic](https://github.com/supertone-inc/supertonic) for the voice, AssemblyAI for speech
   recognition, Open Browser Use for the browser, Quickshell and Omarchy for the desktop side.
 

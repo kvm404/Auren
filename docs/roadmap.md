@@ -17,7 +17,7 @@ overlay shows what it's doing.
 | 7 | **Mascot overlay:** Clawd (the Claude Code mascot) floating over the desktop: drag anywhere, hold to talk, scroll to resize; fades when idle, sleeps; live transcript, activity, captions and yes/no questions in a speech bubble; bounces to the mic and voice. Its own Quickshell instance, systemd user service ([mascot.md](mascot.md)). More mascots later | ✅ first version |
 | 8 | **Bar plugin:** a pixel Clawd in the Omarchy bar showing Auren's state; panel with live Clawd (hold to talk), last exchange, switches (Auren, voice replies, mascot, sleep animation), brain (auto/Claude/Codex), actions (fresh, stop, restart, log) ([bar-plugin.md](bar-plugin.md)) | ✅ first version |
 | 9 | **Dictation mode** (⏭ next): same ears, but the text is typed into the focused app (`wtype`) instead of going to the brain. Replaces a separate "new Voisu" app | planned |
-| 10 | **More mascots:** Veyra (female) and Auren (male) next to Clawd, each a folder under `mascot/mascots/` with the same contract; picked in the bar plugin, maybe with a matching voice | planned |
+| 10 | **More mascots:** Veyra (a lavender fox spirit) and Auren (a cobalt hover-bot) next to Clawd, on a shared `MascotBase`; picked on the bar panel's Mascot page, with a matching voice (Auren M3) ([mascot.md](mascot.md)). The panel became four pages, with voice tuning (speed, quality, volume, pause) | ✅ first version |
 
 ## Brain: what we know so far
 
