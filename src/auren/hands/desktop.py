@@ -105,26 +105,47 @@ def _parent(pid: int) -> int:
     return int(stat.rsplit(")", 1)[1].split()[1])     # the name in (…) may hold spaces
 
 
+_HERDR_VALUE_OPTIONS = {"--session", "--remote", "--remote-keybindings", "--machine"}
+
+
 def _herdr_clients() -> list[int]:
-    """herdr's terminal clients (not `herdr server`, which runs under systemd)."""
+    """herdr's terminal clients: `herdr [--session NAME …]` or `herdr session attach NAME`, not
+    `herdr server` or a one-off command like `herdr agent list`."""
     pids = []
     for line in sh(["pgrep", "-a", "-x", "herdr"], check=False).splitlines():
         pid, _, args = line.partition(" ")
-        if pid.isdigit() and "server" not in args.split()[1:2]:
+        words, skip = [], False
+        for arg in args.split()[1:]:
+            if skip:
+                skip = False
+            elif arg.startswith("-"):
+                skip = arg in _HERDR_VALUE_OPTIONS
+            else:
+                words.append(arg)
+        if pid.isdigit() and (not words or words[:2] == ["session", "attach"]):
             pids.append(int(pid))
     return pids
 
 
 def herdr_window() -> dict | None:
-    """The terminal window herdr runs in: the window whose process is an ancestor of a herdr client."""
-    by_pid = {w.get("pid"): w for w in windows()}
+    """The terminal window herdr runs in: the window whose process is an ancestor of a herdr client.
+    A terminal that runs all its windows in one process (foot --server, Ghostty) can't tell which
+    window is herdr's; then the one on a special workspace (the scratchpad) is taken, or none."""
+    by_pid: dict[int, list[dict]] = {}
+    for w in windows():
+        by_pid.setdefault(w.get("pid"), []).append(w)
     for pid in _herdr_clients():
         for _ in range(6):                 # foot -> herdr, or foot -> shell -> herdr
             pid = _parent(pid)
             if pid <= 1:
                 break
             if pid in by_pid:
-                return by_pid[pid]
+                wins = by_pid[pid]
+                if len(wins) > 1:
+                    wins = [w for w in wins if w["workspace"]["name"].startswith("special:")]
+                if len(wins) == 1:
+                    return wins[0]
+                break
     return None
 
 
@@ -135,7 +156,8 @@ def show_herdr() -> bool:
     if w is None:
         return False
     ws = w["workspace"]["name"]
-    if ws.startswith("special:") and _showing_special() != ws:
+    showing = {(m.get("specialWorkspace") or {}).get("name") for m in monitors()}
+    if ws.startswith("special:") and ws not in showing:     # already showing on some monitor: leave it there
         dispatch(f"hl.dsp.workspace.toggle_special({_lua(ws.removeprefix('special:'))})")
     dispatch(f"hl.dsp.focus({{ window = {_lua('address:' + w['address'])} }})")
     return True
