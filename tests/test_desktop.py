@@ -67,3 +67,24 @@ def test_close_window_confirms_when_gone(monkeypatch):
     monkeypatch.setattr(d, "dispatch", lambda lua: None)
     monkeypatch.setattr(d.time, "sleep", lambda s: None)
     assert d.close_window("brave").startswith("closed brave-browser")
+
+
+def test_herdr_window_is_the_terminal_herdr_runs_in(monkeypatch):
+    wins = [dict(w, pid=p) for w, p in zip(WINDOWS, (100, 200, 300))]
+    monkeypatch.setattr(d, "windows", lambda: wins)
+    monkeypatch.setattr(d, "_herdr_clients", lambda: [202])
+    monkeypatch.setattr(d, "_parent", {202: 201, 201: 200, 200: 1}.get)     # foot -> shell -> herdr
+    assert d.herdr_window()["address"] == "0x2"
+    monkeypatch.setattr(d, "_herdr_clients", lambda: [])
+    assert d.herdr_window() is None
+
+
+@pytest.mark.parametrize("showing, toggles", [("", True), ("special:scratchpad", False)])
+def test_show_herdr_opens_the_scratchpad_only_when_hidden(monkeypatch, showing, toggles):
+    sent = []
+    monkeypatch.setattr(d, "herdr_window", lambda: WINDOWS[1])
+    monkeypatch.setattr(d, "_showing_special", lambda: showing)
+    monkeypatch.setattr(d, "dispatch", sent.append)
+    assert d.show_herdr()
+    assert sent[-1] == 'hl.dsp.focus({ window = "address:0x2" })'
+    assert (sent[0] == 'hl.dsp.workspace.toggle_special("scratchpad")') == toggles and len(sent) == 1 + toggles

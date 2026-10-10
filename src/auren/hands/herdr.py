@@ -11,6 +11,8 @@ Layout rules (see docs/hands.md):
 - auren only closes tabs it created, tracked in ~/.local/state/auren/herdr-jobs.json.
 - An agent waiting at an approval question is reported, never answered
   automatically.
+- Giving an agent a task (start_agent, prompt_agent with show=True) switches
+  herdr's view to it and brings herdr's window up, so the user sees it work.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from . import desktop
 
 WORKSPACE_LABEL = "auren"
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "auren" / "herdr-jobs.json"
@@ -219,6 +223,17 @@ def _new_tab(label: str, cwd: str) -> tuple[str, str]:
     return r["tab"]["tab_id"], r["root_pane"]["pane_id"]
 
 
+def _show(*focus: str) -> None:
+    """Put a pane in front of the user: herdr's view switches to it (focus is the herdr command, like
+    "tab", "focus", tab_id) and herdr's window comes up from the scratchpad. Best effort: the task
+    goes ahead even if this fails."""
+    try:
+        herdr(*focus)
+        desktop.show_herdr()
+    except (HerdrError, desktop.DesktopError, OSError, subprocess.SubprocessError):
+        pass
+
+
 def _wait_for_shell(pane_id: str, timeout: float = 10) -> None:
     """A new pane's shell needs a moment before it prints a prompt."""
     end = time.time() + timeout
@@ -244,13 +259,17 @@ def read_agent(agent: str, hint: str = "", lines: int = 80) -> str:
     return f"{a.describe()}\n---\n" + "\n".join(text.splitlines()[-lines:])
 
 
-def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeout_s: int = 600) -> dict:
-    """Send a prompt to a running agent. With wait, return its reply once it settles."""
+def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeout_s: int = 600,
+                 show: bool = False) -> dict:
+    """Send a prompt to a running agent. With wait, return its reply once it settles. show: switch the
+    user's view to the agent first."""
     a = resolve(agent, hint)
     if a.status == "blocked":
         return {"agent": a.describe(), "status": "blocked",
                 "note": "the agent is waiting at an approval or question; ask the user",
                 "screen": "\n".join(screen(a.pane_id, 40).splitlines()[-25:])}
+    if show:
+        _show("agent", "focus", a.pane_id)
     args = ["agent", "prompt", a.pane_id, text]
     if wait:
         args += ["--wait", "--timeout", str(timeout_s * 1000)]
@@ -273,8 +292,10 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
 
 
 def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: str = "",
-                wait: bool = False, timeout_s: int = 1800, agent_args: list[str] | None = None) -> dict:
-    """Start a new agent in its own tab of the auren workspace, optionally with a first task."""
+                wait: bool = False, timeout_s: int = 1800, agent_args: list[str] | None = None,
+                show: bool = False) -> dict:
+    """Start a new agent in its own tab of the auren workspace, optionally with a first task. show:
+    switch the user's view to the new tab as soon as it exists."""
     kind = KINDS.get(kind.strip().lower(), kind.strip().lower())
     cwd = str(Path(os.path.expanduser(cwd)).resolve())
     if not Path(cwd).is_dir():
@@ -285,6 +306,8 @@ def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: 
     all_jobs = _load_jobs()
     all_jobs[name] = Job(name=name, tab_id=tab_id, pane_id=pane_id, cwd=cwd, kind=kind, task=task)
     _save_jobs(all_jobs)
+    if show:
+        _show("tab", "focus", tab_id)
     _wait_for_shell(pane_id)
     herdr("agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", "60000",
           *(["--", *agent_args] if agent_args else []), timeout=90)
@@ -354,7 +377,8 @@ def close_job(job: str) -> str:
 
 
 def focus(agent: str, hint: str = "") -> str:
-    """Switch herdr's view to an agent's pane (the herdr window itself is raised by the desktop tools)."""
+    """Switch herdr's view to an agent's pane and bring herdr's window up."""
     a = resolve(agent, hint)
     herdr("agent", "focus", a.pane_id)
+    desktop.show_herdr()
     return f"focused {a.describe()}"

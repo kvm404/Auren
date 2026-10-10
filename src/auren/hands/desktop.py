@@ -71,16 +71,74 @@ def _lua(s: str) -> str:
 
 # --- scratchpad -------------------------------------------------------------------
 
+def monitors() -> list[dict]:
+    return json.loads(sh(["hyprctl", "monitors", "-j"]))
+
+
+def _showing_special() -> str:
+    """The special workspace showing on the focused monitor ("special:scratchpad"), or ""."""
+    for m in monitors():
+        special = (m.get("specialWorkspace") or {}).get("name") or ""
+        if m.get("focused") and special.startswith("special:"):
+            return special
+    return ""
+
+
 def hide_scratchpad() -> bool:
     """If a special workspace (the scratchpad, where herdr lives) is showing, hide it, so the next
     window opens on the user's normal workspace instead of inside the scratchpad."""
-    for m in json.loads(sh(["hyprctl", "monitors", "-j"])):
-        special = (m.get("specialWorkspace") or {}).get("name") or ""
-        if m.get("focused") and special.startswith("special:"):
-            dispatch(f"hl.dsp.workspace.toggle_special({_lua(special.removeprefix('special:'))})")
-            time.sleep(0.15)
-            return True
+    special = _showing_special()
+    if special:
+        dispatch(f"hl.dsp.workspace.toggle_special({_lua(special.removeprefix('special:'))})")
+        time.sleep(0.15)
+        return True
     return False
+
+
+# --- herdr's window ----------------------------------------------------------------
+
+def _parent(pid: int) -> int:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return 0
+    return int(stat.rsplit(")", 1)[1].split()[1])     # the name in (…) may hold spaces
+
+
+def _herdr_clients() -> list[int]:
+    """herdr's terminal clients (not `herdr server`, which runs under systemd)."""
+    pids = []
+    for line in sh(["pgrep", "-a", "-x", "herdr"], check=False).splitlines():
+        pid, _, args = line.partition(" ")
+        if pid.isdigit() and "server" not in args.split()[1:2]:
+            pids.append(int(pid))
+    return pids
+
+
+def herdr_window() -> dict | None:
+    """The terminal window herdr runs in: the window whose process is an ancestor of a herdr client."""
+    by_pid = {w.get("pid"): w for w in windows()}
+    for pid in _herdr_clients():
+        for _ in range(6):                 # foot -> herdr, or foot -> shell -> herdr
+            pid = _parent(pid)
+            if pid <= 1:
+                break
+            if pid in by_pid:
+                return by_pid[pid]
+    return None
+
+
+def show_herdr() -> bool:
+    """Bring herdr's window into view and focus it, showing the special workspace it lives on (the
+    scratchpad) if that's hidden. False if herdr isn't open in a window."""
+    w = herdr_window()
+    if w is None:
+        return False
+    ws = w["workspace"]["name"]
+    if ws.startswith("special:") and _showing_special() != ws:
+        dispatch(f"hl.dsp.workspace.toggle_special({_lua(ws.removeprefix('special:'))})")
+    dispatch(f"hl.dsp.focus({{ window = {_lua('address:' + w['address'])} }})")
+    return True
 
 
 # --- windows ---------------------------------------------------------------------

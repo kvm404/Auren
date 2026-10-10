@@ -1,5 +1,6 @@
 import pytest
 
+from auren.hands import herdr
 from auren.hands.herdr import Agent, HerdrError, _slug, reply_after, resolve
 
 LIVE = [
@@ -62,3 +63,44 @@ def test_slug_is_a_valid_unique_agent_name():
     assert _slug("Lecture notes: DSA!", set()) == "lecture-notes-dsa"
     assert _slug("notes", {"notes"}) == "notes-2"
     assert _slug("123 go", set()).startswith("j-")
+
+
+@pytest.fixture
+def fake_herdr(monkeypatch):
+    """Record herdr commands and window raises instead of running them."""
+    calls = []
+    def fake(*args, **kwargs):
+        calls.append(args[:2])
+        return {"agent": {"agent_status": "working"}}
+    monkeypatch.setattr(herdr, "herdr", fake)
+    monkeypatch.setattr(herdr, "agents", lambda: LIVE)
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: calls.append(("window", "up")))
+    return calls
+
+
+def test_prompt_agent_shows_the_agent_before_sending(fake_herdr):
+    herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    assert fake_herdr == [("agent", "focus"), ("window", "up"), ("agent", "prompt")]
+
+
+def test_prompt_agent_without_show_leaves_the_view(fake_herdr):
+    herdr.prompt_agent("claude", "what's 2+2", wait=False)
+    assert fake_herdr == [("agent", "prompt")]
+
+
+def test_start_agent_shows_the_new_tab_first(fake_herdr, monkeypatch, tmp_path):
+    monkeypatch.setattr(herdr, "jobs", lambda: [])
+    monkeypatch.setattr(herdr, "_load_jobs", lambda: {})
+    monkeypatch.setattr(herdr, "_save_jobs", lambda jobs: None)
+    monkeypatch.setattr(herdr, "_new_tab", lambda label, cwd: ("t9", "w9:p9"))
+    monkeypatch.setattr(herdr, "_wait_for_shell", lambda pane: None)
+    herdr.start_agent("codex", str(tmp_path), name="notes-job", show=True)
+    assert fake_herdr == [("tab", "focus"), ("window", "up"), ("agent", "start")]
+
+
+def test_showing_never_blocks_the_task(fake_herdr, monkeypatch):
+    def broken():
+        raise herdr.desktop.DesktopError("hyprland: no")
+    monkeypatch.setattr(herdr.desktop, "show_herdr", broken)
+    out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    assert out["status"] == "working" and fake_herdr[-1] == ("agent", "prompt")
