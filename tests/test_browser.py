@@ -55,3 +55,9 @@ def test_open_tab_retries_when_the_reply_has_no_tab_id(monkeypatch):
     monkeypatch.setattr(b, "browser_read", lambda tab: "page")
     assert b.browser_open("excalidraw.com") == "(tab 7 in helium)\npage"
     assert replies == []
+
+
+@pytest.mark.parametrize("elements", [[], [{}], [{"x": 1}], "rectangle"])
+def test_excalidraw_draw_rejects_bad_elements(elements):
+    with pytest.raises(b.BrowserError, match="elements must be"):
+        b.excalidraw_draw(elements)

@@ -348,6 +348,49 @@ def browser_scroll(direction: str = "down", tab: int | None = None) -> str:
     return browser_read(t)
 
 
+# --- Excalidraw ---------------------------------------------------------------------------
+# Excalidraw draws on a canvas, so the page tools can't draw there. Instead this pastes elements in
+# Excalidraw's own "excalidraw-api/clipboard" format, which accepts its element skeleton API (shapes with
+# `label`, arrows bound by `start`/`end` ids) and pastes them, selected, at the last pointer position.
+# Its paste handler ignores the event unless focus is inside the editor and the last pointer position is
+# over the canvas, so the script moves a synthetic pointer to the middle of the view first.
+
+_EXCALIDRAW_JS = r"""
+(async (elements) => {
+  const root = document.querySelector('.excalidraw');
+  if (!root) return {error: 'this tab is not an Excalidraw canvas'};
+  const x = innerWidth / 2, y = innerHeight / 2;
+  const canvas = document.elementFromPoint(x, y);
+  if (!canvas || canvas.tagName !== 'CANVAS') return {error: 'something covers the middle of the canvas (a dialog or menu?)'};
+  for (const t of ['pointermove', 'mousemove'])
+    canvas.dispatchEvent(new PointerEvent(t, {clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: 'mouse'}));
+  root.focus();
+  const count = () => JSON.parse(localStorage.getItem('excalidraw') || '[]').filter(e => !e.isDeleted).length;
+  const before = count();
+  const dt = new DataTransfer();
+  dt.setData('text/plain', JSON.stringify({type: 'excalidraw-api/clipboard', elements}));
+  document.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+  await new Promise(r => setTimeout(r, 1500));       // excalidraw.com saves the scene shortly after a change
+  return {added: count() - before};
+})(%s)
+"""
+
+
+def excalidraw_draw(elements: list[dict], tab: int | None = None) -> str:
+    """Paste Excalidraw skeleton elements into the Excalidraw page in the current auren tab."""
+    if not isinstance(elements, list) or not elements or not all(isinstance(e, dict) and e.get("type") for e in elements):
+        raise BrowserError("elements must be a non-empty list of objects, each with a type")
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
+    _front(b, t)
+    r = _eval(b, t, _EXCALIDRAW_JS % json.dumps(elements)) or {}
+    if r.get("error"):
+        raise BrowserError(r["error"])
+    if r.get("added", 0) <= 0:
+        # Other Excalidraw hosts may not save to localStorage, so this isn't proof of failure.
+        return "pasted, but couldn't confirm anything was added: look at the screen to check"
+    return f"drew {r['added']} elements (they're selected; ctrl+z undoes them)"
+
+
 # --- bookmarks ---------------------------------------------------------------------------
 
 def _bookmarks(browser: str) -> list[tuple[str, str]]:

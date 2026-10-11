@@ -130,6 +130,7 @@ Auren always passes `--socket-dir` for the named browser.
 | `browser_read()` | Page text (first 5,000 characters) plus numbered clickable items: links, buttons, fields. Image-only links are labelled `image: <file>` with their target. Identical labels get their row's name: "More actions (Alt+A) (Week 3)" |
 | `browser_click(target, expect_download)` | By number or by words of the label. `target=_blank` links open in the same tab. `expect_download` watches the download folder (Chrome: `~/Downloads`) for a new finished file and returns its path |
 | `browser_type(target, text, submit)`, `browser_scroll` | Type into a field; scroll |
+| `excalidraw_draw(elements)` | Draws a whole diagram on the Excalidraw page in Auren's tab. It pastes Excalidraw's skeleton elements (labelled shapes, arrows joined by ids) as an `excalidraw-api/clipboard` paste event. The paste is added to the existing drawing at the middle of the view, and ctrl+z undoes it |
 | `browser_bookmarks`, `recent_downloads`, `browser_close` | Bookmark names (URLs with long tokens are shortened in output); recent files; close Auren's tabs |
 
 **Safety.** Clicks on buy, pay, send, post, submit, delete and similar labels need confirmation. Page text is wrapped as untrusted.
@@ -226,7 +227,9 @@ Tested on a full-screen test surface: drags land within 1 px (400,300→701,500;
 200,700→1300,150), apps get 40–60 motion events, and Shift is held from press to release. The brain's
 rules now say it has full mouse control and must never offer to install mouse tools.
 
-## Helium (2026-10-11)
+## Helium and Excalidraw (2026-10-11)
 
 - Helium became the default browser, and its extension uses the default socket folder.
 - With only web-app windows open, `open-tab` makes a new normal window but replies without a tab id. `browser_open` now tries once more, which opens the tab in that new window.
+- Excalidraw draws on a canvas, so drawing with `drag_at` was slow. `excalidraw_draw` instead pastes Excalidraw's own clipboard format. Excalidraw ignores a paste unless focus is inside the editor and the last pointer position is over the canvas. The tool therefore sends a synthetic pointer move to the middle of the view first.
+- Tested live on excalidraw.com in Helium: three shapes and two bound arrows were added in one call (8 elements counting the labels). Undo restored the user's existing 27-element drawing.

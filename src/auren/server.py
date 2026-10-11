@@ -306,6 +306,20 @@ def browser_scroll(direction: str = "down") -> str:
 
 
 @server.tool()
+def excalidraw_draw(elements: list[dict]) -> str:
+    """Draw in the Excalidraw page open in the current auren tab (browser_open excalidraw.com first). Adds
+    whole diagrams in one call, far better than dragging shapes with screen control. elements uses
+    Excalidraw's skeleton API, in scene pixels (the group is pasted at the middle of the view):
+    {"type": "rectangle"|"ellipse"|"diamond", "id": "a", "x": 0, "y": 0, "width": 180, "height": 80,
+     "label": {"text": "Ears"}, "backgroundColor": "#ffec99", "strokeColor": "#1e1e1e"};
+    {"type": "arrow", "x": 180, "y": 40, "start": {"id": "a"}, "end": {"id": "b"}, "label": {"text": "audio"}};
+    {"type": "text", "x": 0, "y": 120, "text": "note"}; {"type": "line", "x": 0, "y": 0, "points": [[0,0],[200,0]]}.
+    Arrows with start/end ids attach to those shapes. It adds to the user's drawing (never clears it), so
+    look at the screen first and tell the user where it went; ctrl+z undoes the paste."""
+    return _run(web.excalidraw_draw, elements)
+
+
+@server.tool()
 def browser_close(keep_current: bool = False) -> str:
     """Close the browser tabs auren opened (never the user's). keep_current=True leaves the last page open
     for the user to look at."""
