@@ -74,13 +74,31 @@ def fake_herdr(monkeypatch):
         return {"agent": {"agent_status": "working"}}
     monkeypatch.setattr(herdr, "herdr", fake)
     monkeypatch.setattr(herdr, "agents", lambda: LIVE)
-    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: calls.append(("window", "up")))
+    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: {"address": "0x2"})
+    monkeypatch.setattr(herdr.desktop, "open_herdr", lambda: calls.append(("window", "open")))
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: calls.append(("window", "up")) or True)
     return calls
 
 
 def test_prompt_agent_shows_the_agent_before_sending(fake_herdr):
-    herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert fake_herdr == [("agent", "focus", "wT:p2Z"), ("window", "up"), ("agent", "prompt")]
+    assert out["view"] == "herdr is showing it"
+
+
+def test_closed_herdr_is_opened_first(fake_herdr, monkeypatch):
+    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: None)
+    monkeypatch.setattr(herdr.desktop, "open_herdr", lambda: fake_herdr.append(("window", "open")) or {"address": "0x9"})
+    out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    assert fake_herdr == [("window", "open"), ("agent", "focus", "wT:p2Z"), ("window", "up"), ("agent", "prompt")]
+    assert out["view"] == "opened herdr on it"
+
+
+def test_herdr_that_wont_open_is_reported(fake_herdr, monkeypatch):
+    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: None)
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: False)
+    out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    assert out["view"].startswith("not shown") and fake_herdr[-1] == ("agent", "prompt")
 
 
 def test_prompt_agent_without_show_leaves_the_view(fake_herdr):
@@ -105,3 +123,4 @@ def test_showing_never_blocks_the_task(fake_herdr, monkeypatch, error):
     monkeypatch.setattr(herdr.desktop, "show_herdr", broken)
     out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert out["status"] == "working" and fake_herdr[-1] == ("agent", "prompt")
+    assert out["view"].startswith("not shown")

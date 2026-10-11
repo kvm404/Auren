@@ -223,15 +223,19 @@ def _new_tab(label: str, cwd: str) -> tuple[str, str]:
     return r["tab"]["tab_id"], r["root_pane"]["pane_id"]
 
 
-def _show(*focus: str) -> None:
+def _show(*focus: str) -> str:
     """Put a pane in front of the user: herdr's view switches to it (focus is the herdr command, like
-    "tab", "focus", tab_id) and herdr's window comes up from the scratchpad. Best effort: the task
-    goes ahead even if this fails."""
+    "tab", "focus", tab_id) and herdr's window comes up from the scratchpad, or opens if herdr isn't in
+    a window. Returns what the user now sees, for the brain to report truthfully. Best effort: the
+    task goes ahead even if this fails."""
     try:
+        opened = desktop.herdr_window() is None and desktop.open_herdr() is not None
         herdr(*focus)
-        desktop.show_herdr()
-    except Exception:  # noqa: BLE001 - showing is a nicety; never let it stop the task
-        pass
+        if not desktop.show_herdr():
+            return "not shown: herdr isn't open in a window and didn't open; the agent runs in the background"
+        return "opened herdr on it" if opened else "herdr is showing it"
+    except Exception as e:  # noqa: BLE001 - showing is a nicety; never let it stop the task
+        return f"not shown ({str(e)[:80]}); the agent runs in the background"
 
 
 def _wait_for_shell(pane_id: str, timeout: float = 10) -> None:
@@ -268,8 +272,7 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
         return {"agent": a.describe(), "status": "blocked",
                 "note": "the agent is waiting at an approval or question; ask the user",
                 "screen": "\n".join(screen(a.pane_id, 40).splitlines()[-25:])}
-    if show:
-        _show("agent", "focus", a.pane_id)
+    view = _show("agent", "focus", a.pane_id) if show else ""
     args = ["agent", "prompt", a.pane_id, text]
     if wait:
         args += ["--wait", "--timeout", str(timeout_s * 1000)]
@@ -281,7 +284,7 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
                     "screen": "\n".join(screen(a.pane_id, 40).splitlines()[-25:])}
         raise
     status = r.get("agent", {}).get("agent_status", "submitted")
-    out = {"agent": a.describe(), "status": status}
+    out = {"agent": a.describe(), "status": status} | ({"view": view} if view else {})
     if wait:
         full = screen(a.pane_id, 200)
         out["reply"] = reply_after(full, text) if status in ("idle", "done") else ""
@@ -310,9 +313,10 @@ def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: 
     _wait_for_shell(pane_id)
     herdr("agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", "60000",
           *(["--", *agent_args] if agent_args else []), timeout=90)
-    if show:
-        _show("tab", "focus", tab_id)
+    view = _show("tab", "focus", tab_id) if show else ""
     out = {"job": name, "kind": kind, "cwd": cwd, "tab": tab_id, "pane": pane_id, "status": "started"}
+    if view:
+        out["view"] = view
     if task:
         out.update(prompt_agent(name, task, wait=wait, timeout_s=timeout_s))
     return out
@@ -378,8 +382,6 @@ def close_job(job: str) -> str:
 
 
 def focus(agent: str, hint: str = "") -> str:
-    """Switch herdr's view to an agent's pane and bring herdr's window up."""
+    """Switch herdr's view to an agent's pane and bring herdr's window up (opening it if needed)."""
     a = resolve(agent, hint)
-    herdr("agent", "focus", a.pane_id)
-    desktop.show_herdr()
-    return f"focused {a.describe()}"
+    return f"{_show('agent', 'focus', a.pane_id)}: {a.describe()}"
