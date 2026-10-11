@@ -256,13 +256,13 @@ def show_agent(agent: str, hint: str = "") -> str:
     return _run(herdr.focus, agent, hint)
 
 
-# --- browser (the user's real, logged-in Chrome or Brave) -----------------------------------
+# --- browser (the user's real, logged-in Helium or Chrome) -----------------------------------
 
 @server.tool()
-def browser_open(url: str, browser: str = "chrome") -> str:
+def browser_open(url: str, browser: str = "helium") -> str:
     """Open a page in a new auren tab of the user's real browser and read it: text plus numbered clickable
-    items. url can be 'bookmark:<name or folder/name>'. browser: chrome or brave (the user's routines may
-    say which). If the browser isn't open, this starts it and waits for it
+    items. url can be 'bookmark:<name or folder/name>'. browser: helium (the default) or chrome (the user's
+    routines may say which). If the browser isn't open, this starts it and waits for it
     to connect (up to ~25 s): don't launch it first."""
     out = _run(web.browser_open, url, browser)
     return out if out.startswith("error:") else safety.untrusted(out, "web page")
@@ -313,13 +313,13 @@ def browser_close(keep_current: bool = False) -> str:
 
 
 @server.tool()
-def browser_bookmarks(query: str = "", browser_name: str = "chrome") -> str:
+def browser_bookmarks(query: str = "", browser_name: str = "helium") -> str:
     """List the user's bookmarks matching words (folder/name → url)."""
     return _run(web.bookmarks, query, browser_name)
 
 
 @server.tool()
-def recent_downloads(minutes: int = 30, browser_name: str = "chrome") -> str:
+def recent_downloads(minutes: int = 30, browser_name: str = "helium") -> str:
     """Files downloaded recently (path and size)."""
     return _run(web.recent_downloads, browser_name, minutes)
 

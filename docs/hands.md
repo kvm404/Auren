@@ -117,11 +117,12 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 
 ## Browser
 
-**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use** (open source, already installed). Chrome and Brave each run their own native host:
-- **Chrome:** `/tmp/open-browser-use-chrome`, set up by `~/.local/share/open-browser-use/native-host/chrome-host.sh`.
-- **Brave:** the default `/tmp/open-browser-use`.
+**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use** (open source, already installed). Each browser runs its own native host:
+- **Helium (default):** the default `/tmp/open-browser-use`.
+- **Chrome:** `/tmp/open-browser-use-chrome`, but only if Chrome's native host manifest points at a wrapper that passes `--socket-dir`. As of 2026-10-11 that wrapper is gone, so Chrome isn't connected.
+- **Brave:** not supported. Its host would use Helium's socket folder.
 
-A bare `obu` command goes to Brave; that's why it "got confused about which browser". Auren always passes `--socket-dir` for the named browser.
+Auren always passes `--socket-dir` for the named browser.
 
 | Tool | What it does |
 |---|---|
@@ -224,3 +225,8 @@ move, release, optionally holding shift/ctrl/alt; Shift = perfect circle). Two f
 Tested on a full-screen test surface: drags land within 1 px (400,300→701,500; 900,600→649,250;
 200,700→1300,150), apps get 40–60 motion events, and Shift is held from press to release. The brain's
 rules now say it has full mouse control and must never offer to install mouse tools.
+
+## Helium (2026-10-11)
+
+- Helium became the default browser, and its extension uses the default socket folder.
+- With only web-app windows open, `open-tab` makes a new normal window but replies without a tab id. `browser_open` now tries once more, which opens the tab in that new window.

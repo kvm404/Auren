@@ -218,7 +218,8 @@ def obsidian() -> list[str]:
 @soft
 def bookmarks() -> dict[str, list[str]]:
     """Bookmark names per browser, as "Folder/Name" (no URLs: they can hold login tokens)."""
-    files = {"chrome": HOME / ".config/google-chrome/Default/Bookmarks",
+    files = {"helium": HOME / ".config/net.imput.helium/Default/Bookmarks",
+             "chrome": HOME / ".config/google-chrome/Default/Bookmarks",
              "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks"}
     out = {}
     for browser, path in files.items():

@@ -1,8 +1,9 @@
 """Browser tools: work in the user's real, logged-in browser through Open Browser Use.
 
-- Chrome and Brave each run their own Open Browser Use native host. Chrome's uses
-  /tmp/open-browser-use-chrome (see ~/.local/share/open-browser-use/native-host/
-  chrome-host.sh); Brave's uses the default /tmp/open-browser-use.
+- Each browser runs its own Open Browser Use native host. Helium (the default) uses the
+  default /tmp/open-browser-use; Chrome's uses /tmp/open-browser-use-chrome (its manifest
+  must point at a wrapper that passes --socket-dir). Brave isn't supported: its host would
+  share Helium's socket folder, so "brave" would silently drive Helium.
 - auren works in tabs it opens itself (an Open Browser Use session, grouped as
   "auren" in the browser). It never closes or reuses the user's own tabs.
 - Pages are read as text plus a numbered list of links, buttons and fields;
@@ -24,13 +25,14 @@ import time
 from pathlib import Path
 
 HOME = Path.home()
-SOCKET_DIRS = {"chrome": "/tmp/open-browser-use-chrome", "brave": "/tmp/open-browser-use"}
-BOOKMARK_FILES = {"chrome": HOME / ".config/google-chrome/Default/Bookmarks",
-                  "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks"}
-PREFERENCES = {"chrome": HOME / ".config/google-chrome/Default/Preferences",
-               "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Preferences"}
-EXECUTABLES = {"chrome": "google-chrome-stable", "brave": "brave"}
-PROCESS_NAMES = {"chrome": "chrome", "brave": "brave"}
+DEFAULT = "helium"
+SOCKET_DIRS = {"helium": "/tmp/open-browser-use", "chrome": "/tmp/open-browser-use-chrome"}
+BOOKMARK_FILES = {"helium": HOME / ".config/net.imput.helium/Default/Bookmarks",
+                  "chrome": HOME / ".config/google-chrome/Default/Bookmarks"}
+PREFERENCES = {"helium": HOME / ".config/net.imput.helium/Default/Preferences",
+               "chrome": HOME / ".config/google-chrome/Default/Preferences"}
+EXECUTABLES = {"helium": "helium", "chrome": "google-chrome-stable"}
+PROCESS_NAMES = {"helium": "helium", "chrome": "chrome"}
 CONNECT_WAIT = 25
 SESSION = "auren"
 MAX_TEXT = 5000
@@ -43,10 +45,10 @@ class BrowserError(RuntimeError):
 
 
 def _browser(name: str | None) -> str:
-    n = (name or _state["browser"] or "chrome").strip().lower()
-    n = {"google chrome": "chrome", "google-chrome": "chrome", "brave browser": "brave"}.get(n, n)
+    n = (name or _state["browser"] or DEFAULT).strip().lower()
+    n = {"google chrome": "chrome", "google-chrome": "chrome"}.get(n, n)
     if n not in SOCKET_DIRS:
-        raise BrowserError(f"browser must be chrome or brave, not {name}")
+        raise BrowserError(f"browser must be {' or '.join(SOCKET_DIRS)}, not {name}")
     return n
 
 
@@ -216,7 +218,7 @@ def _mask_url(url: str) -> str:
 
 # --- tools ----------------------------------------------------------------------------
 
-def browser_open(url: str, browser: str = "chrome") -> str:
+def browser_open(url: str, browser: str = DEFAULT) -> str:
     """Open a URL (or 'bookmark:<name or folder/name>') in a new auren tab and read it."""
     b = _browser(browser)
     if "…" in url:
@@ -226,7 +228,14 @@ def browser_open(url: str, browser: str = "chrome") -> str:
     elif not re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I):
         url = "https://" + url
     obu(b, "name-session", "--name", "auren")
-    r = obu(b, "open-tab", "--url", url, timeout=40)
+    try:
+        r = obu(b, "open-tab", "--url", url, timeout=40)
+    except BrowserError as e:
+        # With only web-app windows open, the browser makes a new normal window but the reply has no
+        # tab id; the second try opens the tab in that window.
+        if "tab id" not in str(e):
+            raise
+        r = obu(b, "open-tab", "--url", url, timeout=40)
     tab = (r.get("tab") or {}).get("id")
     if not tab:
         raise BrowserError(f"couldn't open a tab: {str(r)[:200]}")
@@ -247,14 +256,14 @@ def _front(browser: str, tab: int) -> None:
 
 
 def browser_read(tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
     _front(b, t)
     return _format(_eval(b, t, _READ_JS))
 
 
 def browser_click(target: str, tab: int | None = None, expect_download: bool = False) -> str:
     """Click item number `target` from the last read (or the first item whose text matches `target`)."""
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
     _front(b, t)
     before = _download_snapshot(b) if expect_download else None
     js = """
@@ -297,7 +306,7 @@ RISKY_CLICK = re.compile(r"\b(buy|pay|purchase|place order|order now|checkout|ch
 
 def label_of(target: str, tab: int | None = None) -> str | None:
     """The label of the item `target` would click, without clicking (for the safety check)."""
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
     js = """((target) => { const all = [...document.querySelectorAll('[data-auren-id]')];
       const lab = e => (e.getAttribute('data-auren-label') || '');
       if (/^\\d+$/.test(target)) { const e = document.querySelector(`[data-auren-id="${target}"]`); return e ? lab(e) : null; }
@@ -307,7 +316,7 @@ def label_of(target: str, tab: int | None = None) -> str | None:
 
 
 def browser_type(target: str, text: str, submit: bool = False, tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
     js = """
     ((target, text, submit) => {
       const el = document.querySelector(`[data-auren-id="${target}"]`);
@@ -333,7 +342,7 @@ def browser_type(target: str, text: str, submit: bool = False, tab: int | None =
 
 
 def browser_scroll(direction: str = "down", tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _state["browser"] or DEFAULT, _tab(tab)
     _eval(b, t, f"window.scrollBy(0, {'' if direction == 'down' else '-'}window.innerHeight * 0.9)")
     time.sleep(0.6)
     return browser_read(t)
@@ -359,7 +368,7 @@ def _bookmarks(browser: str) -> list[tuple[str, str]]:
     return out
 
 
-def bookmarks(query: str = "", browser: str = "chrome") -> str:
+def bookmarks(query: str = "", browser: str = DEFAULT) -> str:
     b = _browser(browser)
     words = query.lower().split()
     hits = [(name, url) for name, url in _bookmarks(b) if all(w in name.lower() for w in words)]
@@ -410,7 +419,7 @@ def _wait_download(browser: str, before: dict[str, float], timeout: float = 60) 
     return None
 
 
-def recent_downloads(browser: str = "chrome", minutes: int = 30) -> str:
+def recent_downloads(browser: str = DEFAULT, minutes: int = 30) -> str:
     d = download_dir(_browser(browser))
     cutoff = time.time() - minutes * 60
     files = sorted((p for p in d.iterdir() if p.stat().st_mtime > cutoff and p.is_file()),
@@ -420,7 +429,7 @@ def recent_downloads(browser: str = "chrome", minutes: int = 30) -> str:
 
 def browser_close(keep_current: bool = False) -> str:
     """Close the tabs auren opened (never the user's own). keep_current leaves the last one open."""
-    b = _state["browser"] or "chrome"
+    b = _state["browser"] or DEFAULT
     keep = [{"tabId": _state["tab"], "status": "deliverable"}] if keep_current and _state["tab"] else []
     obu(b, "finalize-tabs", "--keep", json.dumps(keep))
     if not keep_current:

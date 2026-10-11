@@ -32,6 +32,7 @@ WATCHED = [  # a change to any of these rebuilds the static part
     Path.home() / ".config/omarchy/defaults",
     Path.home() / ".local/state/omarchy/defaults",
     Path.home() / ".config/obsidian/obsidian.json",
+    Path.home() / ".config/net.imput.helium/Default/Bookmarks",
     Path.home() / ".config/google-chrome/Default/Bookmarks",
     Path.home() / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks",
     collect.PROJECTS,

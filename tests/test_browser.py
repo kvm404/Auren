@@ -37,3 +37,21 @@ def test_running_but_extension_off(fake, monkeypatch):
     with pytest.raises(b.BrowserError, match="running, but its Open Browser Use extension isn't connected"):
         b.ensure_connected("chrome", wait=0)
     assert fake["spawned"] == []                                                    # never starts a second one
+
+
+def test_open_tab_retries_when_the_reply_has_no_tab_id(monkeypatch):
+    replies = [b.BrowserError("browser: createTab response did not include numeric tab id"), {"tab": {"id": 7}}]
+
+    def obu(browser, *args, **kw):
+        if args[0] != "open-tab":
+            return {}
+        r = replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(b, "obu", obu)
+    monkeypatch.setattr(b, "_wait_ready", lambda browser, tab: None)
+    monkeypatch.setattr(b, "browser_read", lambda tab: "page")
+    assert b.browser_open("excalidraw.com") == "(tab 7 in helium)\npage"
+    assert replies == []

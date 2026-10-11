@@ -287,12 +287,12 @@ def launch_app(app: str, workspace: str | int | None = None, follow: bool = True
     return msg
 
 
-BROWSERS = {"chrome": "google-chrome-stable", "google chrome": "google-chrome-stable", "brave": "brave",
+BROWSERS = {"helium": "helium", "chrome": "google-chrome-stable", "google chrome": "google-chrome-stable", "brave": "brave",
             "chromium": "chromium"}
 
 
 def open_url(url: str, app_mode: bool = False, browser: str = "") -> str:
-    """Open a URL in the default browser, or in a named one (chrome, brave, chromium)."""
+    """Open a URL in the default browser, or in a named one (helium, chrome, brave, chromium)."""
     if not re.match(r"^[a-z][a-z0-9+.-]*://", url, re.I):
         url = "https://" + url
     hide_scratchpad()
