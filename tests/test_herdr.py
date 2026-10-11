@@ -74,9 +74,9 @@ def fake_herdr(monkeypatch):
         return {"agent": {"agent_status": "working"}}
     monkeypatch.setattr(herdr, "herdr", fake)
     monkeypatch.setattr(herdr, "agents", lambda: LIVE)
-    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: {"address": "0x2"})
+    monkeypatch.setattr(herdr.desktop, "herdr_is_open", lambda: True)
     monkeypatch.setattr(herdr.desktop, "open_herdr", lambda: calls.append(("window", "open")))
-    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: calls.append(("window", "up")) or True)
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda w=None: calls.append(("window", "up")) or True)
     return calls
 
 
@@ -87,7 +87,7 @@ def test_prompt_agent_shows_the_agent_before_sending(fake_herdr):
 
 
 def test_closed_herdr_is_opened_first(fake_herdr, monkeypatch):
-    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: None)
+    monkeypatch.setattr(herdr.desktop, "herdr_is_open", lambda: False)
     monkeypatch.setattr(herdr.desktop, "open_herdr", lambda: fake_herdr.append(("window", "open")) or {"address": "0x9"})
     out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert fake_herdr == [("window", "open"), ("agent", "focus", "wT:p2Z"), ("window", "up"), ("agent", "prompt")]
@@ -95,8 +95,9 @@ def test_closed_herdr_is_opened_first(fake_herdr, monkeypatch):
 
 
 def test_herdr_that_wont_open_is_reported(fake_herdr, monkeypatch):
-    monkeypatch.setattr(herdr.desktop, "herdr_window", lambda: None)
-    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda: False)
+    monkeypatch.setattr(herdr.desktop, "herdr_is_open", lambda: False)
+    monkeypatch.setattr(herdr.desktop, "open_herdr", lambda: None)
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda w=None: False)
     out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert out["view"].startswith("not shown") and fake_herdr[-1] == ("agent", "prompt")
 
@@ -118,9 +119,26 @@ def test_start_agent_shows_the_tab_once_the_agent_runs(fake_herdr, monkeypatch, 
 
 @pytest.mark.parametrize("error", [herdr.desktop.DesktopError("hyprland: no"), ValueError("bad JSON"), KeyError("pid")])
 def test_showing_never_blocks_the_task(fake_herdr, monkeypatch, error):
-    def broken():
+    def broken(w=None):
         raise error
     monkeypatch.setattr(herdr.desktop, "show_herdr", broken)
     out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
     assert out["status"] == "working" and fake_herdr[-1] == ("agent", "prompt")
     assert out["view"].startswith("not shown")
+
+
+def test_herdr_open_but_ambiguous_is_not_opened_again(fake_herdr, monkeypatch):
+    monkeypatch.setattr(herdr.desktop, "show_herdr", lambda w=None: False)    # can't tell which window
+    out = herdr.prompt_agent("claude", "fix the tests", wait=False, show=True)
+    assert ("window", "open") not in fake_herdr and out["view"].startswith("not shown")
+
+
+def test_view_survives_a_stalled_prompt(fake_herdr, monkeypatch):
+    def stalled(*args, **kwargs):
+        if args[:2] == ("agent", "prompt"):
+            raise HerdrError("agent_prompt_stalled", "no echo")
+        return {}
+    monkeypatch.setattr(herdr, "herdr", stalled)
+    monkeypatch.setattr(herdr, "screen", lambda pane, lines=120: "")
+    out = herdr.prompt_agent("claude", "fix the tests", wait=True, show=True)
+    assert out["status"] == "agent_prompt_stalled" and out["view"] == "herdr is showing it"

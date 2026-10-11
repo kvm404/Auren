@@ -229,10 +229,10 @@ def _show(*focus: str) -> str:
     a window. Returns what the user now sees, for the brain to report truthfully. Best effort: the
     task goes ahead even if this fails."""
     try:
-        opened = desktop.herdr_window() is None and desktop.open_herdr() is not None
+        opened = None if desktop.herdr_is_open() else desktop.open_herdr()
         herdr(*focus)
-        if not desktop.show_herdr():
-            return "not shown: herdr isn't open in a window and didn't open; the agent runs in the background"
+        if not desktop.show_herdr(opened):
+            return "not shown: herdr's window couldn't be found or opened; the agent runs in the background"
         return "opened herdr on it" if opened else "herdr is showing it"
     except Exception as e:  # noqa: BLE001 - showing is a nicety; never let it stop the task
         return f"not shown ({str(e)[:80]}); the agent runs in the background"
@@ -281,7 +281,7 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
     except HerdrError as e:
         if e.code in ("timeout", "agent_prompt_stalled"):
             return {"agent": a.describe(), "status": e.code, "note": "the prompt may have been delivered; do not resend blindly",
-                    "screen": "\n".join(screen(a.pane_id, 40).splitlines()[-25:])}
+                    "screen": "\n".join(screen(a.pane_id, 40).splitlines()[-25:])} | ({"view": view} if view else {})
         raise
     status = r.get("agent", {}).get("agent_status", "submitted")
     out = {"agent": a.describe(), "status": status} | ({"view": view} if view else {})

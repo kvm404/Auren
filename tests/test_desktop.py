@@ -111,11 +111,14 @@ def test_show_herdr_opens_the_scratchpad_only_when_hidden(monkeypatch, showing, 
     assert (sent[0] == 'hl.dsp.workspace.toggle_special("scratchpad")') == toggles and len(sent) == 1 + toggles
 
 
-def test_open_herdr_launches_it_and_waits_for_the_window(monkeypatch):
-    spawned, found = [], iter([None, None, WINDOWS[1]])
+def test_open_herdr_launches_it_and_waits_for_the_new_window(monkeypatch):
+    new = {"address": "0x9", "class": "com.mitchellh.ghostty", "workspace": {"id": 1, "name": "1"}}
+    lists = iter([WINDOWS, WINDOWS, WINDOWS + [new]])                      # before, still loading, mapped
+    spawned = []
+    monkeypatch.setattr(d, "windows", lambda: next(lists))
+    monkeypatch.setattr(d, "herdr_is_open", lambda: True)
     monkeypatch.setattr(d, "hide_scratchpad", lambda: False)
     monkeypatch.setattr(d, "spawn", spawned.append)
-    monkeypatch.setattr(d, "herdr_window", lambda: next(found))
     monkeypatch.setattr(d.time, "sleep", lambda s: None)
-    assert d.open_herdr()["address"] == "0x2"
+    assert d.open_herdr()["address"] == "0x9"
     assert spawned == [["omarchy-launch-terminal", "herdr"]]

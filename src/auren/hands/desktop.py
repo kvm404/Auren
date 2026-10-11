@@ -127,10 +127,9 @@ def _herdr_clients() -> list[int]:
     return pids
 
 
-def herdr_window() -> dict | None:
-    """The terminal window herdr runs in: the window whose process is an ancestor of a herdr client.
-    A terminal that runs all its windows in one process (foot --server, Ghostty) can't tell which
-    window is herdr's; then the one on a special workspace (the scratchpad) is taken, or none."""
+def _herdr_terminal() -> list[dict] | None:
+    """The windows of the terminal process herdr runs in (an ancestor of a herdr client), or None if
+    herdr isn't open in any window."""
     by_pid: dict[int, list[dict]] = {}
     for w in windows():
         by_pid.setdefault(w.get("pid"), []).append(w)
@@ -140,34 +139,46 @@ def herdr_window() -> dict | None:
             if pid <= 1:
                 break
             if pid in by_pid:
-                wins = by_pid[pid]
-                if len(wins) > 1:
-                    wins = [w for w in wins if w["workspace"]["name"].startswith("special:")]
-                if len(wins) == 1:
-                    return wins[0]
-                break
+                return by_pid[pid]
     return None
+
+
+def herdr_is_open() -> bool:
+    return _herdr_terminal() is not None
+
+
+def herdr_window() -> dict | None:
+    """The terminal window herdr runs in. A terminal that runs all its windows in one process
+    (foot --server, Ghostty) can't tell which window is herdr's; then the one on a special workspace
+    (the scratchpad) is taken, or none."""
+    wins = _herdr_terminal() or []
+    if len(wins) > 1:
+        wins = [w for w in wins if w["workspace"]["name"].startswith("special:")]
+    return wins[0] if len(wins) == 1 else None
 
 
 def open_herdr(timeout: float = 8) -> dict | None:
     """Open herdr in a new terminal window on the user's workspace, as Omarchy's Super+Ctrl+Return
-    does (it attaches to the running session), and wait for the window. None if it didn't appear."""
+    does (it attaches to the running session), and wait for the window. None if it didn't appear.
+    The new window is told apart by its address, which works even when the terminal runs all its
+    windows in one process."""
     hide_scratchpad()
+    before = {w["address"] for w in windows()}
     spawn(["omarchy-launch-terminal", "herdr"])
     end = time.time() + timeout
     while time.time() < end:
         time.sleep(0.2)
-        w = herdr_window()
-        if w:
+        new = [w for w in windows() if w["address"] not in before]
+        if new and herdr_is_open():
             time.sleep(0.8)              # let the client attach before herdr's view is switched
-            return w
+            return new[0]
     return None
 
 
-def show_herdr() -> bool:
+def show_herdr(w: dict | None = None) -> bool:
     """Bring herdr's window into view and focus it, showing the special workspace it lives on (the
-    scratchpad) if that's hidden. False if herdr isn't open in a window."""
-    w = herdr_window()
+    scratchpad) if that's hidden. w: the window, if known. False if herdr's window can't be found."""
+    w = w or herdr_window()
     if w is None:
         return False
     ws = w["workspace"]["name"]
