@@ -185,8 +185,9 @@ def read_agent(agent: str, hint: str = "", lines: int = 60) -> str:
 @server.tool()
 def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeout_s: int = 180) -> str:
     """Send a prompt to an agent that is already running (the user's or auren's). The user's view switches
-    to the agent so they can watch. With wait=True returns its reply when it finishes (good for quick
-    questions); use wait=False for long work."""
+    to the agent so they can watch (the result's `view` says whether they can see it; don't claim it's
+    showing otherwise). With wait=True returns its reply when it finishes (good for quick questions);
+    use wait=False for long work."""
     out = _run(herdr.prompt_agent, agent, text, hint, wait, timeout_s, show=True)
     if out.startswith("error:"):
         return out
@@ -203,7 +204,8 @@ def start_agent(kind: str = "codex", folder: str = "~", name: str = "", task: st
                 wait: bool = False, timeout_s: int = 180) -> str:
     """Start a new coding agent (codex by default; claude, opencode, agy, grok, muse...) in its own tab of
     auren's herdr workspace, in a folder, optionally with a first task. name: a short job name for the task
-    (like "lecture-notes"). The user's view switches to the new tab so they can watch. For big jobs keep
+    (like "lecture-notes"). The user's view switches to the new tab so they can watch (the result's
+    `view` says whether they can see it; don't claim it's showing otherwise). For big jobs keep
     wait=False and tell the user it's running."""
     out = _run(herdr.start_agent, kind, folder, name, task, wait, timeout_s, show=True)
     if out.startswith("error:"):

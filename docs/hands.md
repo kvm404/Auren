@@ -41,8 +41,11 @@ found as the window whose process is an ancestor of a `herdr` client (`herdr` wi
 terminal that runs every window in one process (foot --server, Ghostty) is ambiguous: then the window
 on a special workspace is taken, or none. A scratchpad already showing on another monitor is left
 there. A new agent's tab is shown once the agent runs, not before, so keys the user is still typing
-don't land in its shell. It is best
-effort: if herdr isn't open in a window, the task still goes through. Quick questions with `wait=True`
+don't land in its shell. If herdr isn't open in any window, Auren opens it
+the way Omarchy's Super+Ctrl+Return does (`omarchy-launch-terminal herdr`, which attaches to the
+running session) on the user's workspace, waits for the window, then switches it to the agent. The
+tool result carries `view` ("herdr is showing it", "opened herdr on it" or "not shown …"), so the brain
+only says it's showing when it is. It is best effort: if showing fails, the task still goes through. Quick questions with `wait=True`
 show the agent too, before Auren waits for the reply.
 
 ### Measured (2026-10-10)

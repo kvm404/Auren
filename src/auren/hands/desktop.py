@@ -149,6 +149,21 @@ def herdr_window() -> dict | None:
     return None
 
 
+def open_herdr(timeout: float = 8) -> dict | None:
+    """Open herdr in a new terminal window on the user's workspace, as Omarchy's Super+Ctrl+Return
+    does (it attaches to the running session), and wait for the window. None if it didn't appear."""
+    hide_scratchpad()
+    spawn(["omarchy-launch-terminal", "herdr"])
+    end = time.time() + timeout
+    while time.time() < end:
+        time.sleep(0.2)
+        w = herdr_window()
+        if w:
+            time.sleep(0.8)              # let the client attach before herdr's view is switched
+            return w
+    return None
+
+
 def show_herdr() -> bool:
     """Bring herdr's window into view and focus it, showing the special workspace it lives on (the
     scratchpad) if that's hidden. False if herdr isn't open in a window."""
