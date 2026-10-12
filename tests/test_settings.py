@@ -124,3 +124,12 @@ def test_parallel_writers_keep_each_others_changes(tmp_path, monkeypatch):
     assert (got["speed"], got["volume"], got["pause"], got["steps"], got["effort"], got["language"]) == \
         (1.3, 0.5, 0.4, 9, "high", "hi")
     assert not list((tmp_path / "auren").glob(".config.*.tmp"))
+
+
+def test_tables_and_lists_can_be_set_from_the_command_line(cfg):
+    assert settings.set_value("browser.sockets", '{ chrome = "/tmp/obu-chrome" }') == {"chrome": "/tmp/obu-chrome"}
+    assert settings.set_value("projects.folders", '["~/work", "~/src"]') == ["~/work", "~/src"]
+    assert settings.set_value("projects.folders", "~/code") == ["~/code"]
+    with pytest.raises(ValueError, match="written as in config.toml"):
+        settings.set_value("browser.sockets", "{ chrome = }")
+    assert settings.load()["browser.sockets"] == {"chrome": "/tmp/obu-chrome"}
