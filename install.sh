@@ -59,7 +59,8 @@ fi
 say "Python environment: $share/venv"
 mkdir -p "$share/bin"
 sync=(uv sync --project "$repo" --frozen --no-dev)
-[[ $mode == dev ]] || sync+=(--no-editable)
+# --reinstall-package: auren's version doesn't change between commits, so uv would keep the old copy
+[[ $mode == dev ]] || sync+=(--no-editable --reinstall-package auren)
 UV_PROJECT_ENVIRONMENT="$share/venv" "${sync[@]}"
 ln -sfn "$share/venv/bin/auren-ctl" "$share/bin/auren-ctl"
 mkdir -p "$userbin"
