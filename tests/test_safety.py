@@ -35,16 +35,26 @@ def test_confirmation_needs_a_later_turn_of_the_same_session():
         c.redeem("daemon", token, 3)
 
 
-def test_a_confirmation_checks_its_target_before_running():
+def test_a_token_is_used_up_once_even_by_parallel_calls():
+    import threading
+
     c = safety.Confirmations()
+    token = c.request("daemon", 1, "Close Omacalc?", lambda: None)["token"]
+    won, start = [], threading.Barrier(8)
 
-    def gone():
-        raise PermissionError("the page changed")
+    def take():
+        start.wait()
+        try:
+            won.append(c.redeem("daemon", token, 2))
+        except PermissionError:
+            pass
 
-    token = c.request("daemon", 1, "Click Send?", lambda: None, gone)["token"]
-    with pytest.raises(PermissionError, match="page changed"):
-        c.redeem("daemon", token, 2)
-    assert c.summary("daemon") == ""              # used up: the brain has to ask again
+    threads = [threading.Thread(target=take) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(won) == 1 and c.summary("daemon") == ""
 
 
 def test_confirmations_expire(monkeypatch):

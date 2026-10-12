@@ -56,26 +56,108 @@ def test_a_session_cant_redeem_anothers_confirmation(rt):
     assert "token" in rt.summary("daemon") and rt.summary("chat-1") == ""
 
 
+class _Page:
+    """A fake page: numbered fields (renumbered by each read), pins that stay on their element."""
+
+    def __init__(self, monkeypatch, fields):
+        self.fields, self.pins, self.typed = list(fields), {}, []
+        self.where = {"browser": "chrome", "tab": 7, "url": "https://chat.example/room"}
+        monkeypatch.setattr(web, "page", lambda: dict(self.where))
+        monkeypatch.setattr(web, "pin", self.pin)
+        monkeypatch.setattr(web, "field_of", self.field_of)
+        monkeypatch.setattr(web, "browser_type", self.type)
+
+    def element(self, target):
+        if target.startswith("pin:"):
+            return self.pins.get(target)
+        n = int(target) - 1
+        return self.fields[n] if 0 <= n < len(self.fields) else None
+
+    def pin(self, target, is_field=False):
+        el = self.element(target)
+        if el is None:
+            return None
+        self.pins[f"pin:{len(self.pins)}"] = el
+        return f"pin:{len(self.pins) - 1}"
+
+    def field_of(self, target):
+        el = self.element(target)
+        return None if el is None or el not in self.fields else {"label": el, "search": el == "Search"}
+
+    def type(self, target, text, submit=False):
+        self.typed.append((self.element(target), text, submit))
+        self.typed_on = self.where["tab"]
+        return "typed"
+
+
 def test_submitting_a_search_box_runs_but_other_fields_ask(rt, monkeypatch):
-    typed = []
-    monkeypatch.setattr(web, "browser_type", lambda target, text, submit=False: typed.append((target, text, submit)) or "typed")
-    page = {"browser": "chrome", "tab": 7, "url": "https://chat.example/room"}
-    monkeypatch.setattr(web, "page", lambda: dict(page))
+    p = _Page(monkeypatch, ["Search", "Message"])
+    assert "typed" in _ask(rt, "browser_type", target="1", text="weather", submit=True)
+    assert p.typed == [("Search", "weather", True)]
 
-    monkeypatch.setattr(web, "field_of", lambda target: {"label": "Search", "search": True})
-    assert "typed" in _ask(rt, "browser_type", target="3", text="weather", submit=True)
-    assert typed == [("3", "weather", True)]
-
-    monkeypatch.setattr(web, "field_of", lambda target: {"label": "Message", "search": False})
-    asked = json.loads(_ask(rt, "browser_type", target="5", text="hello there", submit=True))
+    asked = json.loads(_ask(rt, "browser_type", target="2", text="hello there", submit=True))
     assert asked["status"] == "needs_confirmation" and "Message" in asked["ask_user"]
-    assert len(typed) == 1
-    assert "typed" in _ask(rt, "browser_type", target="5", text="draft only")      # no Enter: no question
+    assert len(p.typed) == 1
+    assert "typed" in _ask(rt, "browser_type", target="2", text="draft only")      # no Enter: no question
 
     rt.new_turn("daemon")
-    page["url"] = "https://chat.example/other-room"
+    p.where["url"] = "https://chat.example/other-room"
     assert "page changed" in _ask(rt, "confirm_action", token=asked["token"])
-    assert typed[-1] == ("5", "draft only", False)
+    assert p.typed[-1] == ("Message", "draft only", False)
+
+
+def test_a_confirmed_message_goes_to_the_field_asked_about(rt, monkeypatch):
+    p = _Page(monkeypatch, ["Search", "Message to Alice"])
+    asked = json.loads(_ask(rt, "browser_type", target="2", text="private text", submit=True))
+    rt.new_turn("daemon")
+    p.fields = ["Message to Alice", "Search"]          # read again: renumbered, field 2 is now the search box
+    assert "typed" in _ask(rt, "confirm_action", token=asked["token"])
+    assert p.typed == [("Message to Alice", "private text", True)]
+
+    asked = json.loads(_ask(rt, "browser_type", target="1", text="private text", submit=True))
+    rt.new_turn("daemon")
+    p.fields = ["Message to Bob", "Search"]            # the chat switched without a new address
+    assert "isn't there any more" in _ask(rt, "confirm_action", token=asked["token"])
+    assert len(p.typed) == 1
+
+
+def test_a_confirmation_is_checked_and_run_without_another_browser_call_between(rt, monkeypatch):
+    import threading
+
+    p = _Page(monkeypatch, ["Message"])
+    asked = json.loads(_ask(rt, "browser_type", target="1", text="hi", submit=True))
+    rt.new_turn("daemon")
+    checking, may_switch = threading.Event(), threading.Event()
+    real_field_of = p.field_of
+
+    def slow_field_of(target):
+        checking.set()
+        may_switch.wait(0.3)          # give the other call every chance to switch tabs here
+        return real_field_of(target)
+
+    monkeypatch.setattr(web, "field_of", slow_field_of)
+    monkeypatch.setattr(web, "browser_open", lambda url, browser="": p.where.update(tab=8) or "opened")
+    confirm = threading.Thread(target=lambda: rt.call("daemon", "confirm_action", {"token": asked["token"]}))
+    confirm.start()
+    checking.wait(1)
+    other = threading.Thread(target=lambda: rt.call("daemon", "browser_open", {"url": "x.com"}))
+    other.start()
+    may_switch.set()
+    confirm.join()
+    other.join()
+    assert p.typed == [("Message", "hi", True)] and p.typed_on == 7 and p.where["tab"] == 8
+
+
+def test_a_confirmed_shortcut_goes_to_the_window_asked_about(rt, monkeypatch):
+    from auren.hands import screen
+
+    target = {"window": "0xA"}
+    monkeypatch.setattr(screen, "key_target", lambda: target["window"])
+    monkeypatch.setattr(screen, "press_keys", lambda keys: f"pressed {keys} in {target['window']}")
+    asked = json.loads(_ask(rt, "press_keys", keys="ctrl+w"))
+    rt.new_turn("daemon")
+    target["window"] = "0xB"
+    assert "different window" in _ask(rt, "confirm_action", token=asked["token"])
 
 
 def test_cancel_refuses_further_tools_until_the_next_message(rt, monkeypatch):

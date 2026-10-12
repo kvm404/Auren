@@ -21,6 +21,7 @@ screen or the web is wrapped as untrusted.
 from __future__ import annotations
 
 import base64
+import contextlib
 import contextvars
 import inspect
 import json
@@ -32,6 +33,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import safety
 from .hands import browser as web
@@ -52,14 +54,20 @@ class Image:
 class Tool:
     fn: Callable
     repeatable: bool        # safe to run again if a backup brain starts the request over
+    lock: Any = None        # BROWSER or SCREEN: held while it runs
 
 
 TOOLS: dict[str, Tool] = {}
 
+# One tool at a time on the browser, and one on the screen and keyboard (a brain can call tools in
+# parallel). A confirmation is checked and run holding the same lock, so what it checked is what it acts on.
+BROWSER = threading.RLock()
+SCREEN = threading.RLock()
 
-def tool(repeatable: bool = False):
+
+def tool(repeatable: bool = False, lock: Any = None):
     def register(fn: Callable) -> Callable:
-        TOOLS[fn.__name__] = Tool(fn, repeatable)
+        TOOLS[fn.__name__] = Tool(fn, repeatable, lock)
         return fn
     return register
 
@@ -77,6 +85,7 @@ class Session:
 class _Call:
     runtime: Runtime
     session: str
+    lock: Any = None                        # the tool's lock, which its confirmation will hold too
     asked: bool = False                     # the tool asked for confirmation instead of acting
 
 
@@ -105,6 +114,9 @@ class Runtime:
     def cancel(self, sid: str) -> None:
         self._session(sid).cancelled = True
 
+    def cancelled(self, sid: str) -> bool:
+        return self._session(sid).cancelled
+
     def acted(self, sid: str) -> bool:
         return self._session(sid).acted
 
@@ -123,10 +135,11 @@ class Runtime:
             return [f"error: no tool called {name}"]
         if name in hidden_tools():
             return [f"error: {name} isn't available on this machine (see auren doctor)"]
-        c = _Call(self, sid)
+        c = _Call(self, sid, t.lock)
         token = _call.set(c)
         try:
-            out = t.fn(**args)
+            with t.lock or contextlib.nullcontext():
+                out = t.fn(**args)
         except TypeError as e:
             out = f"error: wrong arguments for {name}: {e}"
         except Exception as e:  # noqa: BLE001 - report, never crash the runtime
@@ -207,7 +220,8 @@ def _ask(question: str, run: Callable, check: Callable[[], None] | None = None) 
     c = _call.get()
     c.asked = True
     turn = c.runtime._session(c.session).turn
-    return json.dumps(c.runtime.confirmations.request(c.session, turn, question, run, check), ensure_ascii=False)
+    return json.dumps(c.runtime.confirmations.request(c.session, turn, question, run, check, c.lock),
+                      ensure_ascii=False)
 
 
 def _profile() -> Profile:
@@ -450,7 +464,7 @@ def _same_page(before: dict) -> Callable[[], None]:
     return check
 
 
-@tool(repeatable=True)
+@tool(repeatable=True, lock=BROWSER)
 def browser_open(url: str, browser: str = "") -> str:
     """Open a page in a new auren tab of the user's real browser and read it: text plus numbered clickable
     items. url can be 'bookmark:<name or folder/name>'. browser: leave empty for the user's browser, or
@@ -459,13 +473,13 @@ def browser_open(url: str, browser: str = "") -> str:
     return _web(_run(web.browser_open, url, browser))
 
 
-@tool(repeatable=True)
+@tool(repeatable=True, lock=BROWSER)
 def browser_read() -> str:
     """Read the current auren browser tab again (text and numbered clickable items)."""
     return _web(_run(web.browser_read))
 
 
-@tool()
+@tool(lock=BROWSER)
 def browser_click(target: str, expect_download: bool = False) -> str:
     """Click an item: its number from the last read, or words from its label. Returns the page after the
     click. expect_download=True waits for a file to finish downloading and returns its path. Clicks that
@@ -473,20 +487,20 @@ def browser_click(target: str, expect_download: bool = False) -> str:
     try:
         label = web.label_of(target)
         if label and web.RISKY_CLICK.search(label):
-            here = web.page()
+            here, pinned = web.page(), web.pin(target)
     except web.BrowserError as e:
         return f"error: {e}"
     if label and web.RISKY_CLICK.search(label):
         def check() -> None:
             _same_page(here)()
-            if web.label_of(target) != label:
+            if not pinned or web.label_of(pinned) != label:
                 raise PermissionError(f"“{label}” isn't there any more: read the page again and ask the user again")
         return _ask(f"Click “{label}”? That could buy, send, post or delete something.",
-                    lambda: safety.untrusted(web.browser_click(target, None, expect_download), "web page"), check)
+                    lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check)
     return _web(_run(web.browser_click, target, None, expect_download))
 
 
-@tool()
+@tool(lock=BROWSER)
 def browser_type(target: str, text: str, submit: bool = False) -> str:
     """Type text into a numbered field from the last read; submit=True presses Enter. Submitting a search
     box runs straight away; submitting any other field (a message, a comment, a form) needs the user's
@@ -500,19 +514,30 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
         if f is None:
             return f"error: no field number {target} (read the page again)"
         if not f["search"]:
+            try:
+                pinned = web.pin(target, is_field=True)
+            except web.BrowserError as e:
+                return f"error: {e}"
+
+            def check() -> None:
+                _same_page(here)()
+                now = web.field_of(pinned) if pinned else None
+                if now is None or now["label"] != f["label"]:
+                    raise PermissionError(f"“{f['label'] or 'that field'}” isn't there any more: read the page "
+                                          "again and ask the user again")
             short = text if len(text) <= 60 else text[:57] + "…"
             return _ask(f"Type “{short}” into “{f['label'] or 'the field'}” and press Enter? That could send or post it.",
-                        lambda: safety.untrusted(web.browser_type(target, text, True), "web page"), _same_page(here))
+                        lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check)
     return _web(_run(web.browser_type, target, text, submit))
 
 
-@tool(repeatable=True)
+@tool(repeatable=True, lock=BROWSER)
 def browser_scroll(direction: str = "down") -> str:
     """Scroll the current auren tab down or up and read it again."""
     return _web(_run(web.browser_scroll, direction))
 
 
-@tool()
+@tool(lock=BROWSER)
 def browser_close(keep_current: bool = False) -> str:
     """Close the browser tabs auren opened (never the user's). keep_current=True leaves the last page open
     for the user to look at."""
@@ -548,7 +573,7 @@ def _same_screen() -> Callable[[], None]:
     return check
 
 
-@tool(repeatable=True)
+@tool(repeatable=True, lock=SCREEN)
 def look_at_screen() -> list:
     """See the focused monitor as an image. Use it when other tools can't reach something (a browser
     permission popup, an app's own dialog, an app with no command) or when the user asks you to look or
@@ -560,7 +585,7 @@ def look_at_screen() -> list:
     return [note, Image(data=data, format="jpeg")]
 
 
-@tool()
+@tool(lock=SCREEN)
 def click_at(x: int, y: int, target: str, button: str = "left", double: bool = False) -> str:
     """Click at pixel (x, y) of the latest look_at_screen image. target: what you are clicking, in words
     (for example "Allow on Chrome's download popup"). Look again afterwards to check it worked. Clicks
@@ -571,7 +596,7 @@ def click_at(x: int, y: int, target: str, button: str = "left", double: bool = F
     return _run(screen.click, x, y, button, double)
 
 
-@tool()
+@tool(lock=SCREEN)
 def drag_at(x1: int, y1: int, x2: int, y2: int, target: str, hold: str = "") -> str:
     """Press the mouse at pixel (x1, y1) of the latest look_at_screen image, move to (x2, y2) and release:
     draw a shape (pick the tool first, then drag from one corner of the shape to the opposite one), move a
@@ -583,28 +608,28 @@ def drag_at(x1: int, y1: int, x2: int, y2: int, target: str, hold: str = "") -> 
     return _run(screen.drag, x1, y1, x2, y2, hold)
 
 
-@tool()
+@tool(lock=SCREEN)
 def scroll_at(x: int, y: int, direction: str = "down", amount: int = 3) -> str:
     """Scroll the mouse wheel at pixel (x, y) of the latest look_at_screen image."""
     return _run(screen.scroll, x, y, direction, amount)
 
 
-@tool()
+@tool(lock=SCREEN)
 def type_text(text: str) -> str:
     """Type text into whatever has keyboard focus (click the field first)."""
     return _run(screen.type_text, text)
 
 
-@tool()
+@tool(lock=SCREEN)
 def press_keys(keys: str) -> str:
     """Press a key or shortcut in the focused window: 'Enter', 'Escape', 'Tab', 'ctrl+s', 'ctrl+t'...
     Shortcuts that close windows or quit apps need confirmation."""
     if keys.strip().lower().replace(" ", "") in RISKY_KEYS:
-        window = screen.active_window()
+        window = screen.key_target()        # where the keys will go (the window auren last clicked, if recent)
 
         def check() -> None:
-            if screen.active_window() != window:
-                raise PermissionError("a different window is in front now: ask the user again")
+            if screen.key_target() != window:
+                raise PermissionError("the keys would go to a different window now: ask the user again")
         return _ask(f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
     return _run(screen.press_keys, keys)
 
@@ -619,6 +644,12 @@ def confirm_action(token: str) -> str:
     c = _call.get()
     try:
         p = c.runtime.confirmations.redeem(c.session, token, c.runtime._session(c.session).turn)
-    except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
+    except PermissionError as e:
         return f"error: {e}"
-    return _run(p.run)
+    with p.lock or contextlib.nullcontext():
+        try:
+            if p.check:
+                p.check()
+        except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
+            return f"error: {e}"
+        return _run(p.run)

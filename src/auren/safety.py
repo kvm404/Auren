@@ -69,6 +69,7 @@ class Pending:
     check: Callable[[], None] | None          # raises if the target changed since the question
     turn: int
     at: float
+    lock: Any = None                          # held while checking and running (the browser's or the screen's)
 
 
 class Confirmations:
@@ -87,10 +88,10 @@ class Confirmations:
             return dict(mine)
 
     def request(self, session: str, turn: int, question: str, run: Callable[[], Any],
-                check: Callable[[], None] | None = None) -> dict:
+                check: Callable[[], None] | None = None, lock: Any = None) -> dict:
         token = secrets.token_hex(3)
         with self._lock:
-            self._pending.setdefault(session, {})[token] = Pending(question, run, check, turn, time.time())
+            self._pending.setdefault(session, {})[token] = Pending(question, run, check, turn, time.time(), lock)
         return {"status": "needs_confirmation", "token": token, "ask_user": question,
                 "note": "Ask the user this question and stop. Only if they say yes in their next message, "
                         f"call confirm_action with token {token}."}
@@ -103,16 +104,17 @@ class Confirmations:
         return max(self.pending(session).values(), key=lambda p: p.at, default=None)
 
     def redeem(self, session: str, token: str, turn: int) -> Pending:
-        """The approved action, after checking the user answered and its target is unchanged."""
-        p = self.pending(session).get(token)           # expired tokens are already dropped
-        if p is None:
-            raise PermissionError("unknown, expired or already used confirmation token; ask the user again")
-        if turn <= p.turn:
-            raise PermissionError("the user hasn't answered yet: ask them and wait for their reply")
+        """Take the approved action, once: the token is used up here, so two calls can't both get it.
+        The caller then runs `check` (is the target unchanged?) and `run`, holding `lock`."""
         with self._lock:
-            self._pending.get(session, {}).pop(token, None)
-        if p.check:
-            p.check()
+            mine = self._pending.get(session, {})
+            p = mine.get(token)
+            if p is None or time.time() - p.at >= TOKEN_TTL:
+                mine.pop(token, None)
+                raise PermissionError("unknown, expired or already used confirmation token; ask the user again")
+            if turn <= p.turn:
+                raise PermissionError("the user hasn't answered yet: ask them and wait for their reply")
+            del mine[token]
         return p
 
 

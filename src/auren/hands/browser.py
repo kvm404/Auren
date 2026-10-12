@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -185,6 +186,29 @@ _READ_JS = r"""
 """.replace("__MAX__", str(MAX_TEXT))
 
 
+# Which element a target names: "pin:<id>" (pinned by a confirmation), an item number from the last read,
+# or words from its label. Clicking, label_of and pin all use this, so they agree on the element.
+_FIND_JS = r"""
+const find = (target) => {
+  if (target.startsWith('pin:')) return document.querySelector(`[data-auren-pin="${target.slice(4)}"]`);
+  let el = /^\d+$/.test(target) ? document.querySelector(`[data-auren-id="${target}"]`) : null;
+  if (!el) {
+    const want = target.toLowerCase().trim();
+    const all = [...document.querySelectorAll('[data-auren-id]')];
+    const lab = e => (e.getAttribute('data-auren-label') || '').toLowerCase();
+    const words = want.split(/[^a-z0-9]+/).filter(Boolean);
+    el = all.find(e => lab(e) === want) || all.find(e => lab(e).includes(want))
+      || all.find(e => words.every(w => lab(e).split(/[^a-z0-9]+/).includes(w)));
+  }
+  return el || null;
+};
+// fields only by pin or number
+const field = (target) => target.startsWith('pin:')
+  ? document.querySelector(`[data-auren-pin="${target.slice(4)}"]`)
+  : document.querySelector(`[data-auren-id="${target}"]`);
+"""
+
+
 def _wait_ready(browser: str, tab: int, timeout: float = 15) -> None:
     end = time.time() + timeout
     time.sleep(0.6)
@@ -259,17 +283,9 @@ def browser_click(target: str, tab: int | None = None, expect_download: bool = F
     b, t = _current(), _tab(tab)
     _front(b, t)
     before = _download_snapshot(b) if expect_download else None
-    js = """
+    js = _FIND_JS + """
     ((target) => {
-      let el = /^\\d+$/.test(target) ? document.querySelector(`[data-auren-id="${target}"]`) : null;
-      if (!el) {
-        const want = target.toLowerCase().trim();
-        const all = [...document.querySelectorAll('[data-auren-id]')];
-        const lab = e => (e.getAttribute('data-auren-label') || '').toLowerCase();
-        const words = want.split(/[^a-z0-9]+/).filter(Boolean);
-        el = all.find(e => lab(e) === want) || all.find(e => lab(e).includes(want))
-          || all.find(e => words.every(w => lab(e).split(/[^a-z0-9]+/).includes(w)));
-      }
+      const el = find(target);
       if (!el) return {ok: false};
       el.scrollIntoView({block: 'center'});
       if (el.tagName === 'A' && el.target === '_blank' && el.href && !el.hasAttribute('download')) {
@@ -300,11 +316,18 @@ RISKY_CLICK = re.compile(r"\b(buy|pay|purchase|place order|order now|checkout|ch
 def label_of(target: str, tab: int | None = None) -> str | None:
     """The label of the item `target` would click, without clicking (for the safety check)."""
     b, t = _current(), _tab(tab)
-    js = """((target) => { const all = [...document.querySelectorAll('[data-auren-id]')];
-      const lab = e => (e.getAttribute('data-auren-label') || '');
-      if (/^\\d+$/.test(target)) { const e = document.querySelector(`[data-auren-id="${target}"]`); return e ? lab(e) : null; }
-      const want = target.toLowerCase(); const e = all.find(e => lab(e).toLowerCase().includes(want));
-      return e ? lab(e) : null; })(%s)""" % json.dumps(str(target))
+    js = _FIND_JS + """((target) => { const e = find(target);
+      return e ? (e.getAttribute('data-auren-label') || '') : null; })(%s)""" % json.dumps(str(target))
+    return _eval(b, t, js)
+
+
+def pin(target: str, is_field: bool = False, tab: int | None = None) -> str | None:
+    """Mark the element `target` names, so a confirmed action reaches that same element even if the page
+    is read again (which renumbers items) or changes around it. Returns "pin:<id>", or None if it's gone."""
+    b, t = _current(), _tab(tab)
+    js = _FIND_JS + """((target, nonce, isField) => { const e = isField ? field(target) : find(target);
+      if (!e) return null; e.setAttribute('data-auren-pin', nonce); return 'pin:' + nonce; })(%s, %s, %s)""" % (
+        json.dumps(str(target)), json.dumps(secrets.token_hex(6)), "true" if is_field else "false")
     return _eval(b, t, js)
 
 
@@ -318,7 +341,7 @@ def field_of(target: str, tab: int | None = None) -> dict | None:
     """A numbered field from the last read: its label and whether it's a search box (pressing Enter in a
     search box only searches; in other fields it can send or post)."""
     b, t = _current(), _tab(tab)
-    js = """((target) => { const el = document.querySelector(`[data-auren-id="${target}"]`);
+    js = _FIND_JS + """((target) => { const el = field(target);
       if (!el) return null;
       const words = [el.type, el.name, el.id, el.getAttribute('role'), el.getAttribute('aria-label'),
         el.getAttribute('placeholder'), el.form && el.form.getAttribute('role'), el.form && el.form.action]
@@ -330,9 +353,9 @@ def field_of(target: str, tab: int | None = None) -> dict | None:
 
 def browser_type(target: str, text: str, submit: bool = False, tab: int | None = None) -> str:
     b, t = _current(), _tab(tab)
-    js = """
+    js = _FIND_JS + """
     ((target, text, submit) => {
-      const el = document.querySelector(`[data-auren-id="${target}"]`);
+      const el = field(target);
       if (!el) return false;
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
