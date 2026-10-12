@@ -153,13 +153,20 @@ def _active_window() -> str:
         return ""
 
 
+def key_target() -> str:
+    """The window typed text and pressed keys go to: the one auren last clicked (in the last two minutes),
+    else the focused one."""
+    if _clicked and time.time() - _clicked["at"] <= 120 and _clicked["address"]:
+        return _clicked["address"]
+    return _active_window()
+
+
 def _refocus() -> None:
     """Type into the window auren last clicked, even if the focus moved since (the user's mouse moved,
     focus follows it)."""
-    if not _clicked or time.time() - _clicked["at"] > 120 or not _clicked["address"]:
-        return
-    if _active_window() != _clicked["address"]:
-        _sh(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{_clicked["address"]}" }})'])
+    target = key_target()
+    if target and _active_window() != target:
+        _sh(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{target}" }})'])
         time.sleep(0.1)
 
 
