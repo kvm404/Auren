@@ -125,6 +125,8 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 - **Its profile** (bookmarks, download folder): `browser.profile`, or the last one used, from the browser's `Local State`.
 - **Its Open Browser Use host:** the default socket folder `/tmp/open-browser-use`, unless `browser.sockets` names another for that browser. People who run one host per browser set it, for example `sockets = { chrome = "/tmp/open-browser-use-chrome" }`; a bare `obu` command goes to the default one, which is why it once "got confused about which browser".
 
+Open Browser Use can't pick a browser by name (its `--browser` knows only Chrome, Chrome Beta and BitBrowser), so with two browsers connected to the same socket folder Auren can't tell which one answers. Give each its own folder with `browser.sockets`.
+
 Without Open Browser Use (or with `integrations.browser = false`) the browser tools are left out and the brain is told it can only show pages.
 
 | Tool | What it does |

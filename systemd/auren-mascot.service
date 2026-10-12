@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
+@ENV@
 ExecStart=@QS@ -n -p @SHARE@/mascot
 Restart=on-failure
 RestartSec=3
