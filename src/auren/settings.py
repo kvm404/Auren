@@ -355,13 +355,24 @@ def _update(doc: tomlkit.TOMLDocument, values: dict) -> None:
             target[name] = _item(value)
 
 
+def _parse(raw: str) -> Any:
+    """A table or list written as in config.toml: { chrome = "/tmp/x" }, ["~/work", "~/src"]. Plain text
+    (one folder) is kept as it is."""
+    if not raw.strip().startswith(("{", "[")):
+        return raw
+    try:
+        return tomlkit.parse(f"value = {raw}")["value"].unwrap()
+    except tomlkit.exceptions.TOMLKitError as e:
+        raise ValueError(f"written as in config.toml ({e})") from None
+
+
 def set_value(path: str, raw: str) -> Any:
     """Check and save one setting given as text; returns the value saved. Raises ValueError."""
     k = BY_PATH.get(path)
     if k is None:
         raise ValueError(f"unknown setting {path} (see: auren config)")
     try:
-        value = k.check(raw)
+        value = k.check(_parse(raw) if isinstance(k.default, (dict, list)) else raw)
     except ValueError as e:
         raise ValueError(f"{path} should be {e}") from None
     if not save({k.flat: value}):
