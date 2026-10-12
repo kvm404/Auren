@@ -21,15 +21,17 @@ import qs.Ui
 //
 // It reads $XDG_RUNTIME_DIR/auren/state.json (written by the daemon, including the voice settings) and
 // ~/.config/auren/mascot.json (the mascot's preferences, which it also writes), and talks to the daemon
-// through bin/auren-ctl; the services are started and stopped with systemctl --user.
+// through ~/.local/share/auren/bin/auren-ctl; the services are started and stopped with systemctl --user.
 Panel {
   id: root
   moduleName: "krvm.auren"
   ipcTarget: "krvm.auren"
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string aurenDir: String(setting("aurenDir", "~/Projects/auren")).replace(/^~/, home)
-  readonly property string ctl: aurenDir + "/bin/auren-ctl"
+  readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/auren"
+  readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/auren"
+  readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/auren"
+  readonly property string ctl: dataDir + "/bin/auren-ctl"
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") + "/auren"
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -46,7 +48,7 @@ Panel {
   readonly property var mascot: mascots[["clawd", "veyra", "auren"].indexOf(kind)]
   readonly property color accent: mascot.color
   function mascotFile(k) {
-    return "file://" + aurenDir + "/mascot/mascots/" + k + "/" + k.charAt(0).toUpperCase() + k.slice(1) + ".qml"
+    return "file://" + dataDir + "/mascot/mascots/" + k + "/" + k.charAt(0).toUpperCase() + k.slice(1) + ".qml"
   }
 
   // ---- auren's state ------------------------------------------------------------------------
@@ -119,7 +121,7 @@ Panel {
   // the mascot's preferences (shared with mascot/shell.qml, which reloads them on change)
   FileView {
     id: mascotPrefsFile
-    path: root.home + "/.config/auren/mascot.json"
+    path: root.configDir + "/mascot.json"
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -139,7 +141,7 @@ Panel {
   // the mascot's place and size (written by the mascot; changed through its IPC)
   FileView {
     id: placeFile
-    path: root.home + "/.local/state/auren/mascot.json"
+    path: root.stateDir + "/mascot.json"
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -157,7 +159,7 @@ Panel {
   property int todayCodex: 0
   Process {
     id: historyProc
-    command: ["tail", "-n", "300", root.home + "/.local/state/auren/history.jsonl"]
+    command: ["tail", "-n", "300", root.stateDir + "/history.jsonl"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -192,7 +194,7 @@ Panel {
     afterAction.restart()
   }
   function mascotIpc(args) {
-    Quickshell.execDetached(["qs", "-p", root.aurenDir + "/mascot", "ipc", "call", "mascot"].concat(args))
+    Quickshell.execDetached(["qs", "-p", root.dataDir + "/mascot", "ipc", "call", "mascot"].concat(args))
   }
   function toggleAuren() { systemctl(root.daemonActive || root.daemonAlive ? "stop" : "start", "auren") }
   function toggleVoice() { ctlRun(["voice", root.voiceOn ? "off" : "on"]) }
@@ -205,7 +207,7 @@ Panel {
   function stopTalking() { ctlRun(["cancel"]) }
   function restartAuren() { systemctl("restart", "auren") }
   function openLog() {
-    Quickshell.execDetached(["omarchy-launch-or-focus-tui", "less +G " + root.home + "/.local/state/auren/daemon.log"])
+    Quickshell.execDetached(["omarchy-launch-or-focus-tui", "less +G " + root.stateDir + "/daemon.log"])
     root.close()
   }
   function togglePref(name) { mascotPrefs[name] = !mascotPrefs[name]; savePrefs() }

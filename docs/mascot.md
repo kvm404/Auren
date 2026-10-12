@@ -7,7 +7,7 @@ Mascot page, or set `mascot` in `~/.config/auren/mascot.json`; it switches live.
 | | |
 |---|---|
 | Code | `mascot/shell.qml` (windows, input, bubble), `mascot/mascots/<name>/` (the characters), `mascot/mascots/common/` (what they share) |
-| Runs as | `auren-mascot.service`, a systemd user service: `qs -n -p ~/Projects/auren/mascot` |
+| Runs as | `auren-mascot.service`, a systemd user service: `qs -n -p ~/.local/share/auren/mascot` |
 | Reads | `$XDG_RUNTIME_DIR/auren/state.json` (state, live transcript, activity, caption, yes/no question), `$XDG_RUNTIME_DIR/auren/level` (mic or voice loudness, ~20/s) |
 | Remembers | `~/.local/state/auren/mascot.json` (place, size, hidden) |
 | Preferences | `~/.config/auren/mascot.json` (optional): `mascot` clawd, `idleOpacity` 0.45, `fadeAfter` 12 s, `sleepAfter` 240 s, `bubble` true, `sleepAnimation` true, `matchVoice` true (read by the bar panel) |
@@ -59,7 +59,7 @@ After a reply it smiles (^ ^, blush).
 Remote control (for the bar plugin):
 
 ```bash
-qs -p ~/Projects/auren/mascot ipc call mascot toggle   # show, hide, poke, reset, state, size 1.2
+qs -p ~/.local/share/auren/mascot ipc call mascot toggle   # show, hide, poke, reset, state, size 1.2
 systemctl --user restart auren-mascot
 ```
 

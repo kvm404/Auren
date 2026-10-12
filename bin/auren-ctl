@@ -1,6 +1,8 @@
 #!/bin/sh
-# Send one command to the auren daemon: start | stop | cancel | status | ask <text> | say <text> | quit
-# (used by the Super+A key binding: start on press, stop on release)
-sock="${XDG_RUNTIME_DIR:-/tmp}/auren/auren.sock"
-[ -S "$sock" ] || { echo "auren daemon isn't running" >&2; exit 1; }
-printf '%s\n' "$*" | socat -t 30 - UNIX-CONNECT:"$sock"
+# For key bindings made before Auren was installed to ~/.local/share/auren: runs the installed
+# auren-ctl (or the checkout's own environment).
+for ctl in "${XDG_DATA_HOME:-$HOME/.local/share}/auren/bin/auren-ctl" "$(dirname "$0")/../.venv/bin/auren-ctl"; do
+  [ -x "$ctl" ] && exec "$ctl" "$@"
+done
+echo "auren-ctl isn't installed: run ./install.sh" >&2
+exit 1

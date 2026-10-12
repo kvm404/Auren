@@ -43,7 +43,7 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
    $XDG_RUNTIME_DIR/auren/state.json + level ─► mascot (Quickshell) · bar plugin (Omarchy shell)
 ```
 
-- `auren daemon` is a systemd user service. It listens on a Unix socket; `bin/auren-ctl` sends it
+- `auren daemon` is a systemd user service. It listens on a Unix socket; `auren-ctl` sends it
   commands such as `talk`, `talk-fresh`, `cancel`, `voice off` and `brain codex`.
 - The brain gets a live snapshot with every request (time, windows, herdr agents) plus a cached
   profile of the laptop: apps, key bindings, aliases, projects and Omarchy commands.
@@ -53,7 +53,7 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 ## Requirements
 
 - Omarchy (Hyprland, Wayland), PipeWire. Developed on an i3 with 8 GB RAM, so everything is light.
-- `uv`, `quickshell` (`qs`), `socat`, `wtype`, `grim`, and write access to `/dev/uinput` for screen
+- `uv`, `quickshell` (`qs`), `wtype`, `grim`, and write access to `/dev/uinput` for screen
   control.
 - Claude Code (`claude`, logged in) for the brain; Codex (`codex`) for the backup brain.
 - Optional: `herdr` for coding agents, Open Browser Use (`obu` plus its browser extension) for the
@@ -63,17 +63,21 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 ## Install
 
 ```bash
-git clone https://github.com/kvm404/Auren.git ~/Projects/auren
-cd ~/Projects/auren
-./install.sh --check     # what's missing
-./install.sh             # Python env, services, bar plugin, secrets file
+git clone https://github.com/kvm404/Auren.git auren
+cd auren
+./install.sh             # into ~/.local/share/auren: Python env, voice model, services, bar plugin
 ```
 
-Then:
+It ends with `auren doctor`, which checks everything Auren needs and says how to fix what's missing
+(run it again any time). Then:
 
 1. Put your key in `~/.config/auren/secrets.env` (`ASSEMBLYAI_API_KEY=…`).
 2. Add the two key bindings and the layer rule that `install.sh` prints to your Hyprland config.
 3. Restart the services: `systemctl --user restart auren auren-mascot`.
+
+The install is a copy, so the checkout can move. To update: `git pull && ./install.sh`. To work on
+Auren, use `./install.sh --dev` instead, which links the install to the checkout (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Using it
 
@@ -84,8 +88,9 @@ Then:
 | Click the mascot | Talk (same as Super+A); while it speaks, stop it |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open the panel (Home, Mascot, Voice, Brain); right-click for a fresh conversation |
+| `auren doctor` | What works on this machine and how to fix what doesn't |
 | `auren chat` | Type requests in a terminal and see the tool calls |
-| `bin/auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `language en\|hi`, `forget`, `quit` |
+| `auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `language en\|hi`, `forget`, `quit` |
 
 Files:
 
@@ -96,6 +101,7 @@ Files:
 | `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (clawd, veyra, auren), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |
+| `~/.local/share/auren/` | The installed program and the voice model |
 
 ## Project layout
 
@@ -104,8 +110,8 @@ src/auren/         daemon, ears, voice, brain/, hands/, server (MCP tools), safe
 mascot/            the floating mascot (Quickshell); mascots/{clawd,veyra,auren}/ are the characters,
                    mascots/common/ what they share, gallery.qml shows them all
 omarchy-plugin/    the bar plugin (krvm.auren)
-systemd/           unit templates (install.sh fills in the path)
-bin/auren-ctl      send a command to the daemon
+systemd/           unit templates (install.sh fills in the paths)
+bin/auren-ctl      runs the installed auren-ctl (for key bindings that point into the checkout)
 docs/              how each piece works, decisions, research
 experiments/       the TTS, STT and brain comparisons behind the decisions
 tests/             uv run pytest

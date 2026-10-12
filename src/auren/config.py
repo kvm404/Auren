@@ -1,6 +1,14 @@
 """Paths and secrets.
 
-Secrets are read from the environment, then ~/.config/auren/secrets.env (chmod 600),
+Every path Auren uses comes from here, following the XDG base directories:
+
+    CONFIG_DIR   ~/.config/auren          config, secrets, routines, the user's own vocabulary
+    STATE_DIR    ~/.local/state/auren     history, log, herdr jobs, confirmations
+    CACHE_DIR    ~/.cache/auren           the machine profile
+    DATA_HOME    ~/.local/share/auren     the installed program: venv, UI files, auren-ctl, voice model
+    RUNTIME_DIR  $XDG_RUNTIME_DIR/auren   socket, state file, loudness level
+
+Secrets are read from the environment, then CONFIG_DIR/secrets.env (chmod 600),
 then the keyring (`secret-tool lookup auren <name>`). They are never logged.
 """
 
@@ -11,13 +19,37 @@ import subprocess
 from pathlib import Path
 
 HOME = Path.home()
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "auren"
-STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "auren"
-RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "auren"
+
+
+def _xdg(var: str, default: Path) -> Path:
+    value = os.environ.get(var, "")
+    return Path(value) if value.startswith("/") else default     # the spec says to ignore relative paths
+
+
+def _runtime_base() -> Path:
+    """$XDG_RUNTIME_DIR, or a private folder in /tmp when the session doesn't set it."""
+    value = os.environ.get("XDG_RUNTIME_DIR", "")
+    if value.startswith("/"):
+        return Path(value)
+    fallback = Path(f"/tmp/auren-runtime-{os.getuid()}")
+    fallback.mkdir(mode=0o700, exist_ok=True)
+    return fallback
+
+
+CONFIG_DIR = _xdg("XDG_CONFIG_HOME", HOME / ".config") / "auren"
+STATE_DIR = _xdg("XDG_STATE_HOME", HOME / ".local/state") / "auren"
+CACHE_DIR = _xdg("XDG_CACHE_HOME", HOME / ".cache") / "auren"
+DATA_HOME = _xdg("XDG_DATA_HOME", HOME / ".local/share") / "auren"
+RUNTIME_DIR = _runtime_base() / "auren"
+
 SOCKET = RUNTIME_DIR / "auren.sock"
+LOCK = RUNTIME_DIR / "daemon.lock"           # held by the running daemon: only one at a time
 STATE_FILE = RUNTIME_DIR / "state.json"      # current state, for the mascot and the bar plugin
+BRAIN_DIR = RUNTIME_DIR / "brain"            # the brain's working folder: outside $HOME on purpose
 SECRETS = CONFIG_DIR / "secrets.env"
 SETTINGS = CONFIG_DIR / "settings.json"     # voice on/off and brain mode, changed from the bar plugin
+ROUTINES_DIR = CONFIG_DIR / "routines"
+MODELS_DIR = DATA_HOME / "models"
 DATA = Path(__file__).parent / "data"
 
 

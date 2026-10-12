@@ -1,7 +1,7 @@
 // A gallery of every mascot in every mood, for drawing and checking mascots.
 //
-//   qs -p ~/Projects/auren/mascot/gallery.qml                        # on screen (right-click a mascot to poke it)
-//   GALLERY_OUT=/tmp/g.png qs -p ~/Projects/auren/mascot/gallery.qml # save a PNG and quit
+//   qs -p mascot/gallery.qml                        # on screen (right-click a mascot to poke it)
+//   GALLERY_OUT=/tmp/g.png qs -p mascot/gallery.qml # save a PNG and quit
 //   GALLERY_BG=#f4f1ea ...                                            # try a light background
 //   GALLERY_U=10 GALLERY_ONLY=idle,speaking ...                       # bigger, only some moods
 import QtQuick

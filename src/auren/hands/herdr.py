@@ -25,10 +25,11 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..config import STATE_DIR
 from . import desktop
 
 WORKSPACE_LABEL = "auren"
-STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "auren" / "herdr-jobs.json"
+STATE = STATE_DIR / "herdr-jobs.json"
 
 # Spoken names -> herdr agent kinds (`herdr agent start --kind`).
 KINDS = {

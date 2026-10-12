@@ -26,6 +26,7 @@ Omarchy OSD shows short messages instead. Every exchange is logged to
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ import time
 
 from .brain import Brain, BrainError
 from .brain.prompt import LANGUAGES
-from .config import RUNTIME_DIR, SETTINGS, SOCKET, STATE_DIR, STATE_FILE
+from .config import LOCK, RUNTIME_DIR, SETTINGS, SOCKET, STATE_DIR, STATE_FILE
 from .ears import Listening, vocabulary
 from .live import Level, describe
 from .profile import Profile
@@ -154,18 +155,29 @@ class Daemon:
     # --- warm-up ------------------------------------------------------------------------
 
     async def warm_up(self) -> None:
+        """Load the voice and start the brain. Neither failing stops the daemon: without the voice,
+        replies show in the mascot's bubble; a brain that didn't start is retried on the first request."""
         t = time.perf_counter()
+        problems = []
         if self.speak_enabled:
-            from .voice import Voice
-            self.voice = await asyncio.to_thread(Voice, on_level=self.level.set, on_sentence=self._caption)
-            self.voice.tune(self.settings)
             try:
-                self.voice.set_voice(self.settings["voiceName"])
-            except ValueError as e:
-                log.warning("%s", e)
-        await asyncio.to_thread(self.brain.primary.start)
+                from .voice import Voice
+                self.voice = await asyncio.to_thread(Voice, on_level=self.level.set, on_sentence=self._caption)
+                self.voice.tune(self.settings)
+                try:
+                    self.voice.set_voice(self.settings["voiceName"])
+                except ValueError as e:
+                    log.warning("%s", e)
+            except Exception as e:  # noqa: BLE001 - run text-only rather than not at all
+                log.error("voice didn't load, replies are text only: %s", e)
+                problems.append(f"voice off ({str(e)[:80]})")
+        try:
+            await asyncio.to_thread(self.brain.primary.start)
+        except Exception as e:  # noqa: BLE001
+            log.error("brain didn't start: %s", e)
+            problems.append(f"brain didn't start ({str(e)[:80]})")
         log.info("ready in %.1fs (vocabulary %d terms)", time.perf_counter() - t, len(self.vocab))
-        self.set_state("idle")
+        self.set_state("idle", "; ".join(problems))
 
     # --- commands -----------------------------------------------------------------------
 
@@ -433,8 +445,7 @@ class Daemon:
 
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
-        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        if SOCKET.exists():
+        if SOCKET.exists():                   # left over from a crash: we hold the lock, so it isn't in use
             SOCKET.unlink()
 
         async def client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -457,10 +468,29 @@ class Daemon:
             await server.serve_forever()
 
 
-def main(speak: bool = True) -> None:
+def take_lock():
+    """Only one daemon at a time: hold an exclusive lock for as long as this process runs."""
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    f = open(LOCK, "a+")  # noqa: SIM115 - kept open on purpose: closing it releases the lock. "a+": don't wipe the holder's pid
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        return None
+    f.truncate(0)
+    f.write(str(os.getpid()))
+    f.flush()
+    return f
+
+
+def main(speak: bool = True) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S",
                         handlers=[logging.StreamHandler(), logging.FileHandler(STATE_DIR / "daemon.log")])
+    lock = take_lock()
+    if lock is None:
+        log.error("another auren daemon is already running (%s)", LOCK)
+        return 0                              # not a failure: systemd shouldn't keep restarting it
     d = Daemon(speak=speak)
     try:
         asyncio.run(d.serve())
@@ -474,3 +504,5 @@ def main(speak: bool = True) -> None:
         d.brain.stop()
         if SOCKET.exists():
             SOCKET.unlink()
+        lock.close()
+    return 0

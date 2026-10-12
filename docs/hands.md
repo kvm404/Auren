@@ -96,7 +96,6 @@ Tested live (2026-10-10):
 ## Connected to the brain
 
 ```bash
-cd ~/Projects/auren
 uv run auren chat                      # type requests; see tool calls and the spoken reply
 uv run auren ask "open whatsapp on workspace 2"
 ```

@@ -1,6 +1,9 @@
-"""auren on the command line (before the voice daemon exists).
+"""auren on the command line.
 
-  auren chat                  # type requests, see tool calls and the spoken reply
+  auren daemon                # the voice daemon (the auren systemd service runs this)
+  auren doctor                # what works on this machine, and how to fix what doesn't
+  auren voice-model           # download the voice model (install.sh runs this)
+  auren chat                  # type requests, see tool calls and the reply
   auren ask "open whatsapp"   # one request
 """
 
@@ -46,6 +49,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="auren", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("chat")
+    sub.add_parser("doctor")
+    sub.add_parser("voice-model")
     dmn = sub.add_parser("daemon")
     dmn.add_argument("--quiet", action="store_true", help="no voice; replies shown on the OSD")
     ask = sub.add_parser("ask")
@@ -61,6 +66,17 @@ def main() -> None:
     if a.cmd == "daemon":
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
+    if a.cmd == "doctor":
+        from .doctor import main as doctor_main
+        return doctor_main()
+    if a.cmd == "voice-model":
+        from .voice import VoiceModelMissing, download_model
+        try:
+            print("voice model:", download_model())
+        except VoiceModelMissing as e:
+            print(f"{RED}{e}{END}")
+            return 1
+        return 0
     brain = CodexBrain() if a.backup else Brain(model=a.model, think=not a.no_think, effort=a.effort)
     if a.language != "en":
         if isinstance(brain, Brain):

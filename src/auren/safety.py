@@ -18,13 +18,13 @@ Command classification is deliberately simple and errs on the side of asking.
 from __future__ import annotations
 
 import json
-import os
 import re
 import secrets
 import time
 from pathlib import Path
 
-STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "auren"
+from .config import STATE_DIR
+
 TURN_FILE = STATE_DIR / "turn"
 TOKEN_TTL = 300   # seconds a confirmation stays valid
 

@@ -4,7 +4,7 @@
 
 | Part | What | Code |
 |---|---|---|
-| Keys | In `~/.config/hypr/bindings.lua`: Super+A runs `auren-ctl talk` (start listening; again: stop and send), Super+Shift+A runs `auren-ctl talk-fresh` (the same, but the brain restarts with an empty conversation while you speak; it replaced the user's ChatGPT desktop binding). The user chose press-to-start/press-to-stop over holding (2026-10-10). Listening stops by itself after 2 minutes (`MAX_LISTEN`), since the speech service bills per second | `bin/auren-ctl` (socat to the socket) |
+| Keys | In `~/.config/hypr/bindings.lua`: Super+A runs `auren-ctl talk` (start listening; again: stop and send), Super+Shift+A runs `auren-ctl talk-fresh` (the same, but the brain restarts with an empty conversation while you speak; it replaced the user's ChatGPT desktop binding). The user chose press-to-start/press-to-stop over holding (2026-10-10). Listening stops by itself after 2 minutes (`MAX_LISTEN`), since the speech service bills per second | `auren-ctl` (`src/auren/ctl.py`) |
 | Ears | AssemblyAI streaming, Universal-3.5 Pro, push-to-talk settings from decision 0002. The connection is open only while the key is held. The text is returned as soon as the final turn arrives after release (~0.3 s) | `src/auren/ears.py` |
 | Vocabulary | 100 terms: core names (herdr, Voisu, Codex, Claude Code, Omarchy…), then Chrome bookmark names (MLP, Tools in Data Science…), web apps, recent projects, apps | `ears.vocabulary()`, `src/auren/data/vocab.txt` |
 | Brain | `Brain`: Claude Haiku through Claude Code kept warm; Codex backup on a usage limit. One request at a time; later ones wait | `src/auren/brain/` |
@@ -43,14 +43,14 @@ The unit file is `systemd/auren.service`, linked into `~/.config/systemd/user/`.
 Control it from a terminal:
 
 ```bash
-bin/auren-ctl status
-bin/auren-ctl ask "what time is it"    # typed request, spoken reply
-bin/auren-ctl say "hello"
-bin/auren-ctl cancel                    # stop listening or speaking
-bin/auren-ctl forget                    # fresh conversation (same as saying "start fresh")
-bin/auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
-bin/auren-ctl language hi               # replies in Hindi (Devanagari), spoken in Hindi; language en to go back
-bin/auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
+auren-ctl status
+auren-ctl ask "what time is it"    # typed request, spoken reply
+auren-ctl say "hello"
+auren-ctl cancel                    # stop listening or speaking
+auren-ctl forget                    # fresh conversation (same as saying "start fresh")
+auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
+auren-ctl language hi               # replies in Hindi (Devanagari), spoken in Hindi; language en to go back
+auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
 ```
 
 ## Measured (2026-10-10)
