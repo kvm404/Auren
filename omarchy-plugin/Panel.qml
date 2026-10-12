@@ -310,6 +310,7 @@ Panel {
     afterAction.restart()
   }
   function systemctl(verb, unit) {
+    if (root.updating) return              // the update stops and starts Auren itself
     Quickshell.execDetached(["systemctl", "--user", verb, unit])
     afterAction.restart()
   }
@@ -421,10 +422,12 @@ Panel {
   // Rows of buttons, each { label, icon, tip, run, on?, enabled? }: drawn by a Repeater and driven by the
   // keyboard through the same list.
   readonly property var quickActions: [
-    { label: "On", icon: "󰐥", tip: "Auren on or off", on: root.daemonAlive || root.daemonActive, run: root.toggleAuren },
+    { label: "On", icon: "󰐥", tip: "Auren on or off", on: root.daemonAlive || root.daemonActive,
+      enabled: !root.updating, run: root.toggleAuren },
     { label: "Voice", icon: root.voiceOn ? "󰕾" : "󰖁", tip: "Spoken replies (off: only in the bubble)", on: root.voiceOn,
       enabled: root.daemonAlive, run: root.toggleVoice },
-    { label: "Mascot", icon: "󰏩", tip: "Show or hide the mascot (hidden frees ~100 MB)", on: root.mascotActive, run: root.toggleMascot },
+    { label: "Mascot", icon: "󰏩", tip: "Show or hide the mascot (hidden frees ~100 MB)", on: root.mascotActive,
+      enabled: !root.updating, run: root.toggleMascot },
     { label: "Fresh", icon: "󰑓", tip: "Start a fresh conversation", enabled: root.daemonAlive, run: root.startFresh },
     { label: "Stop", icon: "󰓛", tip: "Stop listening, thinking or talking", enabled: root.daemonAlive, run: root.stopTalking }
   ]
@@ -437,8 +440,9 @@ Panel {
     { label: "Defaults", icon: "󰦛", tip: "Speed 1.05, balanced, full volume, no pause", run: function() { root.ctlRun(["tts", "reset"]) } }
   ]
   readonly property var footerActions: [
-    { label: root.daemonAlive || root.daemonActive ? "Turn off" : "Turn on", icon: "󰐥", tip: "Start or stop Auren", run: root.toggleAuren },
-    { label: "Restart", icon: "󰜉", tip: "Restart Auren", run: root.restartAuren },
+    { label: root.daemonAlive || root.daemonActive ? "Turn off" : "Turn on", icon: "󰐥", tip: "Start or stop Auren",
+      enabled: !root.updating, run: root.toggleAuren },
+    { label: "Restart", icon: "󰜉", tip: "Restart Auren", enabled: !root.updating, run: root.restartAuren },
     { label: "Log", icon: "󰦪", tip: "Open Auren's log", run: root.openLog }
   ]
   function asOptions(list) {
@@ -458,6 +462,7 @@ Panel {
   function showPage(p) {
     page = Math.max(0, Math.min(pages.length - 1, p))
     confirmingUpdate = false
+    pagesBox.contentY = 0
     if (page === 4) checkIfStale()
   }
 
@@ -513,6 +518,10 @@ Panel {
     if (dy !== 0) {
       cursorRow = Math.max(0, Math.min(rows.length - 1, cursorRow + dy))
       cursorCol = Math.min(cursorCol, rows[cursorRow].n - 1)
+      // on a short screen, scroll along with the cursor (roughly: the first row at the top, the last at
+      // the bottom)
+      if (cursorRow < pageRows.length && pageRows.length > 1)
+        pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height) * cursorRow / (pageRows.length - 1)
       return
     }
     var r = rows[cursorRow]
@@ -583,7 +592,7 @@ Panel {
       Item {
         id: body
         anchors.fill: parent
-        implicitHeight: header.implicitHeight + Style.space(16) + Math.max(nav.implicitHeight, pagesBox.height)
+        implicitHeight: header.implicitHeight + Style.space(16) + Math.max(nav.implicitHeight, pagesBox.contentHeight)
                         + Style.space(16) + footer.implicitHeight
 
         // ================= header =================
@@ -654,21 +663,27 @@ Panel {
               foreground: root.fg
               fontFamily: root.font
               fontSize: Style.font.bodySmall
-              onClicked: root.showPage(index)
+              onClicked: { root.showPage(index); root.inNav = true; root.cursorRow = 0; root.cursorCol = 0 }
             }
           }
         }
 
-        Item {
+        Flickable {
           id: pagesBox
           anchors.top: header.bottom
           anchors.topMargin: Style.space(16)
           anchors.left: nav.right
           anchors.leftMargin: Style.space(20)
           anchors.right: parent.right
-          // as tall as the tallest page, so the panel keeps its size from page to page
-          height: Math.max(homePage.implicitHeight, mascotPage.implicitHeight, voicePage.implicitHeight,
-                           brainPage.implicitHeight, updatesPage.implicitHeight)
+          anchors.bottom: footer.top
+          anchors.bottomMargin: Style.space(16)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          contentWidth: width
+          // as tall as the tallest page, so the panel keeps its size from page to page; on a short screen
+          // the panel is capped and the page scrolls
+          contentHeight: Math.max(homePage.implicitHeight, mascotPage.implicitHeight, voicePage.implicitHeight,
+                                  brainPage.implicitHeight, updatesPage.implicitHeight)
 
           // ---------------- Home ----------------
           Column {

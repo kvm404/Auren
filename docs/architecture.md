@@ -65,11 +65,20 @@ The systemd units point at these paths, so the checkout can live anywhere.
 `auren update` (`src/auren/update.py`, and the panel's Updates page) installs the newest commit on `main`
 for now; releases will take its place (`CHANNEL`). It works from its own clone in `~/.cache/auren/source`,
 never a checkout you work in, except for a `--dev` install, whose checkout it fast-forwards when it's on
-a clean `main`. The update runs in a transient systemd unit (`systemd-run --user`), so stopping Auren or
-restarting the bar doesn't stop it: wait until Auren is idle, stop `auren` and `auren-mascot`, run the new
-`install.sh`, start them again as they were. A failed install puts the previous commit back and installs
-it. If `omarchy-plugin/` changed, `omarchy restart shell` loads the new panel. Progress goes to
-`$XDG_RUNTIME_DIR/auren/update.json`, the install's output to `~/.local/state/auren/update.log`.
+a clean `main`. The update runs in a transient systemd unit (`systemd-run --user`, given the session's
+PATH, XDG folders and git sign-in: SSH agent, `GH_TOKEN`), so stopping Auren or restarting the bar doesn't
+stop it: wait until Auren is idle, stop `auren` and `auren-mascot` (if they won't stop, nothing changes),
+run the new `install.sh` (with `AUREN_UPDATE=1`, so it leaves the services alone), then restart the ones
+that were running and leave the others stopped. The panel's power buttons wait while it runs.
+
+It never changes what it can't put back: before touching anything it makes sure the installed commit is
+in its clone (fetching it from the checkout it came from if GitHub doesn't have it), and a failed install
+(or one past 20 minutes, which stops everything it started) puts that commit back and installs it again;
+a `--dev` checkout goes back with `git reset --keep`. One check or update at a time (`update.lock`); a
+check doesn't replace the progress of a running update. If `omarchy-plugin/` changed, `omarchy restart
+shell` loads the new panel. Progress goes to `$XDG_RUNTIME_DIR/auren/update.json`, the install's output to
+`~/.local/state/auren/update.log`. `install.json` notes whether the checkout had uncommitted changes, and
+the panel says an update replaces them.
 
 ## Build order
 

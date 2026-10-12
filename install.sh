@@ -102,7 +102,9 @@ done
 [[ -z $env ]] || warn "custom XDG folders: the bar plugin uses your session's, so set them there too"
 systemctl --user daemon-reload
 for unit in auren auren-mascot; do
-  if systemctl --user is-active --quiet "$unit"; then
+  if [[ -n ${AUREN_UPDATE:-} ]]; then
+    :   # auren update stopped them, and starts them again as they were
+  elif systemctl --user is-active --quiet "$unit"; then
     systemctl --user enable "$unit" >/dev/null 2>&1
     warn "$unit is running the old version: systemctl --user restart $unit (when Auren is idle)"
   else
@@ -121,15 +123,20 @@ fi
 # ---- what's installed, for auren update ----------------------------------------------------------
 # Written last, so it only names an install that finished.
 if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+  dirty=false
+  [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]] || dirty=true
   "$share/venv/bin/python" - "$share/install.json" "$repo" "$mode" \
     "$(git -C "$repo" rev-parse HEAD)" "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" \
-    "$(git -C "$repo" log -1 --format=%ct)" "$(git -C "$repo" remote get-url origin 2>/dev/null || true)" <<'PY'
-import json, sys, time
+    "$(git -C "$repo" log -1 --format=%ct)" "$(git -C "$repo" remote get-url origin 2>/dev/null || true)" \
+    "$dirty" <<'PY'
+import json, os, sys, time
 from importlib.metadata import version
-path, source, mode, commit, branch, committed, remote = sys.argv[1:]
-with open(path, "w") as f:
+path, source, mode, commit, branch, committed, remote, dirty = sys.argv[1:]
+with open(path + ".tmp", "w") as f:
     json.dump({"version": version("auren"), "commit": commit, "branch": branch, "committed": int(committed),
-               "remote": remote, "source": source, "mode": mode, "installed_at": int(time.time())}, f)
+               "remote": remote, "source": source, "mode": mode, "dirty": dirty == "true",
+               "installed_at": int(time.time())}, f)
+os.replace(path + ".tmp", path)
 PY
 else
   rm -f "$share/install.json"

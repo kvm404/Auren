@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 // Preview stand-in: the popup's card drawn in place, without a layer-shell window or keyboard grab.
 Rectangle {
@@ -13,7 +14,9 @@ Rectangle {
   property int padding: Style.spacing.popupPadding
   default property alias contentItem: holder.children
   function fittedContentWidth(w) { return Math.round(w) }
-  function fittedContentHeight(h) { return Math.round(h + padding * 2) }
+  // PANEL_MAX_HEIGHT stands in for a short screen, as the real popup caps itself to the screen
+  readonly property int maxHeight: Number(Quickshell.env("PANEL_MAX_HEIGHT")) || 100000
+  function fittedContentHeight(h) { return Math.min(maxHeight, Math.round(h + padding * 2)) }
   parent: owner ? owner.parent : null
   x: 20; y: 20
   width: contentWidth + padding * 2

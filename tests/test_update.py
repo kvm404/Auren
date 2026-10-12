@@ -50,13 +50,16 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("INSTALL_INFO", str(info))
     calls, shell = [], []
     active = {"auren": True, "auren-mascot": False}
+    broken = set()                                     # actions that fail, like "stop"
 
     def systemctl(*args):
         calls.append(args)
         if args[0] == "is-active":
             return 0 if active[args[-1]] else 3
+        if args[0] in broken:
+            return 1
         for u in args[1:]:
-            active[u] = args[0] == "start"
+            active[u] = args[0] in ("start", "restart")
         return 0
     monkeypatch.setattr(update, "_systemctl", systemctl)
     monkeypatch.setattr(update, "_restart_shell", lambda: shell.append(True))
@@ -65,6 +68,7 @@ def env(tmp_path, monkeypatch):
         pass
     e = Env()
     e.remote, e.first, e.info, e.calls, e.active, e.shell, e.tmp = remote, first, info, calls, active, shell, tmp_path
+    e.broken = broken
     e.installs = lambda: (tmp_path / "installs").read_text().split() if (tmp_path / "installs").exists() else []
 
     def install_info(commit, mode="install", **more):
@@ -127,6 +131,7 @@ def test_update_installs_the_new_version_and_restarts_auren(env):
     assert env.installs() == [second] and json.loads(env.info.read_text())["commit"] == second
     assert ("stop", "auren", "auren-mascot") in env.calls
     assert env.active == {"auren": True, "auren-mascot": False}   # as they were
+    assert ("restart", "auren") in env.calls                       # new files: a fresh process
     assert env.shell == [True]                                     # the bar plugin changed
     assert update.check()["state"] == "current"
 
@@ -180,11 +185,65 @@ def test_a_dev_checkout_on_clean_main_is_fast_forwarded(env):
     assert git(checkout, "rev-parse", "HEAD") == second and env.installs() == [second]
 
 
-def test_only_one_update_at_a_time(env):
+def test_only_one_update_at_a_time(env, monkeypatch):
     env.install_info(env.first)
+    monkeypatch.setattr(update, "LOCK_WAIT", 0.2)
     with update._lock() as got:
         assert got
         assert update.run() == 1
+
+
+def test_a_check_doesnt_hide_an_update_in_progress(env):
+    env.install_info(env.first)
+    update._write(state="updating", step="Installing…", started_at=__import__("time").time())
+    assert update.check()["state"] == "updating"
+
+
+def test_auren_that_wont_stop_isnt_updated(env):
+    env.install_info(env.first)
+    commit(env.remote, "a.py")
+    env.broken.add("stop")
+    assert update.run() == 1
+    assert "Couldn't stop" in update.status()["message"] and env.installs() == []
+
+
+def test_a_failed_dev_update_goes_back(env):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    env.install_info(env.first, mode="dev", source=str(checkout))
+    commit(env.remote, "fail", subject="Broken")
+    assert update.run() == 1
+    assert git(checkout, "rev-parse", "HEAD") == env.first and not (checkout / "fail").exists()
+    assert env.first[:7] in update.status()["message"]
+
+
+def test_an_install_from_a_local_commit_can_still_go_back(env):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    local = commit(checkout, "mine.py", subject="Only here")      # never pushed
+    env.install_info(local, branch="mine", source=str(checkout))
+    commit(env.remote, "fail", subject="Broken")
+    assert update.run() == 1
+    assert env.installs()[-1] == local                             # fetched from the checkout and put back
+
+
+def test_an_install_that_cant_go_back_isnt_touched(env):
+    env.install_info("f" * 40, branch="gone", source=str(env.tmp / "nowhere"))
+    commit(env.remote, "a.py")
+    assert update.run() == 1
+    assert "couldn't go back" in update.status()["message"] and env.installs() == []
+    assert not any(c[0] == "stop" for c in env.calls)
+
+
+def test_start_runs_the_update_in_its_own_unit(env, monkeypatch):
+    env.install_info(env.first)
+    ran = []
+    monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: ran.append(cmd))
+    assert update.start()["state"] == "updating"
+    cmd = ran[0]
+    assert cmd[:2] == ["systemd-run", "--user"] and cmd[-2:] == ["update", "run"]
+    assert "--setenv=PATH" in cmd and not any("=" in a.split("--setenv=", 1)[-1] for a in cmd if "--setenv" in a)
+    assert update.start()["state"] == "updating" and len(ran) == 1   # already going: not twice
 
 
 def test_an_install_without_a_version_isnt_replaced(env):

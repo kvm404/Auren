@@ -56,6 +56,10 @@ ShellRoot {
         message: "install.sh failed (exit 3): see ~/.local/state/auren/update.log. Auren is back on 54ebe81." }
       if (kind === "cursor") { p.cursorActive = true; p.inNav = false; p.cursorRow = 1; p.cursorCol = 1 }
       if (kind === "nav") { p.cursorActive = true; p.inNav = true }
+      if (kind === "down") {      // the keyboard to the last row of the page: it scrolls on a short screen
+        p.cursorActive = true; p.inNav = false; p.cursorRow = 0; p.cursorCol = 0
+        for (var i = 0; i < p.pageRows.length - 1; i++) p.moveCursor(0, 1)
+      }
     }
     Timer {
       id: shotTimer

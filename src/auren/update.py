@@ -24,6 +24,7 @@ import contextlib
 import fcntl
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -44,8 +45,14 @@ LOCK = RUNTIME_DIR / "update.lock"
 UNITS = ("auren", "auren-mascot")
 BUSY = {"starting", "listening", "thinking", "working", "speaking"}
 IDLE_WAIT = 15 * 60                                # how long an update waits for Auren to be idle
+INSTALL_TIMEOUT = 20 * 60
+LOCK_WAIT = 5 * 60                                 # how long the update waits for a check to finish
+UPDATE_TIMEOUT = IDLE_WAIT + INSTALL_TIMEOUT * 2 + 10 * 60    # an "updating" status older than this is stale
+# The session's environment the update needs: the user manager's may lack PATH entries (uv), custom XDG
+# folders, and what git signs in with (gh, an SSH agent, tokens).
 PASS_ENV = ("PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
-            "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "HYPRLAND_INSTANCE_SIGNATURE")
+            "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "HYPRLAND_INSTANCE_SIGNATURE",
+            "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS")
 
 
 class UpdateError(Exception):
@@ -116,22 +123,27 @@ def _write(**fields) -> dict:
                           "mode": info.get("mode", ""), "version": info.get("version") or _version()},
             "channel": CHANNEL, "log": str(LOG), **fields}
     STATUS.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATUS.with_suffix(".tmp")
+    tmp = STATUS.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data))
     tmp.replace(STATUS)
     return data
 
 
 @contextlib.contextmanager
-def _lock():
-    """One check or update at a time. Yields False when another holds it."""
+def _lock(wait: float = 0):
+    """One check or update at a time. Yields False when another still holds it after `wait` seconds."""
     LOCK.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + wait
     with open(LOCK, "w") as f:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.5)
         yield True
 
 
@@ -166,6 +178,8 @@ def _fetch(info: dict) -> tuple[Path, bool, str]:
 
 def check(notify: bool = False) -> dict:
     """Look for a newer version; the result is also the panel's status."""
+    if _updating():
+        return status()                         # the update reports; a check would hide its progress
     with _lock() as got:
         if not got:
             return status()                     # an update (or another check) is running: it reports
@@ -188,6 +202,9 @@ def check(notify: bool = False) -> dict:
                                 checked_at=time.time(),
                                 note=f"Installed from {info.get('branch') or 'a commit'} that isn't on {CHANNEL}: "
                                      f"updating moves it to {CHANNEL}")
+            if info.get("dirty") and info.get("mode") != "dev":
+                note = "It was installed with uncommitted changes: updating replaces them."
+                result = _write(**{**result, "note": " ".join(filter(None, (result.get("note"), note)))})
         except UpdateError as e:
             return _write(state="error", message=str(e), checked_at=time.time())
     if notify:
@@ -214,19 +231,26 @@ def _notify_once(result: dict) -> None:
 
 def start() -> dict:
     """Start the update in its own transient systemd unit and return at once."""
+    if _updating():
+        return status()
     with _lock() as got:
         if not got:
-            return status()
-    env = [f"--setenv={k}" for k in PASS_ENV if k in os.environ]    # a name alone: the value from here
-    cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit=auren-update-{int(time.time())}",
-           "--description=Auren update", *env, sys.executable, "-m", "auren.cli", "update", "run"]
-    data = _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as e:
-        err = getattr(e, "stderr", "") or str(e)
-        return _write(state="failed", message="Couldn't start the update: " + err.strip()[-300:], **_kept())
-    return data
+            return status()                     # a check is running: try again in a moment
+        data = _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
+        env = [f"--setenv={k}" for k in PASS_ENV if k in os.environ]    # a name alone: the value from here
+        cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit=auren-update-{os.getpid()}-{int(time.time())}",
+               "--description=Auren update", *env, sys.executable, "-m", "auren.cli", "update", "run"]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            err = getattr(e, "stderr", "") or str(e)
+            return _write(state="failed", message="Couldn't start the update: " + err.strip()[-300:], **_kept())
+    return data                                 # the unit waits for the lock this held
+
+
+def _updating() -> bool:
+    s = status()
+    return s.get("state") == "updating" and time.time() - s.get("started_at", 0) < UPDATE_TIMEOUT
 
 
 def _kept() -> dict:
@@ -266,15 +290,20 @@ def _wait_idle() -> None:
 
 
 def _install(repo: Path, dev: bool) -> None:
+    """Run install.sh, in its own process group so a timeout stops everything it started (uv, downloads)."""
     _log(f"install.sh{' --dev' if dev else ''} from {repo}")
     with LOG.open("a") as out:
+        p = subprocess.Popen(["bash", str(repo / "install.sh"), *(["--dev"] if dev else [])], cwd=repo,
+                             env={**os.environ, "AUREN_UPDATE": "1"}, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         try:
-            r = subprocess.run(["bash", str(repo / "install.sh"), *(["--dev"] if dev else [])], cwd=repo,
-                               stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, timeout=20 * 60)
+            code = p.wait(timeout=INSTALL_TIMEOUT)
         except subprocess.TimeoutExpired as e:
-            raise UpdateError("the install took more than 20 minutes") from e
-    if r.returncode:
-        raise UpdateError(f"install.sh failed (exit {r.returncode}): see {LOG}")
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+            raise UpdateError(f"the install took more than {INSTALL_TIMEOUT // 60} minutes") from e
+    if code:
+        raise UpdateError(f"install.sh failed (exit {code}): see {LOG}")
 
 
 def _checkout(repo: Path, dev: bool, commit: str) -> None:
@@ -285,10 +314,25 @@ def _checkout(repo: Path, dev: bool, commit: str) -> None:
         _git(repo, "clean", "-ffdxq")
 
 
+def _back(repo: Path, dev: bool, commit: str) -> None:
+    """Undo _checkout: the dev checkout was clean and only fast-forwarded, so --keep loses nothing."""
+    if dev:
+        _git(repo, "reset", "--quiet", "--keep", commit)
+    else:
+        _checkout(repo, dev, commit)
+
+
+def _dev_ready(repo: Path) -> None:
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch != CHANNEL or _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        raise UpdateError(f"{repo} is a --dev install: update it yourself (it's on {branch} or has changes)")
+
+
 def run() -> int:
     """The update itself (in the transient unit that start() made)."""
-    with _lock() as got:
+    with _lock(wait=LOCK_WAIT) as got:
         if not got:
+            _write(state="failed", message="A check for updates didn't finish: try again", **_kept())
             return 1
         LOG.parent.mkdir(parents=True, exist_ok=True)
         LOG.write_text("")                   # this update's log only
@@ -324,37 +368,51 @@ def _update() -> tuple[str, bool]:
     if target == before:
         return "Already up to date", False
     if dev:
-        branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-        if branch != CHANNEL or _git(repo, "status", "--porcelain", "--untracked-files=no"):
-            raise UpdateError(f"{repo} is a --dev install: update it yourself (it's on {branch} or has changes)")
-    plugin_changed = not _has(repo, before) or subprocess.run(
-        ["git", "-C", str(repo), "diff", "--quiet", before, target, "--", "omarchy-plugin"]).returncode != 0
+        _dev_ready(repo)
+    elif not _has(repo, before):               # installed from a commit GitHub doesn't have: get it from
+        source = info.get("source", "")        # the checkout it came from, so a failed install can go back
+        if source and (Path(source) / ".git").exists():
+            with contextlib.suppress(UpdateError):
+                _git(repo, "fetch", "--quiet", source, before)
+        if not _has(repo, before):
+            raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
+                              "update from your checkout instead (git pull && ./install.sh)")
+    plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
+                                     "omarchy-plugin"]).returncode != 0
     _step("Waiting for Auren to finish…")
     _wait_idle()
     running = {u: _systemctl("is-active", "--quiet", u) == 0 for u in UNITS}
     _step("Stopping Auren…")
-    _systemctl("stop", *UNITS)
+    failure = None
     try:
+        if _systemctl("stop", *UNITS):
+            raise UpdateError("Couldn't stop Auren, so nothing was changed")
+        if dev:
+            _dev_ready(repo)                   # again: the wait was long enough to switch branches
         _step("Downloading…")
         _checkout(repo, dev, target)
         _step("Installing…")
         try:
             _install(repo, dev)
         except UpdateError as e:
-            if dev or not _has(repo, before):
-                raise
             _step("The install failed: going back to the version that was there…")
-            _checkout(repo, dev, before)
-            _install(repo, dev)
+            try:
+                _back(repo, dev, before)
+                _install(repo, dev)
+            except UpdateError as again:
+                raise UpdateError(f"{e}. Going back failed too ({again}): run ./install.sh in "
+                                  f"{info.get('source') or 'your checkout'}") from e
             raise UpdateError(f"{e}. Auren is back on {before[:7]}.") from e
-    finally:
-        _step("Starting Auren…")
-        for unit, was in running.items():     # as they were (install.sh starts the ones that weren't)
-            _systemctl("start" if was else "stop", unit)
+    except Exception as e:                     # whatever happened, Auren is started again below
+        failure = e if isinstance(e, UpdateError) else UpdateError(f"unexpected error: {e}")
+    _step("Starting Auren…")
+    stuck = [u for u, was in running.items()   # as they were; restart: their files changed
+             if _systemctl("restart" if was else "stop", u) or (was and not _started(u))]
+    trouble = f" {' and '.join(stuck)} didn't start: see its log (journalctl --user -u {stuck[0]})." if stuck else ""
+    if failure:
+        raise UpdateError(str(failure) + trouble) from failure
     new = _commits(repo, target, 1)[0]
-    if running["auren"] and not _started("auren"):
-        return f"Updated to {new['short']}, but Auren didn't start: see its log", plugin_changed
-    return f"Updated to {new['short']}: {new['subject']}", plugin_changed
+    return f"Updated to {new['short']}: {new['subject']}" + trouble, plugin_changed
 
 
 def _started(unit: str, timeout: float = 20) -> bool:

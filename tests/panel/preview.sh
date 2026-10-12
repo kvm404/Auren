@@ -4,7 +4,8 @@
 #   tests/panel/preview.sh [out-dir] [shots]
 #
 # shots: a comma list of page[:state], pages 0-4 (Home, Mascot, Voice, Brain, Updates), states:
-# available, confirm, updating, failed (Updates page), cursor, nav (the keyboard cursor).
+# available, confirm, updating, failed (Updates page), cursor, nav, down (the keyboard cursor; down goes to the page's last row).
+# PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does.
 #
 # It runs a separate Quickshell off-screen with Omarchy's own UI parts, except the popup window and the
 # bar button, which are drawn in place (tests/panel/Ui). Every XDG folder points to a temp dir with a
@@ -48,7 +49,7 @@ printf '{"version":"0.1.0","commit":"54ebe81000000000000000000000000000000000","
   "$((now - 86400))" >"$tmp/data/auren/install.json"
 
 cd "$cfg"
-SHOTS="$shots" OUT="$out" XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/run" XDG_STATE_HOME="$tmp/state" \
+SHOTS="$shots" OUT="$out" PANEL_MAX_HEIGHT="${PANEL_MAX_HEIGHT:-}" XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/run" XDG_STATE_HOME="$tmp/state" \
   XDG_CONFIG_HOME="$tmp/config" XDG_CACHE_HOME="$tmp/cache" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
   timeout 120 qs -p "$cfg" 2>&1 | grep -E "ERROR|WARN.*qml|TypeError|ReferenceError" || true
 echo "pages in $out:"
