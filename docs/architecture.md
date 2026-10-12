@@ -77,8 +77,8 @@ Each step is one commit; Auren keeps working after every one.
   party developers to offer claude.ai login or rate limits for their products". A public default needs
   an API-key brain (Claude Haiku 5.5), with screenshots passed as images. Driving the user's own Claude
   Code or Codex login has to be decided, not assumed.
-- **Mascots:** Clawd is the Claude Code mascot; Anthropic's branding rules say products must not look
-  like Claude Code. Load mascots from `~/.config/auren/mascots/` and make Veyra the default.
+- **Mascots:** load extra mascots from `~/.config/auren/mascots/`. (Clawd, the Claude Code mascot, was
+  removed: Anthropic's branding rules say products must not look like Claude Code. Auren is the default.)
 - **Plugin id** `krvm.auren` → a neutral id (migrating the shell config).
 - **Safety:** a careful mode for new installs (only read-only commands run without asking).
 - **Privacy:** say what is sent to the model (profile, routines, pages, screenshots) and how long

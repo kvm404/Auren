@@ -12,14 +12,13 @@
 //   scroll          make it bigger or smaller
 //
 // Faded when idle, asleep after a while. Which character shows is `mascot` in ~/.config/auren/mascot.json:
-// clawd, veyra or auren (folders under mascots/, all built on mascots/common/MascotBase.qml); it switches live.
+// auren or veyra (folders under mascots/, all built on mascots/common/MascotBase.qml); it switches live.
 // Remote control for the bar plugin:
 //   qs -p ~/.local/share/auren/mascot ipc call mascot toggle|show|hide|poke|reset|size <0.6..2.2>
 import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import "mascots/clawd"
 import "mascots/veyra"
 import "mascots/auren"
 
@@ -46,7 +45,7 @@ ShellRoot {
       property int sleepAfter: 240        // seconds of quiet before falling asleep
       property bool bubble: true          // speech bubble with transcript and captions
       property bool sleepAnimation: true  // keep breathing (and drifting z's) when faded or asleep; false saves CPU
-      property string mascot: "clawd"     // clawd, veyra or auren
+      property string mascot: "auren"     // auren or veyra
     }
   }
 
@@ -173,12 +172,11 @@ ShellRoot {
   onUChanged: clampPos()
 
   // ---- the character -------------------------------------------------------------------------
-  readonly property string kind: ["clawd", "veyra", "auren"].indexOf(prefs.mascot) >= 0 ? prefs.mascot : "clawd"
+  readonly property string kind: ["auren", "veyra"].indexOf(prefs.mascot) >= 0 ? prefs.mascot : "auren"
   readonly property Item mascot: mascotLoader.item || placeholder
   Item { id: placeholder; property real u: 6; property real padX: 4; property real padTop: 6; implicitWidth: 144; implicitHeight: 108
          property Item hitbox: placeholder; property real bubbleAnchorY: 0; property string mood: "idle"
          function poke() {} }
-  Component { id: clawdComponent; Clawd {} }
   Component { id: veyraComponent; Veyra {} }
   Component { id: aurenComponent; Auren {} }
   function bindMascot(m) {
@@ -226,7 +224,7 @@ ShellRoot {
 
       Loader {
         id: mascotLoader
-        sourceComponent: root.kind === "veyra" ? veyraComponent : root.kind === "auren" ? aurenComponent : clawdComponent
+        sourceComponent: root.kind === "veyra" ? veyraComponent : aurenComponent
         onLoaded: root.bindMascot(item)
       }
 

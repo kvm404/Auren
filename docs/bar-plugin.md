@@ -6,10 +6,10 @@ Enabled with `omarchy plugin enable krvm.auren --before krvm.agents` (a `shell.j
 
 ## Bar icon
 
-The chosen mascot in pixels (Clawd 16x10, Veyra 16x11, Auren 16x12, one pixel per unit):
+The chosen mascot in pixels (Auren 16x12, Veyra 16x11, one pixel per unit):
 - **idle:** bar colour;
 - **active** (listening, thinking, working, speaking, waiting for a yes/no): the mascot's colour, bobbing
-  (Auren's eyes and antenna light up gold, his thruster cyan); arms (Clawd) or a hand (Auren) up while listening;
+  (Auren's eyes and antenna light up gold, his thruster cyan); Auren's hand up while listening;
 - **error:** red;
 - **off:** dim, eyes shut.
 
@@ -25,7 +25,7 @@ Enter acts, Esc closes, Tab goes to the next bar panel. It remembers the last pa
 | Page | What | How |
 |---|---|---|
 | **Home** | the live mascot (**click it to talk**, again to send; right-click to poke; starts Auren when it's off, stops it talking), status, a hint, the last exchange; quick buttons: On, Voice, Mascot, Fresh, Stop | `auren-ctl talk/voice/forget/cancel`, `systemctl --user start/stop auren auren-mascot`, `~/.local/state/auren/history.jsonl` |
-| **Mascot** | Clawd, Veyra or Auren as three live previews (click to choose; it says hello in its voice); speech bubble; sleep animation (~6% CPU); voice follows mascot; how faded it gets when idle; size; reset place; poke | writes `mascot`, `bubble`, `sleepAnimation`, `matchVoice`, `idleOpacity` in `~/.config/auren/mascot.json` (the mascot reloads it); size, reset and poke through the mascot's IPC |
+| **Mascot** | Auren or Veyra as live previews (click to choose; it says hello in its voice); speech bubble; sleep animation (~6% CPU); voice follows mascot; how faded it gets when idle; size; reset place; poke | writes `mascot`, `bubble`, `sleepAnimation`, `matchVoice`, `idleOpacity` in `~/.config/auren/mascot.json` (the mascot reloads it); size, reset and poke through the mascot's IPC |
 | **Voice** | voice replies on/off; reply language (English, Hindi); voice F2 (Auren's), M3, F1, M1 (decision 0001's shortlist; a click plays a sample); speed 0.8–1.4×; quality Fast/Balanced/Best (3, 5, 8 steps); volume; pause between sentences; Test; Defaults | `auren-ctl voice`, `language`, `voice-name`, `tts …`, `say` (the Test sentence is Hindi in Hindi, with the verb gender of the voice) |
 | **Brain** | who answers: Auto (Claude, Codex on a limit) / Claude only / Codex only, and which is answering now; Claude's effort (Low, Med, High, XHigh, Max; changing it starts a fresh conversation; greyed out in Codex-only mode); Restart, Log, turn Auren off/on; today's requests, average time to answer, how many Codex answered | `auren-ctl brain`, `auren-ctl effort`, `systemctl --user restart auren`, the log in a terminal, history log |
 
@@ -33,7 +33,7 @@ The daemon keeps voice, brain and the voice tuning in `~/.config/auren/settings.
 `state.json` (`voice`, `voiceName`, `mode`, `tts`), so the panel, the mascot and restarts all agree.
 A slider shows its new value as soon as it's released; the daemon's next state confirms it.
 
-**Voice follows mascot** (on by default): picking Auren switches to M3, Veyra and Clawd to F2, and the
+**Voice follows mascot** (on by default): picking Auren switches to M3, Veyra to F2, and the
 mascot says hello in it. Only when Auren is idle with voice replies on. Choosing a voice by hand still
 works; it stays until the next mascot change.
 

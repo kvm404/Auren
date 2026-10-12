@@ -12,7 +12,7 @@
   },
   "barWidget": {
     "displayName": "Auren",
-    "description": "A tiny Clawd that shows what Auren is doing. Click for controls; right-click to start a fresh conversation.",
+    "description": "A tiny Auren that shows what Auren is doing. Click for controls; right-click to start a fresh conversation.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",

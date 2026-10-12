@@ -22,15 +22,14 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
   adjustable.
 - **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first. Text from
   screens and web pages is treated as untrusted.
-- **Mascot:** pick one of three: Clawd (the Claude Code mascot), Veyra (a fox spirit) or Auren (a
-  hover-bot). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
+- **Mascot:** Auren (a hover-bot) or Veyra (a fox spirit). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
   captions in a speech bubble. Drag it anywhere; it fades and falls asleep when idle.
 - **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has four pages: Home (talk, last
   exchange, quick switches), Mascot, Voice (voice and tuning) and Brain (who answers, Claude's effort).
 
 <br clear="right">
 
-![The three mascots, Clawd, Veyra and Auren, in each mood](docs/images/mascots.png)
+![The mascots, Auren and Veyra, in each mood](docs/images/mascots.png)
 
 ## How it works
 
@@ -98,7 +97,7 @@ Files:
 |---|---|
 | `~/.config/auren/secrets.env` | API keys (chmod 600) |
 | `~/.config/auren/settings.json` | Voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort, reply language (written by the panel and `auren-ctl`) |
-| `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (clawd, veyra, auren), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
+| `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (auren, veyra), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |
 | `~/.local/share/auren/` | The installed program and the voice model |
@@ -107,7 +106,7 @@ Files:
 
 ```
 src/auren/         daemon, ears, voice, brain/, hands/, server (MCP tools), safety, profile/
-mascot/            the floating mascot (Quickshell); mascots/{clawd,veyra,auren}/ are the characters,
+mascot/            the floating mascot (Quickshell); mascots/{auren,veyra}/ are the characters,
                    mascots/common/ what they share, gallery.qml shows them all
 omarchy-plugin/    the bar plugin (krvm.auren)
 systemd/           unit templates (install.sh fills in the paths)
@@ -130,8 +129,7 @@ tests/             uv run pytest
 
 ## Credits
 
-- Clawd is the Claude Code mascot by Anthropic, drawn here for personal use. Veyra and Auren are
-  Auren's own mascots.
+- Auren and Veyra are Auren's own mascots.
 - [Supertonic](https://github.com/supertone-inc/supertonic) for the voice, AssemblyAI for speech
   recognition, Open Browser Use for the browser, Quickshell and Omarchy for the desktop side.
 

@@ -7,7 +7,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Wayland
-import "mascots/clawd"
 import "mascots/veyra"
 import "mascots/auren"
 
@@ -16,7 +15,7 @@ ShellRoot {
 
   readonly property string out: Quickshell.env("GALLERY_OUT") || ""
   readonly property real u: Number(Quickshell.env("GALLERY_U") || 5)
-  readonly property var kinds: ["clawd", "veyra", "auren"]
+  readonly property var kinds: ["auren", "veyra"]
   readonly property var only: (Quickshell.env("GALLERY_ONLY") || "").split(",").filter(function(x) { return x })
   readonly property var moods: allMoods.filter(function(m) { return only.length === 0 || only.indexOf(m.label) >= 0 })
   readonly property var allMoods: [
