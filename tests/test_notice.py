@@ -40,6 +40,16 @@ def test_nothing_extra_while_the_mascot_shows_it(tmp_path, monkeypatch, _no_noti
     assert len(_no_notices) == (2 if shown else 0)
 
 
+def test_an_action_shows_even_while_the_bubble_is_up(tmp_path, monkeypatch, _no_notices):
+    monkeypatch.setattr(notice, "CONFIG_DIR", tmp_path / "config")      # no mascot.json: the bubble is on
+    monkeypatch.setattr(notice, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(notice, "_mascot_running", lambda: True)
+    notice.show("Thinking…", "thinking")                     # the bubble has it
+    assert _no_notices == []
+    notice.show("Clicking", "click", always=True)            # an action: the OSD too
+    assert len(_no_notices) == 1 and _no_notices[0][0] == "omarchy-osd"
+
+
 def test_auren_closes_its_own_note_before_a_screenshot(monkeypatch):
     closed = []
     monkeypatch.setattr(notice.subprocess, "run", lambda cmd, **k: closed.append(cmd))
