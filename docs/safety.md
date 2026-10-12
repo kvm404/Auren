@@ -40,6 +40,6 @@ The system profile masks secrets (see [system-profile.md](system-profile.md)). T
 
 ## Stopping
 
-- **Cancel** (`auren-ctl cancel`, clicking the mascot while it works) during thinking or working stops the brain: the Claude process is killed (its conversation goes with it; the next request starts a fresh one) or the Codex run is. The runtime refuses any further tool calls until the next message. A tool already running finishes.
+- **Stop** (Super+A or clicking the mascot while Auren thinks or works, `auren-ctl cancel`, the panel's Stop) stops the brain. Claude Code is sent its own interrupt, so the conversation is kept: "no, do this instead" still has the context. If it hasn't stopped within 5 s (`INTERRUPT_GRACE`), its process is killed and the next request starts a fresh conversation. A Codex run is killed (its finished exchanges are kept). The runtime refuses any further tool calls until the next message. A tool already running finishes.
 - **Backup brain after a limit:** if Claude hits its usage limit after something that shouldn't be repeated has run (anything but reading, looking, focusing and opening), Auren doesn't hand the request to Codex, which would start it over; it says it stopped partway.
 - A spoken "stop" that interrupts a running action.

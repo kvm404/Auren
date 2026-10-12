@@ -304,12 +304,12 @@ ShellRoot {
     if (mood === "off") {
       Quickshell.execDetached(["systemctl", "--user", "start", "auren"])
       mascot.poke()
-    } else if (mood === "speaking") {
-      Quickshell.execDetached([ctl, "cancel"])
+    } else if (mood === "speaking" || mood === "thinking" || mood === "working") {
+      Quickshell.execDetached([ctl, "cancel"])      // stop talking, or stop the answer in progress
     } else if (mood === "idle" || mood === "listening") {
       Quickshell.execDetached([ctl, "talk"])        // start listening, or stop and send
     } else {
-      mascot.poke()                                  // thinking or working: nothing to toggle
+      mascot.poke()                                  // starting or error: nothing to toggle
     }
   }
 
@@ -321,14 +321,15 @@ ShellRoot {
     var d = st.detail || ""
     switch (mood) {
       case "listening": return d || (st.fresh ? "Fresh start · listening…" : "Listening…") + "\nPress again to send"
-      case "thinking": return st.transcript || d || "Thinking…"
-      case "working": return d || "Working…"
+      case "thinking": return (st.transcript || d || "Thinking…") + "\nPress Super+A to stop"
+      case "working": return (d || "Working…") + "\nPress Super+A to stop"
       case "speaking": return d
       case "error": return d ? "Oops: " + d : "Something went wrong"
       case "starting": return "Waking up…"
     }
     if (awaiting) return (st.question || "Waiting for your answer") + "\nPress Super+A to answer yes or no"
     if (mood === "idle" && d === "heard nothing" && now - (st.since || 0) < 3) return "Didn't catch that"
+    if (mood === "idle" && d === "cancelled" && now - (st.since || 0) < 2.5) return "Stopped"
     if (mood === "idle" && now < captionUntil) return lastCaption
     if (hovered && hoverHint.shown) return mood === "off" ? "Auren is off: click to start" : "Click to talk · drag · scroll to resize"
     return ""

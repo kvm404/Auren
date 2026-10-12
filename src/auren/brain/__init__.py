@@ -10,7 +10,8 @@ don't pay Claude Code's start-up. It gets auren's own instructions (not Claude
 Code's), only auren's tools (the MCP adapter in auren.server, which forwards to the
 runtime), and none of the user's personal Claude settings (--setting-sources local,
 and a working folder outside $HOME). The process is restarted when its conversation
-grows past MAX_CONTEXT tokens. `interrupt()` stops an answer in progress. In codex mode the Claude
+grows past MAX_CONTEXT tokens. `interrupt()` stops an answer in progress and keeps the
+conversation (Claude Code's own interrupt), so "no, do this instead" still has the context. In codex mode the Claude
 process isn't started at all (`warm()`).
 """
 
@@ -32,6 +33,7 @@ from . import prompt
 
 log = logging.getLogger("auren")
 MAX_CONTEXT = 40_000            # tokens; then start a fresh conversation
+INTERRUPT_GRACE = 5.0           # seconds for Claude Code to stop by itself before its process is killed
 LIMIT_WORDS = ("usage limit", "rate limit", "limit reached", "out of usage", "quota")
 
 
@@ -63,7 +65,11 @@ class ClaudeBrain:
     def __init__(self, runtime, session: str = "daemon", model: str = "haiku", effort: str = "low", think: bool = True):
         self.runtime, self.session = runtime, session
         self.model, self.effort, self.think = model, effort, think
-        self._interrupted = self._asking = False
+        self._interrupted = self._asking = self._sent = False
+        self._asks = 0                   # counts requests, so a late stop or kill can't hit the next one
+        # Guards the request's state (_asks, _asking, _sent, _interrupted) and writes to Claude's stdin, so
+        # a stop is either in time to keep the message from being sent, or sent after it and for it only.
+        self._lock = threading.Lock()
         self.profile = Profile()
         self.language, self.speaker = "en", "female"      # reply language and the voice's gender (set by Brain)
         self.proc: subprocess.Popen | None = None
@@ -101,13 +107,49 @@ class ClaudeBrain:
             del self._stderr[:-50]
 
     def interrupt(self) -> None:
-        """Stop the answer in progress: the process is killed (the conversation goes with it) and starts
-        again on the next request."""
-        if not self._asking:
-            return                       # nothing in progress: keep the warm process
-        self._interrupted = True
-        if self.proc and self.proc.poll() is None:
-            self.proc.kill()
+        """Stop the answer in progress. Claude Code is asked to stop (the stream then ends with a result
+        and the conversation goes on); if it hasn't within INTERRUPT_GRACE seconds, the process is killed,
+        and the next request starts a fresh one."""
+        ask = self._asks                 # the request in progress now: a later one isn't stopped by this
+        if not self._lock.acquire(timeout=INTERRUPT_GRACE):      # a write is stuck: Claude isn't reading
+            proc = self.proc
+            if self._asking and self._asks == ask:
+                self._interrupted = True
+                if proc and proc.poll() is None:
+                    proc.kill()
+            return
+        try:
+            if not self._asking or self._asks != ask:
+                return                   # nothing in progress (keep the warm process), or a newer request
+            self._interrupted = True
+            if not self._sent:
+                return                   # the message isn't sent yet, and now it won't be
+            proc = self.proc
+            if proc is None or proc.poll() is not None:
+                return
+            # Armed before writing: if the write blocks, the kill undoes it.
+            timer = threading.Timer(INTERRUPT_GRACE, self._kill_if_asking, (proc, ask))
+            timer.daemon = True
+            timer.start()
+            try:
+                proc.stdin.write(json.dumps({"type": "control_request", "request_id": f"stop-{ask}",
+                                             "request": {"subtype": "interrupt"}}) + "\n")
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                proc.kill()
+        finally:
+            self._lock.release()
+
+    def _kill_if_asking(self, proc: subprocess.Popen, ask: int) -> None:
+        got = self._lock.acquire(timeout=1)    # not got: a write is stuck (the check is then unlocked)
+        try:
+            if self._asking and self._asks == ask:                # still on the request that was stopped
+                if proc.poll() is None:
+                    log.warning("claude didn't stop within %ss: killing it", INTERRUPT_GRACE)
+                    proc.kill()
+        finally:
+            if got:
+                self._lock.release()
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
@@ -123,21 +165,35 @@ class ClaudeBrain:
     def ask(self, transcript: str) -> Iterator[tuple]:
         if self.proc is None or self.proc.poll() is not None or self.context_tokens > MAX_CONTEXT:
             self.start()
-        self._interrupted, self._asking = False, True
+        with self._lock:
+            self._asks += 1
+            self._interrupted, self._asking, self._sent = False, True, False
         try:
             # A cancel that came before _asking was set found nothing to interrupt: it shows here instead.
             if _cancelled(self.runtime, self.session):
                 raise Interrupted("cancelled")
             yield from self._ask(transcript)
         finally:
-            self._asking = False
+            with self._lock:
+                self._asking = False
 
     def _ask(self, transcript: str) -> Iterator[tuple]:
         msg = prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker,
                                   self.runtime.summary(self.session))
         sent = time.perf_counter()
-        self.proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": msg}}) + "\n")
-        self.proc.stdin.flush()
+        with self._lock:
+            if self._interrupted or _cancelled(self.runtime, self.session):    # stopped while preparing
+                raise Interrupted("cancelled")
+            try:
+                self.proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": msg}})
+                                      + "\n")
+                self.proc.stdin.flush()
+            except (OSError, ValueError) as e:     # killed by a stop while the write was stuck, or died
+                self.proc = None
+                if self._interrupted:
+                    raise Interrupted("cancelled") from e
+                raise BrainError("the brain process stopped: " + "".join(self._stderr)[-500:]) from e
+            self._sent = True
         tool_names: dict[str, str] = {}
         said: list[str] = []
         for line in self.proc.stdout:
@@ -167,6 +223,8 @@ class ClaudeBrain:
                             text = " ".join(c.get("text", "") for c in text if isinstance(c, dict))
                         yield ("result", tool_names.get(block.get("tool_use_id"), "?"), str(text))
             elif kind == "result":
+                if self._interrupted:            # stopped: the process and the conversation stay
+                    raise Interrupted("cancelled")
                 if ev.get("is_error"):
                     err = str(ev.get("result") or ev.get("errors") or "")
                     if any(w in err.lower() for w in LIMIT_WORDS):

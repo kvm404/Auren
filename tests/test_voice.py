@@ -239,7 +239,6 @@ def test_a_cancel_before_the_brain_starts_still_stops_the_request(tmp_path, monk
     answered, records = [], []
     monkeypatch.setattr(b.ClaudeBrain, "start", lambda self: setattr(self, "proc", type("P", (), {"poll": lambda s: None})()))
     monkeypatch.setattr(b.ClaudeBrain, "_ask", lambda self, text: answered.append(text) or iter([("say", "done")]))
-    monkeypatch.setattr(daemon, "osd", lambda *a, **k: None)
     monkeypatch.setattr(daemon.Daemon, "_history", lambda self, record: records.append(record))
     monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": None)
 
@@ -253,7 +252,7 @@ def test_a_cancel_before_the_brain_starts_still_stops_the_request(tmp_path, monk
 
     async def run():
         d = _Quiet()
-        d.busy, d.tools = asyncio.Lock(), Runtime(tmp_path / "t.sock")
+        d.busy, d.tools, d.listening = asyncio.Lock(), Runtime(tmp_path / "t.sock"), None
         d.brain = b.Brain(d.tools, daemon.SESSION)
         await d.respond("close everything", source="voice")
 
@@ -273,3 +272,35 @@ def test_a_panel_change_keeps_edits_made_to_the_file(tmp_path, monkeypatch):
     assert asyncio.run(d.command("voice off")) == "voice off"
     saved = settings.load()
     assert saved["brain"] == "codex" and saved["integrations.browser"] is False and saved["voice"] is False
+
+
+def test_the_talk_key_stops_an_answer_in_progress(tmp_path, monkeypatch, _no_notices):
+    import asyncio
+
+    from auren.tools import Runtime
+
+    monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, state, detail="", **k: setattr(self, "state", state))
+    pressed = []
+
+    async def press(self, fresh=False):
+        pressed.append(fresh)
+        return "listening"
+
+    monkeypatch.setattr(daemon.Daemon, "press", press)
+
+    class Brain:
+        interrupted = 0
+
+        def interrupt(self):
+            self.interrupted += 1
+
+    d = _Quiet()
+    d.listening, d.level, d.voice = None, daemon.Level(), None
+    d.tools, d.brain = Runtime(tmp_path / "t.sock"), Brain()
+    for key, state in (("talk", "working"), ("talk-fresh", "thinking")):
+        d.state = state
+        assert asyncio.run(d.command(key)) == "stopped"
+        assert d.state == "idle"
+    assert d.brain.interrupted == 2 and pressed == []
+    assert any("Stopped" in cmd for cmd in _no_notices)
+    assert asyncio.run(d.command("talk")) == "listening" and pressed == [False]     # idle: talk as before

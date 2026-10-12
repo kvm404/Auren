@@ -51,7 +51,7 @@ After a reply it smiles (^ ^).
 ## Using it
 
 - **Drag** to move it anywhere; the place is remembered.
-- **Click** it to talk (same as Super+A); click again to send. While Auren speaks, a click stops it. When Auren is off, a click starts it.
+- **Click** it to talk (same as Super+A); click again to send. While Auren thinks, works or speaks, a click stops it (the bubble says "Press Super+A to stop"). When Auren is off, a click starts it.
 - **Right-click** for a poke (it hops).
 - **Scroll** over it to resize.
 - **Hover**: it wakes up, looks at the pointer, and shows the hint.
@@ -83,7 +83,7 @@ systemctl --user restart auren-mascot
   its loudness envelope; a small thread reports the current sentence and level (`src/auren/voice.py`).
   The mic level comes from the audio chunks the ears already read (`src/auren/ears.py`).
 - **Activity phrases:** `src/auren/live.py` turns tool calls into short phrases.
-- The daemon skips the Omarchy OSD while the mascot is running (`daemon.mascot_running()`).
+- While the mascot is on screen with its bubble on, nothing else pops up. Otherwise the daemon shows the same news itself (`src/auren/notice.py`): short statuses on Omarchy's OSD, each with its own icon, and replies and errors as notifications.
 - Bubble colours follow the current Omarchy theme (`~/.local/state/omarchy/current/theme/colors.toml`).
 
 ## Measured (2026-10-10)

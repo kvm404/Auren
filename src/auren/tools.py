@@ -592,7 +592,6 @@ def click_at(x: int, y: int, target: str, button: str = "left", double: bool = F
     that buy, pay, send, post, submit or delete need the user's confirmation."""
     if web.RISKY_CLICK.search(target):
         return _ask(f"Click “{target}”?", lambda: screen.click(x, y, button, double), _same_screen())
-    desktop.osd_safe(f"Auren: clicking {target[:40]}")
     return _run(screen.click, x, y, button, double)
 
 

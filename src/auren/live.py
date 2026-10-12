@@ -80,6 +80,24 @@ def describe(tool: str, args: dict | None = None) -> tuple[str, bool]:
     return phrase, tool in MOUSE_TOOLS
 
 
+# The notice an action gets when the mascot isn't showing it (notice.py): screen control by what it uses,
+# anything else Auren does with the sparkles. None for quick reads (many, and nothing to see), for what
+# shows its own feedback (volume, brightness, notifications, the lock screen) and for screenshots, which
+# would capture the notice.
+SCREEN_KINDS = {"click_at": "click", "drag_at": "mouse", "scroll_at": "mouse", "type_text": "keyboard",
+                "press_keys": "keyboard"}
+NO_NOTICE = {"system_state", "system_lookup", "system_info", "list_agents", "read_agent", "job_status",
+             "browser_read", "browser_scroll", "browser_bookmarks", "recent_downloads", "look_at_screen",
+             "screenshot", "volume", "brightness", "notify", "lock_screen"}
+
+
+def notice_kind(tool: str) -> str | None:
+    if tool in SCREEN_KINDS:
+        return SCREEN_KINDS[tool]
+    from .tools import TOOLS
+    return "auren" if tool in TOOLS and tool not in NO_NOTICE else None
+
+
 def loudness(samples: np.ndarray) -> float:
     """0..1 from float samples in -1..1: about -50 dB is silence, -10 dB is loud speech."""
     if samples.size == 0:

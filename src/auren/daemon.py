@@ -32,14 +32,14 @@ import json
 import logging
 import os
 import re
-import subprocess
 import time
 
+from . import notice
 from .brain import Brain, BrainError, Interrupted
 from .brain.prompt import LANGUAGES
 from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
 from .ears import Listening, vocabulary
-from .live import Level, describe
+from .live import Level, describe, notice_kind
 from .profile import Profile
 from .safety import TOKEN_TTL
 from .settings import load as load_settings
@@ -55,34 +55,6 @@ MAX_LISTEN = 120         # seconds; listening stops by itself (the speech servic
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
                     r"forget (?:everything|all that|it all|our conversation)|clear (?:your|the) memory|reset (?:yourself|the conversation))"
                     r"\W*(?:please)?\W*$", re.I)
-
-
-_mascot_seen = [0.0, False]
-
-
-def mascot_running() -> bool:
-    """Is the mascot (a Quickshell instance running auren's mascot/) on screen? Checked at most every 3 s."""
-    if time.monotonic() - _mascot_seen[0] > 3:
-        found = False
-        for pid in os.listdir("/proc"):
-            if pid.isdigit():
-                try:
-                    with open(f"/proc/{pid}/cmdline", "rb") as f:
-                        if b"auren/mascot" in f.read().lower():
-                            found = True
-                            break
-                except OSError:
-                    pass
-        _mascot_seen[:] = [time.monotonic(), found]
-    return _mascot_seen[1]
-
-
-def osd(message: str, ms: int = 1500, always: bool = False) -> None:
-    """A short message on screen, only when the mascot isn't there to show it (or always)."""
-    if not always and mascot_running():
-        return
-    subprocess.Popen(["omarchy-osd", "-m", message, "-d", str(ms)], stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 class Daemon:
@@ -174,6 +146,9 @@ class Daemon:
 
     async def command(self, line: str) -> str:
         cmd, _, arg = line.strip().partition(" ")
+        if cmd in ("talk", "talk-fresh") and not self.listening and self.state in ("thinking", "working"):
+            await self.cancel()                      # the talk key stops an answer in progress
+            return "stopped"
         if cmd == "talk":
             return await (self.release() if self.listening else self.press())
         if cmd == "talk-fresh":
@@ -322,10 +297,10 @@ class Daemon:
         except Exception as e:  # noqa: BLE001
             self.listening = None
             self.set_state("error", str(e))
-            osd(f"Auren: {e}", 3000)
+            notice.notify("Auren couldn't start listening", str(e), "error")
             return f"error: {e}"
         self.set_state("listening", "", fresh=fresh)
-        osd("Listening (fresh start)…" if fresh else "Listening…", 1200)
+        notice.show("Listening (fresh start)…" if fresh else "Listening…", "listening", 1200)
         asyncio.get_running_loop().call_later(MAX_LISTEN, lambda: asyncio.create_task(self._listen_timeout(session)))
         return "listening"
 
@@ -373,11 +348,11 @@ class Daemon:
         heard_in = time.perf_counter() - t
         if session.error and not text:
             self.set_state("error", session.error)
-            osd("Auren: couldn't hear (" + session.error[:60] + ")", 3000)
+            notice.notify("Auren couldn't hear you", session.error, "error")
             return "error"
         if not text:
             self.set_state("idle", "heard nothing")
-            osd("Didn't catch that", 1500)
+            notice.show("Didn't catch that", "unheard")
             return "heard nothing"
         log.info("heard (%.2fs after release): %s", heard_in, text)
         asyncio.create_task(self.respond(text, source="voice", heard_s=heard_in))
@@ -391,6 +366,7 @@ class Daemon:
         if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)
             await asyncio.to_thread(self.brain.interrupt)
+            notice.show("Stopped", "stopped")
         if self.voice:
             self.voice.stop()
         self.set_state("idle", "cancelled")
@@ -418,9 +394,15 @@ class Daemon:
             # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
             self.tools.new_turn(SESSION)              # once per user message, whichever brain answers
             self.set_state("thinking", text, transcript=text)
-            osd("Thinking…", 1500)
+            notice.show("Thinking…", "thinking")
             tools: list[str] = []
             reply = ""
+
+            def progress(state: str, detail: str, **extra) -> None:
+                # Checked on the loop, where cancel() runs: once stopped, events still in the stream
+                # mustn't bring back "working" over idle, or over a new listen.
+                if not self.tools.cancelled(SESSION):
+                    self.set_state(state, detail, **extra)
 
             def run() -> str:
                 said = ""
@@ -428,9 +410,12 @@ class Daemon:
                     if ev[0] == "tool":
                         tools.append(ev[1])
                         doing, mouse = describe(ev[1], ev[2] if len(ev) > 2 else {})
-                        self._from_thread("working", doing, tool=ev[1], mouse=mouse, transcript=text)
+                        self.loop.call_soon_threadsafe(lambda d=doing, t=ev[1], m=mouse: progress(
+                            "working", d, tool=t, mouse=m, transcript=text))
+                        if (kind := notice_kind(ev[1])) and not self.tools.cancelled(SESSION):
+                            notice.show(doing, kind)
                     elif ev[0] == "switch":
-                        self._from_thread("thinking", ev[1])
+                        self.loop.call_soon_threadsafe(lambda d=ev[1]: progress("thinking", d))
                     elif ev[0] == "say":
                         said = ev[1]
                 return said
@@ -442,7 +427,8 @@ class Daemon:
                 self._history({"at": time.time(), "source": source, "transcript": text, "reply": "(cancelled)",
                                "tools": tools, "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2),
                                "brain": "codex" if self.brain.using_backup else "claude"})
-                self.idle("cancelled")            # a tool event may have landed after cancel() set idle
+                if not self.listening:            # the talk key may already have started the next listen
+                    self.idle("cancelled")
                 return
             except BrainError as e:
                 reply = "Sorry, my brain hit an error: " + str(e)[:120]
@@ -459,7 +445,7 @@ class Daemon:
 
     async def say(self, text: str) -> None:
         if not self.voice_on:
-            osd(text[:200], 4000)
+            notice.notify("Auren", text)
             self.set_state("speaking", text, reply=text, silent=True)
             await asyncio.sleep(min(8.0, 1.5 + len(text) / 18))    # time to read it in the mascot's bubble
             if self.state == "speaking":

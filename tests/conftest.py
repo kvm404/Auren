@@ -17,3 +17,17 @@ def _every_integration(monkeypatch):
     from auren import integrations
     monkeypatch.setattr(integrations, "_installed", lambda name: (True, ""))
     monkeypatch.setattr(integrations, "_cache", {})
+
+
+@pytest.fixture(autouse=True)
+def _no_notices(monkeypatch):
+    """Nothing pops up on the developer's screen: notices are recorded in notice.shown instead."""
+    from auren import notice
+    shown = []
+    monkeypatch.setattr(notice, "_spawn", shown.append)
+    monkeypatch.setattr(notice, "_seen", [0.0, False])
+    monkeypatch.setattr(notice, "_osd_at", 0.0)
+    monkeypatch.setattr(notice, "_opening", [])
+    monkeypatch.setattr(notice, "_mascot_running", lambda: False)
+    monkeypatch.setattr(notice, "shown", shown, raising=False)
+    return shown
