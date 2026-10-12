@@ -6,11 +6,17 @@ together with the code.
 
 ## Runtime files (`$XDG_RUNTIME_DIR/auren/`)
 
+Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. All paths come from
+`src/auren/config.py` and follow `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and
+`XDG_DATA_HOME`; the UIs compute the same paths.
+
 | File | Writer | Content |
 |---|---|---|
 | `auren.sock` | daemon | Command socket (one line in, one line out; mode 600) |
 | `state.json` | daemon | Current state, below (written whole, then renamed) |
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
+| `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
+| `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
 ### `state.json`
 
@@ -43,7 +49,8 @@ Sometimes present:
 
 ## Socket commands
 
-Sent with `auren-ctl <command>`; the reply is one line.
+Sent with `auren-ctl <command>` (`~/.local/share/auren/bin/auren-ctl`, also linked into `~/.local/bin`);
+the reply is one line. It exits 1 when the daemon isn't running.
 
 | Command | Does |
 |---|---|
@@ -76,3 +83,5 @@ Sent with `auren-ctl <command>`; the reply is one line.
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
 | `~/.local/state/auren/confirmations.json`, `turn` | tools, daemon | Pending confirmations and the turn counter |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
+| `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
+| `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |

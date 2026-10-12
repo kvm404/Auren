@@ -15,18 +15,26 @@ brain's Hindi replies and the daemon's own English phrases both sound right.
 For the mascot, a small clock thread follows the playback: it reports which
 sentence is being heard (captions) and how loud it is (the mascot bounces), using
 each sentence's loudness envelope and when its audio starts playing.
+
+The model (~380 MB) lives in ~/.local/share/auren/models/supertonic-3 and is fetched by
+`auren voice-model` (install.sh runs it). Supertonic's repository is archived: the download
+uses the commit the SDK pins, and the archive's copy if that is gone. An existing download
+in the SDK's own cache (~/.cache/supertonic3) is used as is.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
+from .config import MODELS_DIR
 from .live import envelope
 
 LATENCY = 0.12        # pw-cat's start-up and buffering, roughly
@@ -60,12 +68,64 @@ def language_of(sentence: str) -> str:
     return "hi" if _DEVANAGARI.search(sentence) else "en"
 
 
+MODEL = "supertonic-3"
+ARCHIVE_REPO, ARCHIVE_REVISION = "supertone-oss-archive/supertonic-3", "aafc6e32416a594460b32413efc49d7fe4ce6d46"
+MODEL_FILES = ["config.json", "LICENSE", "onnx/*", "voice_styles/*"]
+
+
+class VoiceModelMissing(RuntimeError):
+    pass
+
+
+def model_dir() -> Path | None:
+    """Where a complete model is, or None."""
+    from supertonic.config import get_model_cache_dir
+    from supertonic.loader import has_all_onnx_modules
+
+    for d in (MODELS_DIR / MODEL, get_model_cache_dir(MODEL)):
+        if d.is_dir() and has_all_onnx_modules(d) and any((d / "voice_styles").glob("*.json")):
+            return d
+    return None
+
+
+def download_model(log: Callable[[str], None] = print) -> Path:
+    """Fetch the model into MODELS_DIR (if it isn't anywhere yet) and return its folder."""
+    if found := model_dir():
+        return found
+    from huggingface_hub import snapshot_download
+    from supertonic.config import get_model_repo, get_model_revision
+
+    target = MODELS_DIR / MODEL
+    tmp = target.with_name(f".{MODEL}.tmp")
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    sources = [(get_model_repo(MODEL), get_model_revision(MODEL)), (ARCHIVE_REPO, ARCHIVE_REVISION)]
+    errors = []
+    for repo, revision in sources:
+        log(f"downloading the voice model from {repo} ({revision[:12]}), about 380 MB")
+        try:
+            shutil.rmtree(tmp, ignore_errors=True)
+            snapshot_download(repo_id=repo, revision=revision, local_dir=str(tmp), allow_patterns=MODEL_FILES)
+        except Exception as e:  # noqa: BLE001 - try the next source
+            errors.append(f"{repo}: {e}")
+            continue
+        shutil.rmtree(target, ignore_errors=True)
+        tmp.rename(target)
+        if model_dir():
+            return target
+        errors.append(f"{repo}: incomplete download")
+    shutil.rmtree(tmp, ignore_errors=True)
+    raise VoiceModelMissing("couldn't download the voice model: " + "; ".join(errors))
+
+
 class Voice:
     def __init__(self, voice: str = "F2", steps: int = 5, speed: float = 1.05, volume: float = 1.0, pause: float = 0.0,
                  on_level: Callable[[float], None] | None = None, on_sentence: Callable[[str], None] | None = None):
-        from supertonic import TTS  # loads the ONNX models (~380 MB, cached in ~/.cache/supertonic3)
+        from supertonic import TTS
 
-        self.tts = TTS(auto_download=True)
+        folder = model_dir()
+        if folder is None:
+            raise VoiceModelMissing("the voice model isn't downloaded: run `auren voice-model`")
+        self.tts = TTS(model=MODEL, model_dir=folder, auto_download=False)
         self.name = voice
         self.style = self.tts.get_voice_style(voice_name=voice)
         self.steps, self.speed, self.volume, self.pause = steps, speed, volume, pause

@@ -15,14 +15,14 @@ call. All output is passed through `redact` first.
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 
+from ..config import CACHE_DIR
 from . import collect
 from .redact import redact, redact_all
 
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "auren" / "profile-static.json"
+CACHE = CACHE_DIR / "profile-static.json"
 MAX_AGE = 6 * 3600
 
 WATCHED = [  # a change to any of these rebuilds the static part

@@ -1,6 +1,6 @@
 // auren's mascot: a small character floating over the desktop that shows what auren is doing.
 //
-//   qs -p ~/Projects/auren/mascot          (the auren-mascot systemd user service runs this)
+//   qs -p ~/.local/share/auren/mascot      (the auren-mascot systemd user service runs this)
 //
 // It reads $XDG_RUNTIME_DIR/auren/state.json (what auren is doing) and .../level (how loud the
 // mic or the voice is), and shows a speech bubble with the live transcript, what auren is
@@ -14,7 +14,7 @@
 // Faded when idle, asleep after a while. Which character shows is `mascot` in ~/.config/auren/mascot.json:
 // clawd, veyra or auren (folders under mascots/, all built on mascots/common/MascotBase.qml); it switches live.
 // Remote control for the bar plugin:
-//   qs -p ~/Projects/auren/mascot ipc call mascot toggle|show|hide|poke|reset|size <0.6..2.2>
+//   qs -p ~/.local/share/auren/mascot ipc call mascot toggle|show|hide|poke|reset|size <0.6..2.2>
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -28,11 +28,14 @@ ShellRoot {
 
   readonly property string runtimeDir: Quickshell.env("AUREN_RUNTIME_DIR") || Quickshell.env("XDG_RUNTIME_DIR") + "/auren"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string ctl: Quickshell.shellDir + "/../bin/auren-ctl"
+  readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/auren"
+  readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/auren"
+  readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/auren"
+  readonly property string ctl: dataDir + "/bin/auren-ctl"
 
   // ---- preferences (~/.config/auren/mascot.json, optional) and place (~/.local/state/auren/mascot.json)
   FileView {
-    path: root.home + "/.config/auren/mascot.json"
+    path: root.configDir + "/mascot.json"
     watchChanges: true
     onFileChanged: reload()
     printErrors: false
@@ -49,7 +52,7 @@ ShellRoot {
 
   FileView {
     id: placeFile
-    path: root.home + "/.local/state/auren/mascot.json"
+    path: root.stateDir + "/mascot.json"
     printErrors: false
     atomicWrites: true
     onAdapterUpdated: writeAdapter()

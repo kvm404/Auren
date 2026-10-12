@@ -16,17 +16,7 @@
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": {
-      "aurenDir": "~/Projects/auren"
-    },
-    "schema": [
-      {
-        "key": "aurenDir",
-        "type": "string",
-        "label": "Auren folder",
-        "defaultValue": "~/Projects/auren",
-        "description": "Where the Auren project lives (bin/auren-ctl, mascot/)."
-      }
-    ]
+    "defaults": {},
+    "schema": []
   }
 }

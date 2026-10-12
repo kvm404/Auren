@@ -22,9 +22,9 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from pathlib import Path
 
 from .. import safety
+from ..config import BRAIN_DIR
 from ..profile import Profile
 from . import prompt
 
@@ -74,7 +74,7 @@ class ClaudeBrain:
         self.stop()
         # Outside $HOME on purpose: Claude Code loads `.claude/CLAUDE.md` from every parent folder, and
         # ~/.claude/CLAUDE.md is the user's personal file, which must not reach the brain.
-        workdir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "auren-brain"
+        workdir = BRAIN_DIR
         workdir.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "MCP_TOOL_TIMEOUT": "900000", "MCP_TIMEOUT": "30000"}
         self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -180,7 +180,7 @@ class CodexBrain:
 
     def ask(self, transcript: str) -> Iterator[tuple]:
         safety.next_turn()
-        workdir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "auren-brain"
+        workdir = BRAIN_DIR
         workdir.mkdir(parents=True, exist_ok=True)
         last = workdir / "codex-last.txt"
         recent = "\n".join(f"User: {u}\nAuren: {a}" for u, a in self.history[-4:])

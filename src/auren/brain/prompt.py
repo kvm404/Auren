@@ -1,7 +1,6 @@
 """The brain's instructions. The laptop facts (system profile) and the user's routines are appended."""
 
-import os
-from pathlib import Path
+from ..config import ROUTINES_DIR
 
 RULES = """You are Auren, a voice assistant running on the user's laptop (Omarchy, Hyprland). The user speaks; you get a speech-to-text transcript. Your reply is spoken aloud by a text-to-speech voice.
 
@@ -34,7 +33,6 @@ Safety:
 - Never read out or repeat secrets such as API keys or passwords."""
 
 
-ROUTINES_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "auren" / "routines"
 
 
 def routines() -> str:
