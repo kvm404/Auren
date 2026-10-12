@@ -46,7 +46,7 @@ Control it from a terminal:
 auren-ctl status
 auren-ctl ask "what time is it"    # typed request, spoken reply
 auren-ctl say "hello"
-auren-ctl cancel                    # stop listening or speaking
+auren-ctl cancel                    # stop listening, thinking, working or speaking
 auren-ctl forget                    # fresh conversation (same as saying "start fresh")
 auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
 auren-ctl language hi               # replies in Hindi (Devanagari), spoken in Hindi; language en to go back

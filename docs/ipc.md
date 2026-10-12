@@ -15,6 +15,7 @@ Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. 
 | `auren.sock` | daemon | Command socket (one line in, one line out; mode 600) |
 | `state.json` | daemon | Current state, below (written whole, then renamed) |
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
+| `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
@@ -56,7 +57,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 |---|---|
 | `talk` / `talk-fresh` | Start listening; again to send (fresh: a new conversation) |
 | `start` / `stop` | Push to talk (press, release) |
-| `cancel` | Stop listening or speaking |
+| `cancel` | Stop listening, the answer in progress (brain and tools) or speaking |
 | `ask <text>` | A typed request through the same pipeline |
 | `say <text>` | Speak a sentence |
 | `forget` | Fresh conversation |
@@ -82,7 +83,6 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.local/state/auren/history.jsonl` | daemon | Every exchange (read by the bar plugin) |
 | `~/.local/state/auren/daemon.log` | daemon | Log |
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
-| `~/.local/state/auren/confirmations.json`, `turn` | tools, daemon | Pending confirmations and the turn counter |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |

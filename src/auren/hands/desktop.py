@@ -243,10 +243,16 @@ def switch_workspace(workspace: str | int) -> str:
     return f"switched to workspace {workspace}"
 
 
-def close_window(window: str) -> str:
+def close_window(window: str | dict) -> str:
     """Ask a window to close, then check it really did: apps with several tabs or unsaved work often
-    answer with their own "are you sure?" dialog instead of closing."""
-    w = find_window(window)
+    answer with their own "are you sure?" dialog instead of closing. `window` is words to find it by, or
+    the window itself (as found when the user was asked)."""
+    if isinstance(window, dict):
+        w = window
+        if w["address"] not in {x["address"] for x in windows()}:
+            raise DesktopError(f"{w.get('class')} is already closed")
+    else:
+        w = find_window(window)
     dispatch(f"hl.dsp.window.close({{ window = {_lua('address:' + w['address'])} }})")
     for _ in range(8):
         time.sleep(0.25)

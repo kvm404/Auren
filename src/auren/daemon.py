@@ -35,17 +35,19 @@ import re
 import subprocess
 import time
 
-from .brain import Brain, BrainError
+from .brain import Brain, BrainError, Interrupted
 from .brain.prompt import LANGUAGES
-from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE
+from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
 from .ears import Listening, vocabulary
 from .live import Level, describe
 from .profile import Profile
-from .safety import Confirmations
+from .safety import TOKEN_TTL
 from .settings import load as load_settings
 from .settings import save as save_settings
+from .tools import Runtime
 from .voice import TUNING, tuning
 
+SESSION = "daemon"          # the daemon's tool session (an `auren chat` has its own)
 log = logging.getLogger("auren")
 MIN_HOLD = 0.35          # shorter key taps are ignored
 MAX_LISTEN = 120         # seconds; listening stops by itself (the speech service bills per second)
@@ -87,7 +89,8 @@ class Daemon:
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
         self.profile = Profile()
-        self.brain = Brain(mode=self.settings["brain"], effort=self.settings["effort"])
+        self.tools = Runtime(TOOLS_SOCKET)           # serving from serve() on
+        self.brain = Brain(self.tools, SESSION, mode=self.settings["brain"], effort=self.settings["effort"])
         self.brain.set_language(self.settings["language"], self.speaker)
         self.voice = None
         self.speak_enabled = speak                    # False: started with --quiet, the voice isn't even loaded
@@ -363,6 +366,9 @@ class Daemon:
             await self.listening.cancel()
             self.listening = None
         self.level.set(0)
+        if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
+            self.tools.cancel(SESSION)
+            await asyncio.to_thread(self.brain.interrupt)
         if self.voice:
             self.voice.stop()
         self.set_state("idle", "cancelled")
@@ -394,6 +400,7 @@ class Daemon:
 
             def run() -> str:
                 said = ""
+                self.tools.new_turn(SESSION)          # once per user message, whichever brain answers
                 for ev in self.brain.ask(text):
                     if ev[0] == "tool":
                         tools.append(ev[1])
@@ -407,6 +414,13 @@ class Daemon:
 
             try:
                 reply = await asyncio.to_thread(run)
+            except Interrupted:
+                log.info("cancelled while %s", "working" if tools else "thinking")
+                self._history({"at": time.time(), "source": source, "transcript": text, "reply": "(cancelled)",
+                               "tools": tools, "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2),
+                               "brain": "codex" if self.brain.using_backup else "claude"})
+                self.idle("cancelled")            # a tool event may have landed after cancel() set idle
+                return
             except BrainError as e:
                 reply = "Sorry, my brain hit an error: " + str(e)[:120]
                 log.error("brain error: %s", e)
@@ -440,10 +454,9 @@ class Daemon:
 
     def idle(self, detail: str = "") -> None:
         """Back to idle; if the brain asked a yes/no question that's still open, say so for the mascot."""
-        pending = Confirmations().pending
-        if pending:
-            p = max(pending.values(), key=lambda v: v["at"])
-            self.set_state("idle", detail, awaiting=True, question=p.get("question", ""), until=p["at"] + 300)
+        p = self.tools.awaiting(SESSION)
+        if p:
+            self.set_state("idle", detail, awaiting=True, question=p.question, until=p.at + TOKEN_TTL)
         else:
             self.set_state("idle", detail)
 
@@ -470,6 +483,7 @@ class Daemon:
             await writer.drain()
             writer.close()
 
+        self.tools.start()
         server = await asyncio.start_unix_server(client, path=str(SOCKET))
         os.chmod(SOCKET, 0o600)
         self.set_state("starting")
@@ -513,6 +527,7 @@ def main(speak: bool = True) -> int:
         except Exception:  # noqa: BLE001
             pass
         d.brain.stop()
+        d.tools.stop()
         if SOCKET.exists():
             SOCKET.unlink()
         lock.close()

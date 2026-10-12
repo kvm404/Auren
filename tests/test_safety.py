@@ -21,18 +21,35 @@ def test_risky_commands(cmd):
     assert safety.command_risk(cmd) is not None
 
 
-def test_confirmation_needs_a_later_turn(tmp_path, monkeypatch):
-    monkeypatch.setattr(safety, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(safety, "TURN_FILE", tmp_path / "turn")
-    safety.next_turn()
-    c = safety.Confirmations(tmp_path / "confirmations.json")
-    token = c.request("close_window", {"window": "omacalc"}, "Close Omacalc?")["token"]
+def test_confirmation_needs_a_later_turn_of_the_same_session():
+    c = safety.Confirmations()
+    ran = []
+    token = c.request("daemon", 1, "Close Omacalc?", lambda: ran.append("closed"))["token"]
     with pytest.raises(PermissionError, match="hasn't answered"):
-        c.redeem(token)                       # same turn: the model can't approve itself
-    safety.next_turn()                        # the user replied
-    assert c.redeem(token) == ("close_window", {"window": "omacalc"})
+        c.redeem("daemon", token, 1)              # same turn: the model can't approve itself
+    with pytest.raises(PermissionError, match="unknown"):
+        c.redeem("chat-1", token, 2)              # another session can't use it
+    c.redeem("daemon", token, 2).run()            # the user replied
+    assert ran == ["closed"]
     with pytest.raises(PermissionError, match="already used"):
-        c.redeem(token)
-    t2 = c.request("lock_screen", {}, "Lock?")["token"]
-    safety.next_turn()
-    assert safety.Confirmations(tmp_path / "confirmations.json").redeem(t2)[0] == "lock_screen"   # survives a restart
+        c.redeem("daemon", token, 3)
+
+
+def test_a_confirmation_checks_its_target_before_running():
+    c = safety.Confirmations()
+
+    def gone():
+        raise PermissionError("the page changed")
+
+    token = c.request("daemon", 1, "Click Send?", lambda: None, gone)["token"]
+    with pytest.raises(PermissionError, match="page changed"):
+        c.redeem("daemon", token, 2)
+    assert c.summary("daemon") == ""              # used up: the brain has to ask again
+
+
+def test_confirmations_expire(monkeypatch):
+    c = safety.Confirmations()
+    token = c.request("daemon", 1, "Lock?", lambda: None)["token"]
+    assert c.latest("daemon").question == "Lock?" and token in c.summary("daemon")
+    monkeypatch.setattr(safety.time, "time", lambda: 10**12)
+    assert c.latest("daemon") is None

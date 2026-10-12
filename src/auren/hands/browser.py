@@ -305,6 +305,26 @@ def label_of(target: str, tab: int | None = None) -> str | None:
     return _eval(b, t, js)
 
 
+def page() -> dict:
+    """The auren tab now: browser, tab id and address (what a confirmation is bound to)."""
+    b, t = _state["browser"] or "chrome", _tab(None)
+    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href")}
+
+
+def field_of(target: str, tab: int | None = None) -> dict | None:
+    """A numbered field from the last read: its label and whether it's a search box (pressing Enter in a
+    search box only searches; in other fields it can send or post)."""
+    b, t = _state["browser"] or "chrome", _tab(tab)
+    js = """((target) => { const el = document.querySelector(`[data-auren-id="${target}"]`);
+      if (!el) return null;
+      const words = [el.type, el.name, el.id, el.getAttribute('role'), el.getAttribute('aria-label'),
+        el.getAttribute('placeholder'), el.form && el.form.getAttribute('role'), el.form && el.form.action]
+        .filter(Boolean).join(' ').toLowerCase();
+      const search = el.type === 'search' || /\\b(search|searchbox|query|find)\\b/.test(words) || el.name === 'q';
+      return {label: el.getAttribute('data-auren-label') || '', search}; })(%s)""" % json.dumps(str(target))
+    return _eval(b, t, js)
+
+
 def browser_type(target: str, text: str, submit: bool = False, tab: int | None = None) -> str:
     b, t = _state["browser"] or "chrome", _tab(tab)
     js = """
