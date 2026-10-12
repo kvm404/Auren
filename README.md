@@ -83,9 +83,9 @@ Auren, use `./install.sh --dev` instead, which links the install to the checkout
 
 | | |
 |---|---|
-| Super+A | Start talking; press again to send |
+| Super+A | Start talking; press again to send. While Auren thinks or works: stop it |
 | Super+Shift+A | The same, in a fresh conversation (or say "start fresh") |
-| Click the mascot | Talk (same as Super+A); while it speaks, stop it |
+| Click the mascot | Talk (same as Super+A); while it thinks, works or speaks, stop it |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open the panel (Home, Mascot, Voice, Brain); right-click for a fresh conversation |
 | `auren doctor` | What works on this machine and how to fix what doesn't |

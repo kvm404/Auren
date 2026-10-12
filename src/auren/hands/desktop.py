@@ -23,6 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .. import notice
 from ..profile import Profile
 
 HOME = Path.home()
@@ -52,11 +53,6 @@ def spawn(cmd: list[str]) -> None:
     """Start something detached from auren (it must outlive the tool call)."""
     subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
-
-
-def osd_safe(message: str, ms: int = 1500) -> None:
-    """Brief on-screen note (the mascot will replace this)."""
-    spawn(["omarchy-osd", "-m", message, "-d", str(ms)])
 
 
 def dispatch(lua: str) -> None:
@@ -370,6 +366,7 @@ def screenshot(target: str = "window", save_to: str = "~/Pictures") -> str:
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"screenshot-{datetime.now():%Y-%m-%d_%H-%M-%S}.png"
     target = target.lower()
+    notice.clear()                       # not Auren's own status in the picture
     if target in ("region", "area", "selection"):
         out = sh(["omarchy-capture-screenshot", "region", "save"], timeout=120).strip()
         if not out:

@@ -70,3 +70,108 @@ def test_model_settings_are_checked(tmp_path, monkeypatch):
         settings.set_value("brain.claude_model", "haiku; rm -rf")
     with pytest.raises(ValueError):
         settings.set_value("brain.codex_effort", "max")
+
+
+def _claude(tmp_path, monkeypatch, *mode):
+    import sys
+    from pathlib import Path
+
+    from auren.tools import Runtime
+
+    monkeypatch.setattr(b, "BRAIN_DIR", tmp_path)
+    monkeypatch.setattr(b.ClaudeBrain, "_command",
+                        lambda self: [sys.executable, str(Path(__file__).with_name("fake_claude.py")), *mode])
+    c = b.ClaudeBrain(Runtime(tmp_path / "t.sock"))
+    c.profile = type("P", (), {"live_context": lambda self: ""})()
+    return c
+
+
+def _stop_after(c, seconds):
+    """Stop `seconds` after the message reached Claude (not before: that's a different case)."""
+    import threading
+    import time
+
+    def stop():
+        deadline = time.monotonic() + 5
+        while not c._sent and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(seconds)
+        c.interrupt()
+    threading.Thread(target=stop, daemon=True).start()
+
+
+def test_a_stop_keeps_the_conversation(tmp_path, monkeypatch):
+    import pytest
+
+    c = _claude(tmp_path, monkeypatch)
+    try:
+        _stop_after(c, 0.5)
+        with pytest.raises(b.Interrupted):
+            list(c.ask("remember PINEAPPLE, then answer slowly"))
+        proc = c.proc
+        assert proc is not None and proc.poll() is None          # same process: the context is still there
+        said = [e for e in c.ask("what was the word?") if e[0] == "say"]
+        assert "PINEAPPLE" in said[0][1] and c.proc is proc
+    finally:
+        c.stop()
+
+
+def test_claude_that_doesnt_stop_is_killed(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(b, "INTERRUPT_GRACE", 0.5)
+    c = _claude(tmp_path, monkeypatch, "stubborn")
+    try:
+        _stop_after(c, 0.3)
+        with pytest.raises(b.Interrupted):
+            list(c.ask("answer slowly"))
+        assert c.proc is None                                     # killed: the next request starts afresh
+    finally:
+        c.stop()
+
+
+def test_a_stop_before_the_message_is_sent_keeps_it_unsent(tmp_path, monkeypatch):
+    import pytest
+
+    c = _claude(tmp_path, monkeypatch)
+    try:
+        c.start()
+        c.profile = type("P", (), {"live_context": lambda self: c.interrupt() or ""})()   # stopped while preparing
+        with pytest.raises(b.Interrupted):
+            list(c.ask("remember PINEAPPLE"))
+        c.profile = type("P", (), {"live_context": lambda self: ""})()
+        said = [e for e in c.ask("what was the word?") if e[0] == "say"]
+        assert "PINEAPPLE" not in said[0][1]                       # Claude never got it
+    finally:
+        c.stop()
+
+
+def test_a_stop_with_nothing_in_progress_does_nothing(tmp_path, monkeypatch):
+    c = _claude(tmp_path, monkeypatch)
+    try:
+        c.start()
+        proc = c.proc
+        c.interrupt()
+        said = [e for e in c.ask("hello") if e[0] == "say"]
+        assert said and c.proc is proc
+    finally:
+        c.stop()
+
+
+def test_a_stop_while_claude_isnt_reading_kills_it(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    import pytest
+
+    monkeypatch.setattr(b, "INTERRUPT_GRACE", 0.3)
+    c = _claude(tmp_path, monkeypatch, "deaf")
+    try:
+        c.start()
+        c.profile = type("P", (), {"live_context": lambda self: "x" * 1_000_000})()   # more than the pipe holds
+        threading.Thread(target=lambda: (time.sleep(0.3), c.interrupt()), daemon=True).start()
+        with pytest.raises(b.Interrupted):
+            list(c.ask("hello"))
+        assert c.proc is None                                     # the next request starts afresh
+    finally:
+        c.stop()

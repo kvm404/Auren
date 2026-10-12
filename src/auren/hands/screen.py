@@ -31,6 +31,8 @@ import threading
 import time
 from pathlib import Path
 
+from .. import notice
+
 IMAGE_WIDTH = 1024
 
 _lock = threading.Lock()
@@ -58,6 +60,7 @@ def _focused_monitor() -> dict:
 def look() -> tuple[bytes, str]:
     """Screenshot of the focused monitor. Returns (jpeg bytes, a note on how to address it)."""
     global _last_view
+    notice.clear()                         # Auren's own OSD note isn't part of what it should see
     m = _focused_monitor()
     lw, lh = round(m["width"] / m["scale"]), round(m["height"] / m["scale"])     # layout (logical) size
     factor = IMAGE_WIDTH / lw              # grim's -s scales from the monitor's layout size, not physical pixels
