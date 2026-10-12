@@ -67,13 +67,14 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
 | `language en\|hi` | Reply language |
 | `status` | JSON: state, brain, mode, effort, language, voice |
+| `reload` | Re-read `config.toml` and apply what changed (`auren config` sends it) |
 | `quit` | Stop the daemon |
 
 ## Files
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/settings.json` | daemon | Voice, brain, effort, language, voice tuning |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: language, `[voice]` (on, name, tuning), `[brain]` (mode, effort). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |

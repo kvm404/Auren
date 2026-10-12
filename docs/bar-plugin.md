@@ -29,7 +29,7 @@ Enter acts, Esc closes, Tab goes to the next bar panel. It remembers the last pa
 | **Voice** | voice replies on/off; reply language (English, Hindi); voice F2 (Auren's), M3, F1, M1 (decision 0001's shortlist; a click plays a sample); speed 0.8–1.4×; quality Fast/Balanced/Best (3, 5, 8 steps); volume; pause between sentences; Test; Defaults | `auren-ctl voice`, `language`, `voice-name`, `tts …`, `say` (the Test sentence is Hindi in Hindi, with the verb gender of the voice) |
 | **Brain** | who answers: Auto (Claude, Codex on a limit) / Claude only / Codex only, and which is answering now; Claude's effort (Low, Med, High, XHigh, Max; changing it starts a fresh conversation; greyed out in Codex-only mode); Restart, Log, turn Auren off/on; today's requests, average time to answer, how many Codex answered | `auren-ctl brain`, `auren-ctl effort`, `systemctl --user restart auren`, the log in a terminal, history log |
 
-The daemon keeps voice, brain and the voice tuning in `~/.config/auren/settings.json` and puts them in
+The daemon keeps voice, brain and the voice tuning in `~/.config/auren/config.toml` and puts them in
 `state.json` (`voice`, `voiceName`, `mode`, `tts`), so the panel, the mascot and restarts all agree.
 A slider shows its new value as soon as it's released; the daemon's next state confirms it.
 

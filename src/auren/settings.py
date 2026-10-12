@@ -1,0 +1,310 @@
+"""~/.config/auren/config.toml: the user's settings.
+
+The daemon keeps them as a flat dict (voice, voiceName, speed, ..., brain, effort, language); the file
+groups them in sections. The bar panel and auren-ctl change some of them through the daemon, which
+rewrites only those values: comments and anything else in the file are kept.
+
+    auren config                    # every setting, and whether it's the default
+    auren config set voice.speed 1.1
+    auren config get brain.mode
+    auren config edit               # in $EDITOR, checked afterwards
+    auren config path
+
+A running daemon picks up changes made here (auren config sends it `reload`). The old settings.json
+is migrated once, then kept as settings.json.bak.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+import tomlkit
+
+from .config import CONFIG_FILE
+from .config import SETTINGS as LEGACY
+
+log = logging.getLogger("auren.settings")
+
+LANGUAGES = ("en", "hi")                                  # brain.prompt.LANGUAGES
+MODES = ("auto", "claude", "codex")                       # Brain.MODES
+EFFORTS = ("low", "medium", "high", "xhigh", "max")       # Brain.EFFORTS
+
+
+def _boolean(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    word = str(v).strip().lower()
+    if word in ("true", "on", "yes", "1"):
+        return True
+    if word in ("false", "off", "no", "0"):
+        return False
+    raise ValueError("true or false")
+
+
+def _number(low: float, high: float, whole: bool = False) -> Callable[[Any], float | int]:
+    def check(v: Any) -> float | int:
+        if isinstance(v, bool):
+            raise ValueError(f"a number from {low} to {high}")
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"a number from {low} to {high}") from None
+        if not low <= n <= high:
+            raise ValueError(f"from {low} to {high}")
+        return int(round(n)) if whole else round(n, 2)
+    return check
+
+
+def _choice(*options: str) -> Callable[[Any], str]:
+    def check(v: Any) -> str:
+        if str(v) not in options:
+            raise ValueError(" or ".join(options))
+        return str(v)
+    return check
+
+
+def _voice_name(v: Any) -> str:
+    if not re.fullmatch(r"[FM]\d", str(v)):
+        raise ValueError("a voice like F2 or M3")
+    return str(v)
+
+
+@dataclass(frozen=True)
+class Key:
+    path: str           # where it lives in config.toml: "section.name", or "name" at the top
+    flat: str           # its name in the daemon's dict (and the old settings.json)
+    default: Any
+    check: Callable[[Any], Any]
+    help: str
+
+
+# Ranges match voice.TUNING (decision 0001's defaults); a test keeps them in step.
+KEYS = [
+    Key("language", "language", "en", _choice(*LANGUAGES), "Reply language: en or hi (Hindi replies are in Devanagari)"),
+    Key("voice.enabled", "voice", True, _boolean, "Speak replies (false: they only show in the mascot's bubble)"),
+    Key("voice.name", "voiceName", "F2", _voice_name, "Supertonic voice: F1..F5 or M1..M5"),
+    Key("voice.speed", "speed", 1.05, _number(0.7, 1.6), "How fast it speaks: 0.7 to 1.6"),
+    Key("voice.steps", "steps", 5, _number(2, 12, whole=True), "Quality: 2 to 12 (higher costs more CPU)"),
+    Key("voice.volume", "volume", 1.0, _number(0.1, 1.0), "Volume relative to the system's: 0.1 to 1"),
+    Key("voice.pause", "pause", 0.0, _number(0.0, 1.0), "Silence between sentences in seconds: 0 to 1"),
+    Key("brain.mode", "brain", "auto", _choice(*MODES), "Who answers: auto (Claude Code, Codex when Claude hits a limit), claude or codex"),
+    Key("brain.effort", "effort", "low", _choice(*EFFORTS), "Claude's effort: low, medium, high, xhigh or max"),
+]
+BY_PATH = {k.path: k for k in KEYS}
+BY_FLAT = {k.flat: k for k in KEYS}
+
+HEADER = """Auren's settings. Edit them here or with `auren config set KEY VALUE`; the bar panel and
+auren-ctl change some of them too (comments and order are kept)."""
+
+
+def defaults() -> dict:
+    return {k.flat: k.default for k in KEYS}
+
+
+def _lookup(doc: dict, path: str) -> Any:
+    node: Any = doc
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            raise KeyError(path)
+        node = node[part]
+    return node
+
+
+def _plain(value: Any) -> Any:
+    return value.unwrap() if hasattr(value, "unwrap") else value
+
+
+def _unknown(doc: dict, prefix: str = "") -> list[str]:
+    out = []
+    for name, value in doc.items():
+        path = prefix + name
+        if isinstance(value, dict) and not any(k.path == path for k in KEYS):
+            out += _unknown(value, path + ".")
+        elif path not in BY_PATH:
+            out.append(path)
+    return out
+
+
+def read(text: str) -> tuple[dict, list[str]]:
+    """The settings in a config.toml (defaults for what's missing or wrong) and what was wrong."""
+    try:
+        doc = tomlkit.parse(text).unwrap()
+    except tomlkit.exceptions.TOMLKitError as e:
+        return defaults(), [f"config.toml can't be read ({e}): using the defaults"]
+    values, problems = defaults(), []
+    for k in KEYS:
+        try:
+            raw = _lookup(doc, k.path)
+        except KeyError:
+            continue
+        try:
+            values[k.flat] = k.check(raw)
+        except ValueError as e:
+            problems.append(f"{k.path} = {raw!r} should be {e}: using {k.default!r}")
+    problems += [f"unknown setting {p}" for p in _unknown(doc)]
+    return values, problems
+
+
+def _template(values: dict) -> tomlkit.TOMLDocument:
+    doc = tomlkit.document()
+    for line in HEADER.splitlines():
+        doc.add(tomlkit.comment(line))
+    doc.add(tomlkit.nl())
+    tables: dict[str, Any] = {}
+    for k in KEYS:
+        section, _, name = k.path.rpartition(".")
+        target = doc
+        if section:
+            if section not in tables:
+                tables[section] = tomlkit.table()
+                doc.add(section, tables[section])
+            target = tables[section]
+        target.add(tomlkit.comment(k.help))
+        target.add(name, values.get(k.flat, k.default))
+        if not section:
+            target.add(tomlkit.nl())
+    return doc
+
+
+def _write(doc: tomlkit.TOMLDocument) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text(tomlkit.dumps(doc))
+    tmp.replace(CONFIG_FILE)
+
+
+def ensure() -> None:
+    """Create config.toml if it's missing: from the old settings.json once, else with the defaults."""
+    if CONFIG_FILE.exists():
+        return
+    values = defaults()
+    if LEGACY.exists():
+        try:
+            old = json.loads(LEGACY.read_text())
+        except (OSError, json.JSONDecodeError):
+            old = {}
+        for flat, raw in (old.items() if isinstance(old, dict) else ()):
+            if (k := BY_FLAT.get(flat)) is not None:
+                try:
+                    values[flat] = k.check(raw)
+                except ValueError:
+                    pass
+    _write(_template(values))
+    if LEGACY.exists():
+        LEGACY.replace(LEGACY.with_name(LEGACY.name + ".bak"))
+        log.info("moved %s into %s", LEGACY, CONFIG_FILE)
+
+
+def load() -> dict:
+    """The daemon's settings (flat), creating config.toml if needed. Problems are logged, never fatal."""
+    ensure()
+    try:
+        text = CONFIG_FILE.read_text()
+    except OSError as e:
+        log.warning("can't read %s: %s", CONFIG_FILE, e)
+        return defaults()
+    values, problems = read(text)
+    for p in problems:
+        log.warning("%s: %s", CONFIG_FILE, p)
+    return values
+
+
+def save(values: dict) -> None:
+    """Write the daemon's settings (flat) into config.toml, keeping everything else in the file."""
+    ensure()
+    try:
+        doc = tomlkit.parse(CONFIG_FILE.read_text())
+    except (OSError, tomlkit.exceptions.TOMLKitError):
+        doc = _template(defaults())          # a broken file is replaced rather than kept broken
+    for flat, value in values.items():
+        k = BY_FLAT.get(flat)
+        if k is None:
+            continue
+        section, _, name = k.path.rpartition(".")
+        target = doc
+        if section:
+            if section not in doc:
+                doc.add(section, tomlkit.table())
+            target = doc[section]
+        if _plain(target.get(name)) != value:
+            target[name] = value
+    _write(doc)
+
+
+def set_value(path: str, raw: str) -> Any:
+    """Check and save one setting given as text; returns the value saved. Raises ValueError."""
+    k = BY_PATH.get(path)
+    if k is None:
+        raise ValueError(f"unknown setting {path} (see: auren config)")
+    try:
+        value = k.check(raw)
+    except ValueError as e:
+        raise ValueError(f"{path} should be {e}") from None
+    save({k.flat: value})
+    return value
+
+
+# --- auren config ----------------------------------------------------------------------------------
+
+def _tell_daemon() -> str:
+    from .ctl import send
+
+    try:
+        return send("reload", timeout=5)
+    except OSError:
+        return ""
+
+
+def _show() -> int:
+    ensure()
+    values, problems = read(CONFIG_FILE.read_text())
+    print(f"\033[2m{CONFIG_FILE}\033[0m")
+    for k in KEYS:
+        v = values[k.flat]
+        shown = json.dumps(v) if isinstance(v, (str, bool)) else v
+        print(f"  {k.path} = {shown}" + ("" if v != k.default else "  \033[2m(default)\033[0m"))
+    for p in problems:
+        print(f"\033[33m! {p}\033[0m")
+    return 1 if problems else 0
+
+
+def main(args: list[str]) -> int:
+    cmd = args[0] if args else "show"
+    if cmd == "show" and len(args) <= 1:
+        return _show()
+    if cmd == "path" and len(args) == 1:
+        print(CONFIG_FILE)
+        return 0
+    if cmd == "get" and len(args) == 2:
+        if args[1] not in BY_PATH:
+            print(f"unknown setting {args[1]}", file=sys.stderr)
+            return 1
+        print(load()[BY_PATH[args[1]].flat])
+        return 0
+    if cmd == "set" and len(args) >= 3:
+        try:
+            value = set_value(args[1], " ".join(args[2:]))
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
+        reply = _tell_daemon()
+        print(f"{args[1]} = {json.dumps(value)}" + (f" ({reply})" if reply else " (used when Auren starts)"))
+        return 0
+    if cmd == "edit" and len(args) == 1:
+        ensure()
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+        subprocess.run([*editor.split(), str(CONFIG_FILE)])
+        code = _show()
+        if reply := _tell_daemon():
+            print(reply)
+        return code
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2

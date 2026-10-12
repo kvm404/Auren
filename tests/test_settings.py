@@ -1,0 +1,84 @@
+import json
+
+import pytest
+
+from auren import settings
+
+
+@pytest.fixture
+def cfg(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "CONFIG_FILE", tmp_path / "config.toml")
+    monkeypatch.setattr(settings, "LEGACY", tmp_path / "settings.json")
+    return tmp_path
+
+
+def test_choices_match_the_code_that_uses_them():
+    from auren.brain import Brain
+    from auren.brain.prompt import LANGUAGES
+    from auren.voice import TUNING
+
+    assert settings.MODES == Brain.MODES and settings.EFFORTS == Brain.EFFORTS
+    assert settings.LANGUAGES == tuple(LANGUAGES)
+    for name, (default, low, high) in TUNING.items():
+        k = settings.BY_FLAT[name]
+        assert k.default == default and k.check(low) == low and k.check(high) == high
+        with pytest.raises(ValueError):
+            k.check(high + 1)
+
+
+def test_a_new_config_has_every_setting_with_its_help(cfg):
+    assert settings.load() == settings.defaults()
+    text = (cfg / "config.toml").read_text()
+    for k in settings.KEYS:
+        assert k.help in text
+    assert settings.read(text) == (settings.defaults(), [])
+
+
+def test_settings_json_is_moved_in_once(cfg):
+    (cfg / "settings.json").write_text(json.dumps(
+        {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
+         "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1, "nonsense": 1}))
+    values = settings.load()
+    assert values == {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
+                      "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1}
+    assert not (cfg / "settings.json").exists() and (cfg / "settings.json.bak").exists()
+    assert settings.load() == values
+
+
+def test_saving_keeps_the_users_comments_and_extras(cfg):
+    (cfg / "config.toml").write_text('# mine\nlanguage = "en"  # english please\n\n[voice]\nspeed = 1.1\n')
+    settings.save({"speed": 1.3, "brain": "claude", "language": "en"})
+    text = (cfg / "config.toml").read_text()
+    assert "# mine" in text and "# english please" in text
+    values, problems = settings.read(text)
+    assert values["speed"] == 1.3 and values["brain"] == "claude" and problems == []
+
+
+def test_bad_values_fall_back_and_are_reported(cfg):
+    values, problems = settings.read('language = "fr"\n[voice]\nspeed = 9\nname = "Z9"\n[extra]\nx = 1\n')
+    assert values["language"] == "en" and values["speed"] == 1.05 and values["voiceName"] == "F2"
+    assert len(problems) == 4 and any("extra.x" in p for p in problems)
+    values, problems = settings.read("this is = not toml [")
+    assert values == settings.defaults() and problems
+
+
+def test_set_value_checks_and_converts(cfg):
+    assert settings.set_value("voice.enabled", "off") is False
+    assert settings.set_value("voice.steps", "6.6") == 7
+    with pytest.raises(ValueError, match="unknown"):
+        settings.set_value("voice.pitch", "2")
+    with pytest.raises(ValueError, match="auto or claude or codex"):
+        settings.set_value("brain.mode", "gpt")
+    assert settings.load()["voice"] is False and settings.load()["steps"] == 7
+
+
+def test_auren_config_set_and_get(cfg, monkeypatch, capsys):
+    monkeypatch.setattr(settings, "_tell_daemon", lambda: "")
+    assert settings.main(["set", "brain.effort", "high"]) == 0
+    assert "used when Auren starts" in capsys.readouterr().out
+    assert settings.main(["get", "brain.effort"]) == 0
+    assert capsys.readouterr().out == "high\n"
+    assert settings.main(["set", "brain.effort", "ludicrous"]) == 1
+    assert settings.main(["show"]) == 0
+    assert "brain.effort = \"high\"" in capsys.readouterr().out
+    assert settings.main(["frobnicate"]) == 2
