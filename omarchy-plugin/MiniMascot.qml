@@ -1,18 +1,18 @@
 import QtQuick
 
-// The mascot at bar size, in pixels (one unit = 1 px on a 16 px canvas): Clawd, Veyra or Auren.
+// The mascot at bar size, in pixels (one unit = 1 px on a 16 px canvas): Auren or Veyra.
 // Bar colour when idle, the mascot's own colour while auren works, red on errors, dim with shut eyes
 // when off. Bobs while active, quicker while listening.
 Item {
   id: m
 
-  property string kind: "clawd"       // clawd, veyra, auren
+  property string kind: "auren"       // auren, veyra
   property string mood: "idle"        // off, idle, listening, thinking, working, speaking, error, awaiting
   property color foreground: "white"
   readonly property bool active: mood !== "idle" && mood !== "off"
   readonly property bool lit: active || mood === "awaiting"
   readonly property bool off: mood === "off"
-  readonly property color brand: kind === "veyra" ? "#A08BF7" : kind === "auren" ? "#6F92D8" : "#D77757"
+  readonly property color brand: kind === "veyra" ? "#A08BF7" : "#6F92D8"
   readonly property color skin: off ? Qt.darker(foreground, 1.9) : mood === "error" ? "#e05d5d" : lit ? brand : foreground
   readonly property real u: Math.max(1, Math.floor(width / 16))
 
@@ -26,7 +26,7 @@ Item {
       off ? [5, 6, 2, 1, "e"] : [5, 5, 2, 2, "e"], off ? [9, 6, 2, 1, "e"] : [9, 5, 2, 2, "e"],
       [5, 10, 2, 1, "s"], [9, 10, 2, 1, "s"]
     ]
-    if (kind === "auren") return [
+    return [
       [7, 0, 2, 2, "g"],
       [4, 2, 8, 1, "s"], [3, 3, 10, 6, "s"], [4, 9, 8, 1, "s"],
       [5, 4, 6, 3, "v"],
@@ -34,14 +34,8 @@ Item {
       [0, 5, 2, 2, "s"], listen ? [14, 3, 2, 2, "s"] : [14, 5, 2, 2, "s"],
       [7, 11, 2, 1, "h"]
     ]
-    var arm = listen ? 3 : 4
-    return [
-      [2, 0, 12, 8, "s"], [0, arm, 2, 2, "s"], [14, arm, 2, 2, "s"],
-      [3, 8, 1, 2, "s"], [5, 8, 1, 2, "s"], [10, 8, 1, 2, "s"], [12, 8, 1, 2, "s"],
-      off ? [4, 3, 1, 1, "e"] : [4, 2, 1, 2, "e"], off ? [11, 3, 1, 1, "e"] : [11, 2, 1, 2, "e"]
-    ]
   }
-  readonly property int rows: kind === "auren" ? 12 : kind === "veyra" ? 11 : 10
+  readonly property int rows: kind === "veyra" ? 11 : 12
 
   function colorOf(role) {
     switch (role) {

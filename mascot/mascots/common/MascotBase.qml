@@ -2,7 +2,7 @@ import QtQuick
 
 // What every mascot shares: the contract with shell.qml and the bar plugin, the clock, mood weights,
 // one-off moves (poke, shake, cheer), blinking, glancing and where the eyes look. A mascot is a
-// MascotBase plus its own drawing (see clawd/, veyra/, auren/).
+// MascotBase plus its own drawing (see auren/, veyra/).
 //
 // The contract (shell.qml and the bar plugin rely on it):
 //   in:  u, mood, level, drowsy, asleep, sleepAnimation, mouse, awaiting, hovered, pointerX/Y, off

@@ -10,7 +10,7 @@ import qs.Ui
 //                 dim with shut eyes when auren is off
 //   click         the panel, four pages:
 //                   Home    the live mascot (click it to talk), status, last exchange, quick switches
-//                   Mascot  Clawd, Veyra or Auren; speech bubble, sleep animation, voice follows mascot, fade, size
+//                   Mascot  Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
 //                   Voice   spoken replies, reply language (English, Hindi), voice (F2, M3, F1, M1), speed,
 //                           quality, volume, pause, test
 //                   Brain   auto / Claude / Codex, Claude's effort, restart, log, today's numbers
@@ -40,12 +40,12 @@ Panel {
 
   // ---- the mascots ----------------------------------------------------------------------------
   readonly property var mascots: [
-    { kind: "clawd", name: "Clawd", tip: "the original", color: "#D77757", voice: "F2", hello: "Hi, it's Clawd." },
-    { kind: "veyra", name: "Veyra", tip: "fox spirit", color: "#A08BF7", voice: "F2", hello: "Hi, I'm Veyra." },
-    { kind: "auren", name: "Auren", tip: "hover-bot", color: "#F5B83D", voice: "M3", hello: "Hey, I'm Auren." }
+    { kind: "auren", name: "Auren", tip: "hover-bot", color: "#F5B83D", voice: "M3", hello: "Hey, I'm Auren." },
+    { kind: "veyra", name: "Veyra", tip: "fox spirit", color: "#A08BF7", voice: "F2", hello: "Hi, I'm Veyra." }
   ]
-  readonly property string kind: ["clawd", "veyra", "auren"].indexOf(mascotPrefs.mascot) >= 0 ? mascotPrefs.mascot : "clawd"
-  readonly property var mascot: mascots[["clawd", "veyra", "auren"].indexOf(kind)]
+  function mascotOf(k) { return mascots.find(function(m) { return m.kind === k }) }
+  readonly property string kind: mascotOf(mascotPrefs.mascot) ? mascotPrefs.mascot : "auren"
+  readonly property var mascot: mascotOf(kind)
   readonly property color accent: mascot.color
   function mascotFile(k) {
     return "file://" + dataDir + "/mascot/mascots/" + k + "/" + k.charAt(0).toUpperCase() + k.slice(1) + ".qml"
@@ -132,7 +132,7 @@ Panel {
       property int sleepAfter: 240
       property bool bubble: true
       property bool sleepAnimation: true
-      property string mascot: "clawd"
+      property string mascot: "auren"
       property bool matchVoice: true      // picking a mascot also picks its voice (Auren speaks with M3)
     }
   }
@@ -212,7 +212,7 @@ Panel {
   }
   function togglePref(name) { mascotPrefs[name] = !mascotPrefs[name]; savePrefs() }
   function setMascot(k) {
-    var m = root.mascots[["clawd", "veyra", "auren"].indexOf(k)]
+    var m = root.mascotOf(k)
     if (!m) return
     if (k !== root.kind) { mascotPrefs.mascot = k; savePrefs() }
     if (mascotPrefs.matchVoice && root.daemonAlive && root.voiceOn && root.mood === "idle")
@@ -280,7 +280,7 @@ Panel {
   readonly property var rows: {
     var tabs = { n: 4, act: function(c) { root.showPage(c) } }
     if (page === 1) return [tabs,
-      { n: 3, act: function(c) { root.setMascot(root.mascots[c].kind) } },
+      { n: root.mascots.length, act: function(c) { root.setMascot(root.mascots[c].kind) } },
       { n: 1, act: function() { root.togglePref("bubble") } },
       { n: 1, act: function() { root.togglePref("sleepAnimation") } },
       { n: 1, act: function() { root.togglePref("matchVoice") } },
@@ -559,11 +559,11 @@ Panel {
           spacing: Style.space(10)
           visible: root.page === 1
 
-          Row {         // the three mascots, live
+          Row {         // the mascots, live
             id: cards
             width: parent.width
             spacing: Style.space(6)
-            readonly property real cell: (width - spacing * 2) / 3
+            readonly property real cell: (width - spacing * (root.mascots.length - 1)) / root.mascots.length
             Repeater {
               model: root.mascots
               Rectangle {
@@ -654,7 +654,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Voice follows mascot"
-            description: root.mascots[2].name + " speaks with " + root.mascots[2].voice + ", the others with F2"
+            description: root.mascots.map(function(m) { return m.name + " speaks with " + m.voice }).join(", ")
             checked: mascotPrefs.matchVoice
             foreground: root.fg; fontFamily: root.font
             hasCursor: root.has(4)
