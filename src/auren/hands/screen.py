@@ -78,7 +78,9 @@ def _with_grid(png: Path) -> tuple[bytes, int, int]:
     """Draw a light, labelled grid so the model reads coordinates off the image instead of estimating them.
     Returns (jpeg, width, height) as actually captured."""
     import io
-    from PIL import Image as PILImage, ImageDraw
+
+    from PIL import Image as PILImage
+    from PIL import ImageDraw
     img = PILImage.open(png).convert("RGB")
     w, h = img.size
     overlay = PILImage.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -112,7 +114,8 @@ def _device():
     """A virtual mouse (buttons + wheel). Kept open: a new input device takes a moment to be picked up."""
     global _mouse
     if _mouse is None:
-        from evdev import UInput, ecodes as e
+        from evdev import UInput
+        from evdev import ecodes as e
         try:
             _mouse = UInput({e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE],
                              e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL]}, name="auren-virtual-mouse")
@@ -183,7 +186,8 @@ def _modifiers():
     """A virtual keyboard with only the modifier keys, for holding them during a drag."""
     global _keyboard
     if _keyboard is None:
-        from evdev import UInput, ecodes as e
+        from evdev import UInput
+        from evdev import ecodes as e
         try:
             _keyboard = UInput({e.EV_KEY: [getattr(e, k) for k in sorted(set(_HOLD.values()))]},
                                name="auren-virtual-modifiers")

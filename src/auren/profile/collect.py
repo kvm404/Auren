@@ -224,8 +224,8 @@ def bookmarks() -> dict[str, list[str]]:
     for browser, path in files.items():
         if not path.exists():
             continue
-        names = []
-        def walk(node, folders):
+        names: list[str] = []
+        def walk(node, folders, names=names):
             if node.get("type") == "folder":
                 for c in node.get("children", []):
                     walk(c, folders + [node.get("name", "")])
