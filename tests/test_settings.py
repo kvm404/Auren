@@ -96,3 +96,31 @@ def test_tables_lists_and_switches(cfg):
         settings.set_value("integrations.herdr", "maybe")
     assert settings.current()["integrations.herdr"] == "auto"
     assert settings.defaults()["projects.folders"] is not settings.defaults()["projects.folders"]
+
+
+def test_a_file_with_a_mistake_is_left_alone(cfg):
+    (cfg / "config.toml").write_text("[voice\nspeed = 1.1\n")       # half-way through an edit
+    assert settings.save({"voice": False}) is False
+    assert (cfg / "config.toml").read_text() == "[voice\nspeed = 1.1\n"
+    with pytest.raises(ValueError, match="mistake"):
+        settings.set_value("voice.enabled", "off")
+
+
+def test_parallel_writers_keep_each_others_changes(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.setattr(settings, "CONFIG_FILE", tmp_path / "auren" / "config.toml")
+    monkeypatch.setattr(settings, "LEGACY", tmp_path / "auren" / "settings.json")
+    settings.ensure()
+    env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path)}
+    changes = [("voice.speed", "1.3"), ("voice.volume", "0.5"), ("voice.pause", "0.4"), ("voice.steps", "9"),
+               ("brain.effort", "high"), ("language", "hi")]
+    procs = [subprocess.Popen([sys.executable, "-c", f"from auren import settings; settings.set_value({p!r}, {v!r})"],
+                              env=env) for p, v in changes]
+    assert [p.wait() for p in procs] == [0] * len(procs)
+    got = settings.load()
+    assert (got["speed"], got["volume"], got["pause"], got["steps"], got["effort"], got["language"]) == \
+        (1.3, 0.5, 0.4, 9, "high", "hi")
+    assert not list((tmp_path / "auren").glob(".config.*.tmp"))

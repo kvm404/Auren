@@ -259,3 +259,17 @@ def test_a_cancel_before_the_brain_starts_still_stops_the_request(tmp_path, monk
 
     asyncio.run(run())
     assert answered == [] and records[-1]["reply"] == "(cancelled)"
+
+
+def test_a_panel_change_keeps_edits_made_to_the_file(tmp_path, monkeypatch):
+    import asyncio
+
+    _config_in(tmp_path, monkeypatch)
+    d = _Quiet()
+    d.settings = settings.load()
+    d.brain = _FakeBrain()
+    settings.set_value("brain.mode", "codex")             # edited, not reloaded yet
+    settings.set_value("integrations.browser", "false")
+    assert asyncio.run(d.command("voice off")) == "voice off"
+    saved = settings.load()
+    assert saved["brain"] == "codex" and saved["integrations.browser"] is False and saved["voice"] is False
