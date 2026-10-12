@@ -63,7 +63,7 @@ def language_of(sentence: str) -> str:
 class Voice:
     def __init__(self, voice: str = "F2", steps: int = 5, speed: float = 1.05, volume: float = 1.0, pause: float = 0.0,
                  on_level: Callable[[float], None] | None = None, on_sentence: Callable[[str], None] | None = None):
-        from supertonic import TTS          # loads the ONNX models (~380 MB, cached in ~/.cache/supertonic3)
+        from supertonic import TTS  # loads the ONNX models (~380 MB, cached in ~/.cache/supertonic3)
 
         self.tts = TTS(auto_download=True)
         self.name = voice

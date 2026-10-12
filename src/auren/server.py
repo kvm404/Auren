@@ -17,7 +17,8 @@ import traceback
 from mcp.server.mcpserver import Image, MCPServer
 
 from . import safety
-from .hands import browser as web, desktop, herdr, screen
+from .hands import browser as web
+from .hands import desktop, herdr, screen
 from .profile import Profile
 
 server = MCPServer(

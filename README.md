@@ -113,7 +113,10 @@ tests/             uv run pytest
 
 ## Docs
 
+- [Architecture](docs/architecture.md): the design that makes Auren work on any Omarchy machine, and
+  its build order. [Daemon contract](docs/ipc.md): state file, socket commands, files.
 - [Roadmap](docs/roadmap.md): pieces, status, what's next.
+- [Contributing](CONTRIBUTING.md).
 - Decisions: [voice](docs/decisions/0001-assistant-voice.md),
   [speech-to-text](docs/decisions/0002-speech-to-text.md), [brain](docs/decisions/0003-brain.md).
 - How it works: [daemon](docs/daemon.md), [hands](docs/hands.md), [safety](docs/safety.md),

@@ -158,7 +158,7 @@ class Listening:
             self.mic.send_signal(signal.SIGINT)
             try:
                 await asyncio.wait_for(self.mic.wait(), 2)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.mic.kill()
         for t in self._tasks:
             if not t.done():

@@ -59,7 +59,7 @@ def _apps(a: dict) -> list[str]:
     web = [f"{x['name']} ({re.sub(r'^https?://(www\.)?', '', x['url']).rstrip('/')})" for x in a["webapps"]]
     tuis = sorted({x["name"] for x in a["tuis"]}, key=str.lower)
     lines = [f"- apps ({len(names)}): " + ", ".join(names),
-             f"- web apps (open in the browser's app mode): " + ", ".join(web)]
+             "- web apps (open in the browser's app mode): " + ", ".join(web)]
     if tuis:
         lines.append("- terminal apps: " + ", ".join(tuis))
     if a.get("not_installed"):

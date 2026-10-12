@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import time
@@ -328,7 +327,7 @@ def browser_type(target: str, text: str, submit: bool = False, tab: int | None =
         raise BrowserError(f"no field number {target} (read the page again)")
     if submit:
         _wait_ready(b, t)
-        return f"typed and submitted\n\n" + browser_read(t)
+        return "typed and submitted\n\n" + browser_read(t)
     return "typed"
 
 

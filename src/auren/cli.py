@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from .brain import Brain, BrainError, ClaudeBrain, CodexBrain, UsageLimit
+from .brain import Brain, BrainError, CodexBrain, UsageLimit
 
 DIM, BOLD, RED, END = "\033[2m", "\033[1m", "\033[31m", "\033[0m"
 

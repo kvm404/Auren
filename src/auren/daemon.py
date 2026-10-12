@@ -260,7 +260,7 @@ class Daemon:
         else:
             if not words or len(words) % 2 or any(k not in TUNING for k in words[::2]):
                 return "usage: tts speed 0.7..1.6 | steps 2..12 | volume 0.1..1 | pause 0..1 | reset"
-            values = tuning({**self.settings, **dict(zip(words[::2], words[1::2]))})
+            values = tuning({**self.settings, **dict(zip(words[::2], words[1::2], strict=True))})
         self.settings.update(values)
         save_settings(self.settings)
         if self.voice:
