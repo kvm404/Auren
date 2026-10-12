@@ -190,8 +190,7 @@ class Daemon:
                 self.voice.set_voice(name)
             except ValueError as e:
                 return str(e)
-            self.settings["voiceName"] = self.voice.name
-            save_settings(self.settings)
+            self._save({"voiceName": self.voice.name})
             self.brain.set_language(self.settings["language"], self.speaker)
             self._refresh_state()
             if self.state == "idle":
@@ -215,8 +214,7 @@ class Daemon:
             want = {"on": True, "off": False, "toggle": not self.settings["voice"]}.get(arg.strip())
             if want is None:
                 return "usage: voice on|off|toggle"
-            self.settings["voice"] = want
-            save_settings(self.settings)
+            self._save({"voice": want})
             if not want and self.voice:
                 self.voice.stop()
             self._refresh_state()
@@ -225,8 +223,8 @@ class Daemon:
             mode = arg.strip()
             if mode not in Brain.MODES:
                 return "usage: brain auto|claude|codex"
-            self.settings["brain"] = self.brain.mode = mode
-            save_settings(self.settings)
+            self.brain.mode = mode
+            self._save({"brain": mode})
             asyncio.create_task(self._warm())
             self._refresh_state()
             return "brain " + mode
@@ -234,8 +232,7 @@ class Daemon:
             lang = arg.strip()
             if lang not in LANGUAGES:
                 return "usage: language " + "|".join(LANGUAGES)
-            self.settings["language"] = lang
-            save_settings(self.settings)
+            self._save({"language": lang})
             self.brain.set_language(lang, self.speaker)
             self._refresh_state()
             return "language " + lang
@@ -243,8 +240,7 @@ class Daemon:
             level = arg.strip()
             if level not in Brain.EFFORTS:
                 return "usage: effort " + "|".join(Brain.EFFORTS)
-            self.settings["effort"] = level
-            save_settings(self.settings)
+            self._save({"effort": level})
             asyncio.create_task(self._set_claude(effort=level))
             return "effort " + level
         if cmd == "status":
@@ -258,6 +254,12 @@ class Daemon:
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
         return f"unknown command: {cmd}"
+
+    def _save(self, changes: dict) -> None:
+        """Use these settings now and write only them to config.toml: edits made to the file since the
+        last reload stay as they are."""
+        self.settings.update(changes)
+        save_settings(changes)
 
     def _reload(self) -> str:
         """Apply config.toml as it is now (after `auren config set` or an edit)."""
@@ -299,8 +301,7 @@ class Daemon:
             if not words or len(words) % 2 or any(k not in TUNING for k in words[::2]):
                 return "usage: tts speed 0.7..1.6 | steps 2..12 | volume 0.1..1 | pause 0..1 | reset"
             values = tuning({**self.settings, **dict(zip(words[::2], words[1::2], strict=True))})
-        self.settings.update(values)
-        save_settings(self.settings)
+        self._save(values)
         if self.voice:
             self.voice.tune(values)
         self._refresh_state()

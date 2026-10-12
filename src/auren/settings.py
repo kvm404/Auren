@@ -16,13 +16,16 @@ is migrated once, then kept as settings.json.bak.
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import fcntl
 import json
 import logging
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -241,16 +244,38 @@ def _template(values: dict) -> tomlkit.TOMLDocument:
     return doc
 
 
-def _write(doc: tomlkit.TOMLDocument) -> None:
+@contextlib.contextmanager
+def _locked():
+    """One writer at a time across processes (the daemon, auren config): each reads, changes and writes
+    the file whole, so two at once would lose one's change."""
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_FILE.with_suffix(".tmp")
-    tmp.write_text(tomlkit.dumps(doc))
-    tmp.replace(CONFIG_FILE)
+    with open(CONFIG_FILE.with_name(".config.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def _write(doc: tomlkit.TOMLDocument) -> None:
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_FILE.parent, prefix=".config.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(tomlkit.dumps(doc))
+        os.replace(tmp, CONFIG_FILE)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def ensure() -> None:
     """Create config.toml if it's missing: from the old settings.json once, else with the defaults."""
     if CONFIG_FILE.exists():
+        return
+    with _locked():
+        _ensure()
+
+
+def _ensure() -> None:
+    if CONFIG_FILE.exists():            # another process made it while we waited
         return
     values = defaults()
     if LEGACY.exists():
@@ -300,13 +325,22 @@ def current() -> dict:
     return _current[1]
 
 
-def save(values: dict) -> None:
-    """Write the daemon's settings (flat) into config.toml, keeping everything else in the file."""
-    ensure()
-    try:
-        doc = tomlkit.parse(CONFIG_FILE.read_text())
-    except (OSError, tomlkit.exceptions.TOMLKitError):
-        doc = _template(defaults())          # a broken file is replaced rather than kept broken
+def save(values: dict) -> bool:
+    """Write these settings (flat) into config.toml, keeping everything else in the file. A file with a
+    mistake in it is left alone (the user may be editing it): returns False, and nothing is saved."""
+    with _locked():
+        _ensure()
+        try:
+            doc = tomlkit.parse(CONFIG_FILE.read_text())
+        except (OSError, tomlkit.exceptions.TOMLKitError) as e:
+            log.warning("%s can't be read (%s): not saving %s until it's fixed", CONFIG_FILE, e, ", ".join(values))
+            return False
+        _update(doc, values)
+        _write(doc)
+    return True
+
+
+def _update(doc: tomlkit.TOMLDocument, values: dict) -> None:
     for flat, value in values.items():
         k = BY_FLAT.get(flat)
         if k is None:
@@ -319,7 +353,6 @@ def save(values: dict) -> None:
             target = doc[section]
         if _plain(target.get(name)) != value:
             target[name] = _item(value)
-    _write(doc)
 
 
 def set_value(path: str, raw: str) -> Any:
@@ -331,7 +364,8 @@ def set_value(path: str, raw: str) -> Any:
         value = k.check(raw)
     except ValueError as e:
         raise ValueError(f"{path} should be {e}") from None
-    save({k.flat: value})
+    if not save({k.flat: value}):
+        raise ValueError(f"{CONFIG_FILE} has a mistake in it: fix it first (auren config edit)")
     return value
 
 
