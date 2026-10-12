@@ -46,7 +46,7 @@ UNITS = ("auren", "auren-mascot")
 BUSY = {"starting", "listening", "thinking", "working", "speaking"}
 IDLE_WAIT = 15 * 60                                # how long an update waits for Auren to be idle
 INSTALL_TIMEOUT = 20 * 60
-LOCK_WAIT = 5 * 60                                 # how long the update waits for a check to finish
+LOCK_WAIT = 10 * 60                                # how long the update waits for a check to finish
 UPDATE_TIMEOUT = IDLE_WAIT + INSTALL_TIMEOUT * 2 + 10 * 60    # an "updating" status older than this is stale
 # The session's environment the update needs: the user manager's may lack PATH entries (uv), custom XDG
 # folders, and what git signs in with (gh, an SSH agent, tokens).
@@ -178,11 +178,9 @@ def _fetch(info: dict) -> tuple[Path, bool, str]:
 
 def check(notify: bool = False) -> dict:
     """Look for a newer version; the result is also the panel's status."""
-    if _updating():
-        return status()                         # the update reports; a check would hide its progress
     with _lock() as got:
-        if not got:
-            return status()                     # an update (or another check) is running: it reports
+        if not got or _updating():              # an update (or another check) is running: it reports, and
+            return status()                     # a check would hide its progress
         info = installed()
         if not info.get("commit"):
             return _write(state="unknown", checked_at=time.time(),
@@ -231,11 +229,9 @@ def _notify_once(result: dict) -> None:
 
 def start() -> dict:
     """Start the update in its own transient systemd unit and return at once."""
-    if _updating():
-        return status()
     with _lock() as got:
-        if not got:
-            return status()                     # a check is running: try again in a moment
+        if not got or _updating():              # a check is running (try again in a moment), or an update
+            return status()
         data = _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
         env = [f"--setenv={k}" for k in PASS_ENV if k in os.environ]    # a name alone: the value from here
         cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit=auren-update-{os.getpid()}-{int(time.time())}",
@@ -382,13 +378,15 @@ def _update() -> tuple[str, bool]:
     _step("Waiting for Auren to finish…")
     _wait_idle()
     running = {u: _systemctl("is-active", "--quiet", u) == 0 for u in UNITS}
+    enabled = {u: _systemctl("is-enabled", "--quiet", u) == 0 for u in UNITS}
     _step("Stopping Auren…")
-    failure = None
+    failure, back_to = None, before
     try:
         if _systemctl("stop", *UNITS):
             raise UpdateError("Couldn't stop Auren, so nothing was changed")
         if dev:
             _dev_ready(repo)                   # again: the wait was long enough to switch branches
+            back_to = _git(repo, "rev-parse", "HEAD")    # its commits since the install stay on the branch
         _step("Downloading…")
         _checkout(repo, dev, target)
         _step("Installing…")
@@ -397,15 +395,19 @@ def _update() -> tuple[str, bool]:
         except UpdateError as e:
             _step("The install failed: going back to the version that was there…")
             try:
-                _back(repo, dev, before)
+                _back(repo, dev, back_to)
                 _install(repo, dev)
             except UpdateError as again:
                 raise UpdateError(f"{e}. Going back failed too ({again}): run ./install.sh in "
                                   f"{info.get('source') or 'your checkout'}") from e
-            raise UpdateError(f"{e}. Auren is back on {before[:7]}.") from e
+            raise UpdateError(f"{e}. Auren is back on {back_to[:7]}.") from e
     except Exception as e:                     # whatever happened, Auren is started again below
         failure = e if isinstance(e, UpdateError) else UpdateError(f"unexpected error: {e}")
-    _step("Starting Auren…")
+    with contextlib.suppress(OSError):         # a full disk mustn't keep Auren stopped
+        _step("Starting Auren…")
+    for unit, was in enabled.items():          # an older install.sh enables them
+        if not was:
+            _systemctl("disable", unit)
     stuck = [u for u, was in running.items()   # as they were; restart: their files changed
              if _systemctl("restart" if was else "stop", u) or (was and not _started(u))]
     trouble = f" {' and '.join(stuck)} didn't start: see its log (journalctl --user -u {stuck[0]})." if stuck else ""

@@ -50,12 +50,19 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("INSTALL_INFO", str(info))
     calls, shell = [], []
     active = {"auren": True, "auren-mascot": False}
+    enabled = {"auren": True, "auren-mascot": True}
     broken = set()                                     # actions that fail, like "stop"
 
     def systemctl(*args):
         calls.append(args)
         if args[0] == "is-active":
             return 0 if active[args[-1]] else 3
+        if args[0] == "is-enabled":
+            return 0 if enabled[args[-1]] else 1
+        if args[0] in ("enable", "disable"):
+            for u in args[1:]:
+                enabled[u] = args[0] == "enable"
+            return 0
         if args[0] in broken:
             return 1
         for u in args[1:]:
@@ -68,7 +75,7 @@ def env(tmp_path, monkeypatch):
         pass
     e = Env()
     e.remote, e.first, e.info, e.calls, e.active, e.shell, e.tmp = remote, first, info, calls, active, shell, tmp_path
-    e.broken = broken
+    e.broken, e.enabled = broken, enabled
     e.installs = lambda: (tmp_path / "installs").read_text().split() if (tmp_path / "installs").exists() else []
 
     def install_info(commit, mode="install", **more):
@@ -215,6 +222,26 @@ def test_a_failed_dev_update_goes_back(env):
     assert update.run() == 1
     assert git(checkout, "rev-parse", "HEAD") == env.first and not (checkout / "fail").exists()
     assert env.first[:7] in update.status()["message"]
+
+
+def test_a_failed_dev_update_keeps_commits_pulled_since_the_install(env):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    env.install_info(env.first, mode="dev", source=str(checkout))
+    pulled = commit(env.remote, "a.py", subject="Pulled")
+    git(checkout, "pull", "-q")                              # pulled, not installed yet
+    commit(env.remote, "fail", subject="Broken")
+    assert update.run() == 1
+    assert git(checkout, "rev-parse", "HEAD") == pulled      # back to where the branch was, not the install
+    assert env.installs()[-1] == pulled
+
+
+def test_a_disabled_mascot_stays_disabled(env):
+    env.install_info(env.first)
+    env.enabled["auren-mascot"] = False
+    commit(env.remote, "a.py")
+    assert update.run() == 0
+    assert env.enabled == {"auren": True, "auren-mascot": False}
 
 
 def test_an_install_from_a_local_commit_can_still_go_back(env):

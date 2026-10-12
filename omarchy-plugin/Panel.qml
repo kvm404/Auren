@@ -522,6 +522,8 @@ Panel {
       // the bottom)
       if (cursorRow < pageRows.length && pageRows.length > 1)
         pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height) * cursorRow / (pageRows.length - 1)
+      else if (cursorRow >= pageRows.length)
+        pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height)
       return
     }
     var r = rows[cursorRow]
@@ -592,7 +594,7 @@ Panel {
       Item {
         id: body
         anchors.fill: parent
-        implicitHeight: header.implicitHeight + Style.space(16) + Math.max(nav.implicitHeight, pagesBox.contentHeight)
+        implicitHeight: header.implicitHeight + Style.space(16) + Math.max(nav.implicitHeight, pagesBox.tallest)
                         + Style.space(16) + footer.implicitHeight
 
         // ================= header =================
@@ -680,10 +682,12 @@ Panel {
           clip: true
           boundsBehavior: Flickable.StopAtBounds
           contentWidth: width
-          // as tall as the tallest page, so the panel keeps its size from page to page; on a short screen
-          // the panel is capped and the page scrolls
-          contentHeight: Math.max(homePage.implicitHeight, mascotPage.implicitHeight, voicePage.implicitHeight,
-                                  brainPage.implicitHeight, updatesPage.implicitHeight)
+          // the panel is as tall as the tallest page, so it keeps its size from page to page; on a short
+          // screen it's capped and the page scrolls
+          readonly property real tallest: Math.max(homePage.implicitHeight, mascotPage.implicitHeight,
+                                                   voicePage.implicitHeight, brainPage.implicitHeight,
+                                                   updatesPage.implicitHeight)
+          contentHeight: [homePage, mascotPage, voicePage, brainPage, updatesPage][root.page].implicitHeight
 
           // ---------------- Home ----------------
           Column {
