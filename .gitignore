@@ -14,3 +14,6 @@ secrets*
 *.bak.*
 *~
 .DS_Store
+
+# Panel previews (tests/panel/preview.sh)
+.panel-preview/

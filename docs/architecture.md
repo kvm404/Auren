@@ -55,8 +55,30 @@ Codex) and the order it is built in.
 - `mascot/`, `bar-plugin/`: the UI files (copied, or symlinked to the checkout with `--dev`).
 - `bin/auren-ctl`: what key bindings, the mascot and the bar plugin call.
 - `models/`: the voice model.
+- `install.json`: what was installed (version, commit, branch, the repo it came from, `install` or `dev`),
+  written last, so it only names an install that finished. `auren update` compares it with GitHub.
 
 The systemd units point at these paths, so the checkout can live anywhere.
+
+## Updates
+
+`auren update` (`src/auren/update.py`, and the panel's Updates page) installs the newest commit on `main`
+for now; releases will take its place (`CHANNEL`). It works from its own clone in `~/.cache/auren/source`,
+never a checkout you work in, except for a `--dev` install, whose checkout it fast-forwards when it's on
+a clean `main`. The update runs in a transient systemd unit (`systemd-run --user`, given the session's
+PATH, XDG folders and git sign-in: SSH agent, `GH_TOKEN`), so stopping Auren or restarting the bar doesn't
+stop it: wait until Auren is idle, stop `auren` and `auren-mascot` (if they won't stop, nothing changes),
+run the new `install.sh` (with `AUREN_UPDATE=1`, so it leaves the services alone), then restart the ones
+that were running and leave the others stopped. The panel's power buttons wait while it runs.
+
+It never changes what it can't put back: before touching anything it makes sure the installed commit is
+in its clone (fetching it from the checkout it came from if GitHub doesn't have it), and a failed install
+(or one past 20 minutes, which stops everything it started) puts that commit back and installs it again;
+a `--dev` checkout goes back with `git reset --keep`. One check or update at a time (`update.lock`); a
+check doesn't replace the progress of a running update. If `omarchy-plugin/` changed, `omarchy restart
+shell` loads the new panel. Progress goes to `$XDG_RUNTIME_DIR/auren/update.json`, the install's output to
+`~/.local/state/auren/update.log`. `install.json` notes whether the checkout had uncommitted changes, and
+the panel says an update replaces them.
 
 ## Build order
 

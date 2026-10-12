@@ -75,9 +75,12 @@ It ends with `auren doctor`, which checks everything Auren needs and says how to
 2. Add the two key bindings and the layer rule that `install.sh` prints to your Hyprland config.
 3. Restart the services: `systemctl --user restart auren auren-mascot`.
 
-The install is a copy, so the checkout can move. To update: `git pull && ./install.sh`. To work on
-Auren, use `./install.sh --dev` instead, which links the install to the checkout (see
-[CONTRIBUTING.md](CONTRIBUTING.md)).
+The install is a copy, so the checkout can move. To update, use the panel's **Updates** page or
+`auren update`: it shows what's new, asks, then installs the newest version and restarts Auren when it's
+idle (putting the old version back if the install fails). For now updates come from the `main` branch;
+releases will replace that. `git pull && ./install.sh` still works too. To work on Auren, use
+`./install.sh --dev` instead, which links the install to the checkout (see
+[CONTRIBUTING.md](CONTRIBUTING.md)): `auren update` then pulls that checkout, but only on a clean `main`.
 
 ## Using it
 
@@ -87,8 +90,9 @@ Auren, use `./install.sh --dev` instead, which links the install to the checkout
 | Super+Shift+A | The same, in a fresh conversation (or say "start fresh") |
 | Click the mascot | Talk (same as Super+A); while it thinks, works or speaks, stop it |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
-| Bar icon | Open the panel (Home, Mascot, Voice, Brain); right-click for a fresh conversation |
+| Bar icon | Open the panel (Home, Mascot, Voice, Brain, Updates); right-click for a fresh conversation. A dot on it: an update is out |
 | `auren doctor` | What works on this machine and how to fix what doesn't |
+| `auren update` | Check for a newer version and install it if you say so (`check`, `apply`, `status`) |
 | `auren chat` | Type requests in a terminal and see the tool calls |
 | `auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `language en\|hi`, `forget`, `quit` |
 

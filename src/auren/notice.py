@@ -30,6 +30,7 @@ ICONS = {
     "thinking": "\U000F07F6",    # thought-bubble
     "stopped": "\U000F0666",     # stop-circle
     "error": "\U000F0028",       # alert-circle
+    "update": "\U000F06B0",      # update
     "auren": "\U000F0674",       # sparkles: anything else Auren does
 }
 
@@ -88,9 +89,10 @@ def show(message: str, kind: str = "auren", ms: int = 1500) -> None:
             _opening.append(p)
 
 
-def notify(headline: str, text: str = "", kind: str = "auren") -> None:
-    """Something to read in full (a reply, an error), as a notification, unless the mascot shows it."""
-    if mascot_showing():
+def notify(headline: str, text: str = "", kind: str = "auren", always: bool = False) -> None:
+    """Something to read in full (a reply, an error), as a notification, unless the mascot shows it
+    (`always`: news the mascot doesn't show, like an update)."""
+    if not always and mascot_showing():
         return
     _spawn(["omarchy-notification-send", "--app-name", "auren", "-g", ICONS.get(kind, ICONS["auren"]),
             *(["-u", "normal"] if kind == "error" else []), headline, *([text] if text else [])])

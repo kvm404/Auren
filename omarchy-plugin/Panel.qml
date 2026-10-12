@@ -7,21 +7,25 @@ import qs.Ui
 // auren in the Omarchy bar: the chosen mascot in pixels, showing what auren is doing, and a panel.
 //
 //   bar icon      bar colour when idle; the mascot's colour, bobbing, while auren listens/thinks/works/speaks;
-//                 dim with shut eyes when auren is off
-//   click         the panel, four pages:
-//                   Home    the live mascot (click it to talk), status, last exchange, quick switches
-//                   Mascot  Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
-//                   Voice   spoken replies, reply language (English, Hindi), voice (F2, M3, F1, M1), speed,
-//                           quality, volume, pause, test
-//                   Brain   auto / Claude / Codex, Claude's effort, restart, log, today's numbers
+//                 dim with shut eyes when auren is off; a dot when an update is waiting
+//   click         the panel, laid out like Omarchy's settings panels: a header (status, Close), the
+//                 pages on the left, the page on the right, and Auren's on/off, restart and log below:
+//                   Home     the live mascot (click it to talk), status, last exchange, quick switches
+//                   Mascot   Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
+//                   Voice    spoken replies, reply language (English, Hindi), voice (F2, M3, F1, M1), speed,
+//                            quality, volume, pause, test
+//                   Brain    auto / Claude / Codex, Claude's effort, today's numbers
+//                   Updates  the installed version, a check for a newer one, and the update (auren update)
 //   right-click   start a fresh conversation
 //
-// Keys: arrows or hjkl move (left/right on the top row changes page, on a slider changes it), Enter acts,
-// Esc closes, Tab goes to the next bar panel.
+// Keys: arrows or hjkl. Up/down on the pages changes page; right (or Enter) goes into the page, and left
+// from its first column comes back. In a page, up/down moves between rows, left/right between buttons
+// or along a slider; Enter acts, Esc closes, Tab goes to the next bar panel.
 //
-// It reads $XDG_RUNTIME_DIR/auren/state.json (written by the daemon, including the voice settings) and
-// ~/.config/auren/mascot.json (the mascot's preferences, which it also writes), and talks to the daemon
-// through ~/.local/share/auren/bin/auren-ctl; the services are started and stopped with systemctl --user.
+// It reads $XDG_RUNTIME_DIR/auren/state.json (written by the daemon, including the voice settings),
+// $XDG_RUNTIME_DIR/auren/update.json (written by auren update) and ~/.config/auren/mascot.json (the
+// mascot's preferences, which it also writes), and talks to the daemon through
+// ~/.local/share/auren/bin/auren-ctl; the services are started and stopped with systemctl --user.
 Panel {
   id: root
   moduleName: "krvm.auren"
@@ -32,6 +36,7 @@ Panel {
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/auren"
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/auren"
   readonly property string ctl: dataDir + "/bin/auren-ctl"
+  readonly property string aurenBin: dataDir + "/venv/bin/auren"
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") + "/auren"
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -138,6 +143,19 @@ Panel {
   }
   function savePrefs() { mascotPrefsFile.writeAdapter() }
 
+  // the panel's own preferences
+  FileView {
+    id: panelPrefsFile
+    path: root.configDir + "/panel.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    JsonAdapter {
+      id: panelPrefs
+      property bool notifyUpdates: true   // a notification when a new version is out (once per version)
+    }
+  }
+
   // the mascot's place and size (written by the mascot; changed through its IPC)
   FileView {
     id: placeFile
@@ -180,8 +198,110 @@ Panel {
       }
     }
   }
-  onOpenedChanged: if (opened) { historyProc.running = false; historyProc.running = true; cursorActive = false }
+  onOpenedChanged: {
+    if (!opened) { confirmingUpdate = false; return }
+    historyProc.running = false; historyProc.running = true
+    cursorActive = false
+    now = Date.now() / 1000
+    if (page === 4) checkIfStale()
+  }
   onMoodChanged: if (opened && mood === "idle") { historyProc.running = false; historyProc.running = true }
+  property real now: Date.now() / 1000
+  Timer { interval: 30000; running: root.opened; repeat: true; onTriggered: root.now = Date.now() / 1000 }
+
+  // ---- updates (auren update) -------------------------------------------------------------------
+  property var upd: ({})
+  FileView {
+    id: updateFile
+    path: root.runtimeDir + "/update.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.upd = JSON.parse(text()) } catch (e) {} }
+    onLoadFailed: root.upd = ({})
+  }
+  readonly property string updState: upd.state || ""
+  readonly property bool updateAvailable: updState === "available"
+  readonly property bool updating: updState === "updating"
+  property bool checking: false
+  property bool confirmingUpdate: false
+  Process {
+    id: checkProc
+    command: [root.aurenBin, "update", "check"].concat(panelPrefs.notifyUpdates ? ["--notify"] : [])
+    // running, not exited: a command that can't start never exits
+    onRunningChanged: if (!running) { root.checking = false; updateFile.reload() }
+  }
+  function checkUpdates() {
+    if (checkProc.running || root.updating) return
+    root.checking = true
+    checkProc.running = true
+  }
+  function checkIfStale() { if (!root.updating && now - (upd.checked_at || 0) > 30 * 60) checkUpdates() }
+  function startUpdate() {
+    root.confirmingUpdate = false
+    Quickshell.execDetached([root.aurenBin, "update", "apply"])
+  }
+  function openUpdateLog() {
+    Quickshell.execDetached(["omarchy-launch-or-focus-tui", "less +G " + (upd.log || root.stateDir + "/update.log")])
+    root.close()
+  }
+  // Quietly: a few minutes after the bar starts, then every 6 hours.
+  Timer { interval: 3 * 60 * 1000; running: true; onTriggered: root.checkUpdates() }
+  Timer { interval: 6 * 3600 * 1000; running: true; repeat: true; onTriggered: root.checkUpdates() }
+
+  function ago(t) {
+    if (!t) return "never"
+    var s = Math.max(0, root.now - t)
+    if (s < 60) return "just now"
+    if (s < 3600) return Math.round(s / 60) + " min ago"
+    if (s < 86400) return Math.round(s / 3600) + " h ago"
+    return Math.round(s / 86400) + " days ago"
+  }
+  function day(t) { return t ? new Date(t * 1000).toLocaleDateString(Qt.locale(), "d MMM yyyy") : "" }
+  // what's installed, as install.sh recorded it (known before any check)
+  property var installedInfo: ({})
+  FileView {
+    path: root.dataDir + "/install.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.installedInfo = JSON.parse(text()) } catch (e) {} }
+    onLoadFailed: root.installedInfo = ({})
+  }
+  readonly property string versionText: "Auren" + (installedInfo.version ? " " + installedInfo.version : "")
+                                         + (installedInfo.commit ? " · " + installedInfo.commit.slice(0, 7) : "")
+  readonly property string updateHeadline: {
+    if (root.updating) return upd.step || "Updating…"
+    if (root.checking) return "Checking for updates…"
+    switch (root.updState) {
+      case "available": return upd.count ? upd.count + " new change" + (upd.count === 1 ? "" : "s") + " on " + (upd.channel || "main")
+                                          : "A newer version is on " + (upd.channel || "main")
+      case "current": return "You're up to date"
+      case "done": return upd.message || "Updated"
+      case "failed": return "The update didn't finish"
+      case "error": return "Couldn't check for updates"
+      case "unknown": return "Version unknown"
+    }
+    return "Not checked yet"
+  }
+  readonly property string updateDetail: {
+    if (root.updating) return "Auren restarts when it's done. You can close this panel."
+    if (root.updState === "failed" || root.updState === "error" || root.updState === "unknown") return upd.message || ""
+    if (root.updState === "done") return "Finished " + root.ago(upd.finished_at)
+    return upd.checked_at ? "Checked " + root.ago(upd.checked_at) : ""
+  }
+  readonly property var updateActions: {
+    if (root.confirmingUpdate) return [
+      { label: "Update and restart", icon: "󰚰", tip: "Waits until Auren is idle, installs, starts it again", run: root.startUpdate },
+      { label: "Cancel", icon: "", run: function() { root.confirmingUpdate = false } }
+    ]
+    var list = []
+    if (root.updateAvailable) list.push({ label: "Update now…", icon: "󰚰", tip: "See what happens, then update", run: function() { root.confirmingUpdate = true } })
+    list.push({ label: root.checking ? "Checking…" : "Check for updates", icon: "󰑓", tip: "Look on GitHub for a newer version",
+                enabled: !root.checking && !root.updating, run: root.checkUpdates })
+    if (root.updating || root.updState === "failed" || root.updState === "done") list.push({ label: "Update log", icon: "󰦪", run: root.openUpdateLog })
+    return list
+  }
 
   // ---- actions --------------------------------------------------------------------------------
   // Commands run as argument lists (no shell). The plugin bar API has run(command) but no shellQuote.
@@ -190,6 +310,7 @@ Panel {
     afterAction.restart()
   }
   function systemctl(verb, unit) {
+    if (root.updating) return              // the update stops and starts Auren itself
     Quickshell.execDetached(["systemctl", "--user", verb, unit])
     afterAction.restart()
   }
@@ -220,7 +341,7 @@ Panel {
   }
   function talk() {
     if (!root.daemonAlive) root.toggleAuren()
-    else if (root.mood === "speaking") root.stopTalking()
+    else if (root.mood === "speaking" || root.mood === "thinking" || root.mood === "working") root.stopTalking()
     else if (root.mood === "idle" || root.mood === "listening") root.ctlRun(["talk"])
     else if (hero.item) hero.item.poke()
   }
@@ -262,68 +383,13 @@ Panel {
     }
     return "Ready"
   }
+  readonly property string hintText: !root.daemonAlive ? (root.daemonActive ? "Starting up" : "Click " + root.mascot.name + " or Turn on to start")
+                                   : root.mood === "listening" ? "Press Super+A again to send"
+                                   : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
+                                   : "Super+A to talk · Shift+Super+A for a fresh start"
   readonly property string brainText: brainMode === "codex" ? "Codex (GPT-6.1 Sol)"
                                     : (brainMode === "claude" ? "Claude Haiku only" : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
                                       + (st.brain === "codex" ? "" : ", " + effort + " effort")
-
-  // ---- pages and the keyboard cursor --------------------------------------------------------------
-  readonly property var pages: [
-    { value: "0", label: "Home", icon: "󰋜" },
-    { value: "1", label: "Mascot", icon: "󰏩" },
-    { value: "2", label: "Voice", icon: "󰗋" },
-    { value: "3", label: "Brain", icon: "󰧑" }
-  ]
-  property int page: 0
-  function showPage(p) { page = Math.max(0, Math.min(pages.length - 1, p)); cursorRow = Math.min(cursorRow, rows.length - 1) }
-
-  // Each page is rows of controls: { n: how many across, act(col), adjust(dx) for sliders }. Row 0 is the tabs.
-  readonly property var rows: {
-    var tabs = { n: 4, act: function(c) { root.showPage(c) } }
-    if (page === 1) return [tabs,
-      { n: root.mascots.length, act: function(c) { root.setMascot(root.mascots[c].kind) } },
-      { n: 1, act: function() { root.togglePref("bubble") } },
-      { n: 1, act: function() { root.togglePref("sleepAnimation") } },
-      { n: 1, act: function() { root.togglePref("matchVoice") } },
-      { n: 1, adjust: function(dx) { root.nudge("opacity", dx) } },
-      { n: 1, adjust: function(dx) { root.nudge("size", dx) } },
-      { n: 2, act: function(c) { root.mascotIpc([c ? "poke" : "reset"]) } }]
-    if (page === 2) return [tabs,
-      { n: 1, act: function() { root.toggleVoice() } },
-      { n: 2, act: function(c) { root.setLanguage(root.languages[c].value) } },
-      { n: 4, act: function(c) { root.setVoiceName(root.voiceChoices[c].value) } },
-      { n: 1, adjust: function(dx) { root.nudge("speed", dx) } },
-      { n: 3, act: function(c) { root.setTts("steps", root.qualities[c].value) } },
-      { n: 1, adjust: function(dx) { root.nudge("volume", dx) } },
-      { n: 1, adjust: function(dx) { root.nudge("pause", dx) } },
-      { n: 2, act: function(c) { if (c) root.ctlRun(["tts", "reset"]); else root.ctlRun(["say", root.sample]) } }]
-    if (page === 3) return [tabs,
-      { n: 3, act: function(c) { root.setBrain(["auto", "claude", "codex"][c]) } },
-      { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } },
-      { n: 3, act: function(c) { [root.restartAuren, root.openLog, root.toggleAuren][c]() } }]
-    return [tabs, { n: 5, act: function(c) { [root.toggleAuren, root.toggleVoice, root.toggleMascot, root.startFresh, root.stopTalking][c]() } }]
-  }
-  property bool cursorActive: false
-  property int cursorRow: 0
-  property int cursorCol: 0
-  function has(row, col) { return cursorActive && cursorRow === row && (col === undefined || cursorCol === col) }
-  function moveCursor(dx, dy) {
-    if (!cursorActive) { cursorActive = true; cursorRow = 0; cursorCol = page; return }
-    if (dy !== 0) {
-      cursorRow = Math.max(0, Math.min(rows.length - 1, cursorRow + dy))
-      cursorCol = cursorRow === 0 ? page : Math.min(cursorCol, rows[cursorRow].n - 1)
-      return
-    }
-    var r = rows[cursorRow]
-    if (r.adjust) { r.adjust(dx); return }
-    cursorCol = Math.max(0, Math.min(r.n - 1, cursorCol + dx))
-    if (cursorRow === 0) showPage(cursorCol)
-  }
-  function activate() {
-    if (!cursorActive) return
-    var r = rows[cursorRow]
-    if (r.act) r.act(cursorCol)
-  }
-  function hover(row, col) { cursorActive = true; cursorRow = row; cursorCol = col || 0 }
 
   readonly property var qualities: [
     { value: "3", label: "Fast", tip: "3 steps: least CPU" },
@@ -334,7 +400,7 @@ Panel {
   // more of the Claude allowance. Changing it restarts the brain, so the conversation starts fresh.
   readonly property var efforts: [
     { value: "low", label: "Low", tip: "Fastest; fine for most requests (the default)" },
-    { value: "medium", label: "Med", tip: "A bit more care, a bit slower" },
+    { value: "medium", label: "Medium", tip: "A bit more care, a bit slower" },
     { value: "high", label: "High", tip: "Harder requests; noticeably slower" },
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the Claude allowance" },
     { value: "max", label: "Max", tip: "Slowest and most expensive" }
@@ -343,10 +409,135 @@ Panel {
     { value: "en", label: "English", tip: "Replies in English" },
     { value: "hi", label: "Hindi · हिंदी", tip: "Replies in Hindi (Devanagari), names stay in English; spoken in Hindi" }
   ]
+  readonly property var brains: [
+    { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
+    { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
+    { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6.1 Sol via Codex (saves Claude's allowance)" }
+  ]
   // Hindi verbs agree with the speaker: the F voices are female, the M voices male.
   readonly property string sample: language !== "hi" ? "Hi, this is how I sound now. Does this pace work for you?"
                                  : voiceName.charAt(0) === "M" ? "नमस्ते! अब मैं ऐसे बोल रहा हूँ। क्या यह रफ़्तार ठीक है?"
                                  : "नमस्ते! अब मैं ऐसे बोल रही हूँ। क्या यह रफ़्तार ठीक है?"
+
+  // Rows of buttons, each { label, icon, tip, run, on?, enabled? }: drawn by a Repeater and driven by the
+  // keyboard through the same list.
+  readonly property var quickActions: [
+    { label: "On", icon: "󰐥", tip: "Auren on or off", on: root.daemonAlive || root.daemonActive,
+      enabled: !root.updating, run: root.toggleAuren },
+    { label: "Voice", icon: root.voiceOn ? "󰕾" : "󰖁", tip: "Spoken replies (off: only in the bubble)", on: root.voiceOn,
+      enabled: root.daemonAlive, run: root.toggleVoice },
+    { label: "Mascot", icon: "󰏩", tip: "Show or hide the mascot (hidden frees ~100 MB)", on: root.mascotActive,
+      enabled: !root.updating, run: root.toggleMascot },
+    { label: "Fresh", icon: "󰑓", tip: "Start a fresh conversation", enabled: root.daemonAlive, run: root.startFresh },
+    { label: "Stop", icon: "󰓛", tip: "Stop listening, thinking or talking", enabled: root.daemonAlive, run: root.stopTalking }
+  ]
+  readonly property var mascotActions: [
+    { label: "Reset place", icon: "󰦛", tip: "Back to the bottom-right corner, normal size", enabled: root.mascotActive, run: function() { root.mascotIpc(["reset"]) } },
+    { label: "Poke", icon: "󰏩", tip: "Say hi", enabled: root.mascotActive, run: function() { root.mascotIpc(["poke"]) } }
+  ]
+  readonly property var voiceActions: [
+    { label: "Test", icon: "󰐊", tip: "Say a sample sentence", run: function() { root.ctlRun(["say", root.sample]) } },
+    { label: "Defaults", icon: "󰦛", tip: "Speed 1.05, balanced, full volume, no pause", run: function() { root.ctlRun(["tts", "reset"]) } }
+  ]
+  readonly property var footerActions: [
+    { label: root.daemonAlive || root.daemonActive ? "Turn off" : "Turn on", icon: "󰐥", tip: "Start or stop Auren",
+      enabled: !root.updating, run: root.toggleAuren },
+    { label: "Restart", icon: "󰜉", tip: "Restart Auren", enabled: !root.updating, run: root.restartAuren },
+    { label: "Log", icon: "󰦪", tip: "Open Auren's log", run: root.openLog }
+  ]
+  function asOptions(list) {
+    return list.map(function(a, i) { return { value: String(i), label: a.label, icon: a.icon, tip: a.tip || "", enabled: a.enabled, on: a.on } })
+  }
+  function runAction(list, i) { var a = list[i]; if (a && a.enabled !== false) a.run() }
+
+  // ---- pages and the keyboard cursor --------------------------------------------------------------
+  readonly property var pages: [
+    { label: "Home", icon: "󰋜" },
+    { label: "Mascot", icon: "󰏩" },
+    { label: "Voice", icon: "󰗋" },
+    { label: "Brain", icon: "󰧑" },
+    { label: "Updates", icon: "󰚰" }
+  ]
+  property int page: 0
+  function showPage(p) {
+    page = Math.max(0, Math.min(pages.length - 1, p))
+    confirmingUpdate = false
+    pagesBox.contentY = 0
+    if (page === 4) checkIfStale()
+  }
+
+  // Each page is rows of controls: { n: how many across, act(col), adjust(dx) for sliders }; the footer
+  // is the last row of every page.
+  readonly property var pageRows: {
+    if (page === 1) return [
+      { n: root.mascots.length, act: function(c) { root.setMascot(root.mascots[c].kind) } },
+      { n: 1, act: function() { root.togglePref("bubble") } },
+      { n: 1, act: function() { root.togglePref("sleepAnimation") } },
+      { n: 1, act: function() { root.togglePref("matchVoice") } },
+      { n: 1, adjust: function(dx) { root.nudge("opacity", dx) } },
+      { n: 1, adjust: function(dx) { root.nudge("size", dx) } },
+      { n: root.mascotActions.length, act: function(c) { root.runAction(root.mascotActions, c) } }]
+    if (page === 2) return [
+      { n: 1, act: function() { root.toggleVoice() } },
+      { n: 2, act: function(c) { root.setLanguage(root.languages[c].value) } },
+      { n: 4, act: function(c) { root.setVoiceName(root.voiceChoices[c].value) } },
+      { n: 1, adjust: function(dx) { root.nudge("speed", dx) } },
+      { n: 3, act: function(c) { root.setTts("steps", root.qualities[c].value) } },
+      { n: 1, adjust: function(dx) { root.nudge("volume", dx) } },
+      { n: 1, adjust: function(dx) { root.nudge("pause", dx) } },
+      { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } }]
+    if (page === 3) return [
+      { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
+      { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } }]
+    if (page === 4) return [
+      { n: root.updateActions.length, act: function(c) { root.runAction(root.updateActions, c) } },
+      { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
+    return [
+      { n: 1, act: function() { root.talk() } },
+      { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }]
+  }
+  readonly property var rows: pageRows.concat([{ n: footerActions.length, act: function(c) { root.runAction(root.footerActions, c) } }])
+  readonly property int footerRow: rows.length - 1
+  onRowsChanged: {
+    cursorRow = Math.min(cursorRow, rows.length - 1)
+    cursorCol = Math.min(cursorCol, rows[cursorRow].n - 1)
+  }
+  property bool cursorActive: false
+  property bool inNav: true
+  property int cursorRow: 0
+  property int cursorCol: 0
+  function has(row, col) { return cursorActive && !inNav && cursorRow === row && (col === undefined || cursorCol === col) }
+  function enterPage() { inNav = false; cursorRow = 0; cursorCol = 0 }
+  function moveCursor(dx, dy) {
+    if (!cursorActive) { cursorActive = true; inNav = true; return }
+    if (inNav) {
+      if (dy !== 0) showPage(page + dy)
+      else if (dx > 0) enterPage()
+      return
+    }
+    if (dy !== 0) {
+      cursorRow = Math.max(0, Math.min(rows.length - 1, cursorRow + dy))
+      cursorCol = Math.min(cursorCol, rows[cursorRow].n - 1)
+      // on a short screen, scroll along with the cursor (roughly: the first row at the top, the last at
+      // the bottom)
+      if (cursorRow < pageRows.length && pageRows.length > 1)
+        pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height) * cursorRow / (pageRows.length - 1)
+      else if (cursorRow >= pageRows.length)
+        pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height)
+      return
+    }
+    var r = rows[cursorRow]
+    if (r.adjust) { r.adjust(dx); return }
+    if (dx < 0 && cursorCol === 0) { inNav = true; return }
+    cursorCol = Math.max(0, Math.min(r.n - 1, cursorCol + dx))
+  }
+  function activate() {
+    if (!cursorActive) return
+    if (inNav) { enterPage(); return }
+    var r = rows[cursorRow]
+    if (r.act) r.act(cursorCol)
+  }
+  function hover(row, col) { cursorActive = true; inNav = false; cursorRow = row; cursorCol = col || 0 }
 
   // ---- the bar icon ---------------------------------------------------------------------------
   implicitWidth: button.implicitWidth
@@ -356,12 +547,23 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    tooltipText: root.opened ? "" : "Auren: " + root.statusText
+    tooltipText: root.opened ? "" : "Auren: " + root.statusText + (root.updateAvailable ? " · update available" : "")
     iconComponent: Component {
       MiniMascot {
         kind: root.kind
         mood: root.awaiting ? "awaiting" : root.mood
         foreground: button.foreground
+        Rectangle {       // an update is waiting
+          visible: root.updateAvailable
+          width: Math.max(4, Math.round(parent.width / 4))
+          height: width
+          radius: width / 2
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.rightMargin: -width / 2
+          anchors.topMargin: -width / 3
+          color: Color.accent
+        }
       }
     }
     onPressed: function(b) {
@@ -378,90 +580,37 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(356))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight)
+    contentWidth: panel.fittedContentWidth(Style.space(600))
+    contentHeight: panel.fittedContentHeight(body.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activate()
-      onCloseRequested: root.close()
+      onCloseRequested: { if (root.confirmingUpdate) root.confirmingUpdate = false; else root.close() }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
-      Column {
-        id: column
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(14)
+      Item {
+        id: body
+        anchors.fill: parent
+        implicitHeight: header.implicitHeight + Style.space(16) + Math.max(nav.implicitHeight, pagesBox.tallest)
+                        + Style.space(16) + footer.implicitHeight
 
-        Choice {
-          width: parent.width
-          options: root.pages
-          value: String(root.page)
-          iconsOnly: false
-          foreground: root.fg
-          fontFamily: root.font
-          cursorIndex: root.has(0) ? root.cursorCol : -1
-          onPicked: function(v) { root.showPage(Number(v)) }
-          onHoveredIndex: function(i) { root.hover(0, i) }
-        }
-
-        // ================= Home =================
+        // ================= header =================
         Column {
+          id: header
           width: parent.width
-          spacing: Style.space(14)
-          visible: root.page === 0
-
-          Item {        // the live mascot · name · status
+          spacing: Style.space(12)
+          Item {
             width: parent.width
-            implicitHeight: Math.max(heroBox.height, heroText.implicitHeight)
-
-            Item {
-              id: heroBox
-              width: Style.space(84)
-              height: Style.space(66)
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-
-              Loader {
-                id: hero
-                active: root.opened && root.page === 0
-                anchors.centerIn: parent
-                source: root.mascotFile(root.kind)
-                onLoaded: item.u = Math.floor(heroBox.width / 24 * 2) / 2
-              }
-              Binding { target: hero.item; property: "mood"; value: root.mood === "off" ? "idle" : root.mood; when: hero.status === Loader.Ready }
-              Binding { target: hero.item; property: "off"; value: root.mood === "off"; when: hero.status === Loader.Ready }
-              Binding { target: hero.item; property: "awaiting"; value: root.awaiting; when: hero.status === Loader.Ready }
-              Binding { target: hero.item; property: "mouse"; value: root.st.mouse === true; when: hero.status === Loader.Ready }
-              Binding { target: hero.item; property: "hovered"; value: heroMouse.containsMouse; when: hero.status === Loader.Ready }
-
-              MouseArea {      // click to talk (click again to send), right-click to poke
-                id: heroMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                cursorShape: Qt.PointingHandCursor
-                onPositionChanged: (mouse) => {
-                  if (hero.item) { hero.item.pointerX = mouse.x / width; hero.item.pointerY = mouse.y / height }
-                }
-                onClicked: (mouse) => {
-                  if (mouse.button === Qt.RightButton) { if (hero.item) hero.item.poke() }
-                  else root.talk()
-                }
-              }
-            }
-
+            implicitHeight: Math.max(heading.implicitHeight, closeButton.implicitHeight)
             Column {
-              id: heroText
-              anchors.left: heroBox.right
-              anchors.leftMargin: Style.space(12)
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(2)
-
+              id: heading
+              anchors.left: parent.left
+              anchors.right: closeButton.left
+              anchors.rightMargin: Style.space(12)
+              spacing: Style.space(3)
               Text {
                 text: "Auren"
                 color: root.fg
@@ -471,453 +620,695 @@ Panel {
               }
               Text {
                 width: parent.width
-                text: root.statusText.toUpperCase()
-                color: root.mood === "off" ? root.dim : (root.mood === "idle" && !root.awaiting ? Qt.darker(root.fg, 1.3) : root.accent)
+                text: root.statusText + " · " + root.hintText
+                color: root.fg
+                opacity: 0.7
                 font.family: root.font
                 font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 1.2
+                elide: Text.ElideRight
+              }
+            }
+            Button {
+              id: closeButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Close"
+              foreground: root.fg
+              fontFamily: root.font
+              fontSize: Style.font.bodySmall
+              onClicked: root.close()
+            }
+          }
+          PanelSeparator { foreground: root.fg }
+        }
+
+        // ================= pages =================
+        Column {
+          id: nav
+          anchors.top: header.bottom
+          anchors.topMargin: Style.space(16)
+          width: Style.space(126)
+          spacing: Style.space(6)
+          Repeater {
+            model: root.pages
+            Button {
+              required property var modelData
+              required property int index
+              width: nav.width
+              leftAlign: true
+              text: modelData.label + (index === 4 && root.updateAvailable ? "  ●" : "")
+              iconText: modelData.icon
+              iconSize: Style.font.body
+              selected: root.page === index
+              hasCursor: root.cursorActive && root.inNav && root.page === index
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.font
+              fontSize: Style.font.bodySmall
+              onClicked: { root.showPage(index); root.inNav = true; root.cursorRow = 0; root.cursorCol = 0 }
+            }
+          }
+        }
+
+        Flickable {
+          id: pagesBox
+          anchors.top: header.bottom
+          anchors.topMargin: Style.space(16)
+          anchors.left: nav.right
+          anchors.leftMargin: Style.space(20)
+          anchors.right: parent.right
+          anchors.bottom: footer.top
+          anchors.bottomMargin: Style.space(16)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          contentWidth: width
+          // the panel is as tall as the tallest page, so it keeps its size from page to page; on a short
+          // screen it's capped and the page scrolls
+          readonly property real tallest: Math.max(homePage.implicitHeight, mascotPage.implicitHeight,
+                                                   voicePage.implicitHeight, brainPage.implicitHeight,
+                                                   updatesPage.implicitHeight)
+          contentHeight: [homePage, mascotPage, voicePage, brainPage, updatesPage][root.page].implicitHeight
+
+          // ---------------- Home ----------------
+          Column {
+            id: homePage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 0
+
+            SectionTitle { text: "HOME" }
+
+            Card {      // the live mascot · name · status
+              id: heroCard
+              hot: heroMouse.containsMouse || root.has(0)
+              implicitHeight: Math.max(heroBox.height, heroText.implicitHeight) + Style.space(20)
+
+              Item {
+                id: heroBox
+                width: Style.space(84)
+                height: Style.space(66)
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(10)
+                anchors.verticalCenter: parent.verticalCenter
+
+                Loader {
+                  id: hero
+                  active: root.opened && root.page === 0
+                  anchors.centerIn: parent
+                  source: root.mascotFile(root.kind)
+                  onLoaded: item.u = Math.floor(heroBox.width / 24 * 2) / 2
+                }
+                Binding { target: hero.item; property: "mood"; value: root.mood === "off" ? "idle" : root.mood; when: hero.status === Loader.Ready }
+                Binding { target: hero.item; property: "off"; value: root.mood === "off"; when: hero.status === Loader.Ready }
+                Binding { target: hero.item; property: "awaiting"; value: root.awaiting; when: hero.status === Loader.Ready }
+                Binding { target: hero.item; property: "mouse"; value: root.st.mouse === true; when: hero.status === Loader.Ready }
+                Binding { target: hero.item; property: "hovered"; value: heroMouse.containsMouse; when: hero.status === Loader.Ready }
+              }
+
+              Column {
+                id: heroText
+                anchors.left: heroBox.right
+                anchors.leftMargin: Style.space(14)
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(3)
+                Text {
+                  text: root.mascot.name
+                  color: root.fg
+                  font.family: root.font
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+                Text {
+                  width: parent.width
+                  text: root.statusText.toUpperCase()
+                  color: root.mood === "off" ? root.dim : (root.mood === "idle" && !root.awaiting ? Qt.darker(root.fg, 1.3) : root.accent)
+                  font.family: root.font
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 1.2
+                  elide: Text.ElideRight
+                }
+                Text {
+                  width: parent.width
+                  text: !root.daemonAlive ? "Click to start" : root.mood === "idle" || root.mood === "listening" ? "Click to talk" : "Click to stop"
+                  color: root.dim
+                  font.family: root.font
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
+
+              MouseArea {      // click to talk (click again to send), right-click to poke
+                id: heroMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                cursorShape: Qt.PointingHandCursor
+                onEntered: root.hover(0)
+                onPositionChanged: (mouse) => {
+                  var p = mapToItem(heroBox, mouse.x, mouse.y)
+                  if (hero.item) { hero.item.pointerX = p.x / heroBox.width; hero.item.pointerY = p.y / heroBox.height }
+                }
+                onClicked: (mouse) => {
+                  if (mouse.button === Qt.RightButton) { if (hero.item) hero.item.poke() }
+                  else root.talk()
+                }
+              }
+            }
+
+            Choice {
+              width: parent.width
+              title: "QUICK ACTIONS"
+              options: root.asOptions(root.quickActions)
+              value: ""
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(1) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.quickActions, i) }
+              onHoveredIndex: function(i) { root.hover(1, i) }
+            }
+
+            Column {      // the last exchange
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.lastExchange !== null
+              PanelSectionHeader { text: "LAST EXCHANGE"; foreground: root.fg; fontFamily: root.font }
+              Text {
+                width: parent.width
+                text: root.lastExchange ? root.lastExchange.transcript : ""
+                color: root.dim
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                font.italic: true
                 elide: Text.ElideRight
               }
               Text {
                 width: parent.width
-                text: !root.daemonAlive ? "Click " + root.mascot.name + " to start"
-                      : root.mood === "listening" ? "Press Super+A again to send"
-                      : "Super+A to talk · Shift fresh"
-                color: root.dim
+                text: root.lastExchange ? root.lastExchange.reply : ""
+                color: root.fg
                 font.family: root.font
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.Wrap
+                maximumLineCount: 3
                 elide: Text.ElideRight
               }
             }
           }
 
-          Column {      // the last exchange
-            width: parent.width
-            spacing: Style.space(3)
-            visible: root.lastExchange !== null
-            Text {
-              width: parent.width
-              text: root.lastExchange ? root.lastExchange.transcript : ""
-              color: root.dim
-              font.family: root.font
-              font.pixelSize: Style.font.bodySmall
-              font.italic: true
-              elide: Text.ElideRight
-            }
-            Text {
-              width: parent.width
-              text: root.lastExchange ? root.lastExchange.reply : ""
-              color: root.fg
-              font.family: root.font
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.Wrap
-              maximumLineCount: 3
-              elide: Text.ElideRight
-            }
-          }
-
-          Row {         // quick switches and actions
-            id: quick
-            width: parent.width
-            spacing: Style.space(6)
-            readonly property real cell: (width - spacing * 4) / 5
-            Repeater {
-              model: [
-                { icon: "󰐥", label: "On", tip: "Auren on or off", on: root.daemonAlive || root.daemonActive, always: true },
-                { icon: root.voiceOn ? "󰕾" : "󰖁", label: "Voice", tip: "Spoken replies (off: only in the bubble)", on: root.voiceOn },
-                { icon: "󰏩", label: "Mascot", tip: "Show or hide the mascot (hidden frees ~100 MB)", on: root.mascotActive, always: true },
-                { icon: "󰑓", label: "Fresh", tip: "Start a fresh conversation" },
-                { icon: "󰓛", label: "Stop", tip: "Stop listening or talking" }
-              ]
-              Button {
-                required property var modelData
-                required property int index
-                width: quick.cell
-                text: modelData.label
-                iconText: modelData.icon
-                tooltipText: modelData.tip
-                fontSize: Style.font.caption
-                iconSize: Style.font.title
-                foreground: root.fg
-                fontFamily: root.font
-                bordered: true
-                selected: modelData.on === true
-                enabled: modelData.always === true || root.daemonAlive
-                opacity: enabled ? 1 : 0.5
-                hasCursor: root.has(1, index)
-                onClicked: [root.toggleAuren, root.toggleVoice, root.toggleMascot, root.startFresh, root.stopTalking][index]()
-                onHovered: function(h) { if (h) root.hover(1, index) }
-              }
-            }
-          }
-        }
-
-        // ================= Mascot =================
-        Column {
-          width: parent.width
-          spacing: Style.space(10)
-          visible: root.page === 1
-
-          Row {         // the mascots, live
-            id: cards
-            width: parent.width
-            spacing: Style.space(6)
-            readonly property real cell: (width - spacing * (root.mascots.length - 1)) / root.mascots.length
-            Repeater {
-              model: root.mascots
-              Rectangle {
-                id: card
-                required property var modelData
-                required property int index
-                readonly property bool chosen: root.kind === modelData.kind
-                readonly property bool hot: cardMouse.containsMouse || root.has(1, index)
-                width: cards.cell
-                height: preview.height + names.implicitHeight + Style.space(10)
-                radius: Style.cornerRadius
-                color: chosen ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.07) : "transparent"
-                border.width: chosen ? 2 : 1
-                border.color: chosen ? modelData.color : hot ? root.fg : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18)
-
-                Item {
-                  id: preview
-                  width: parent.width
-                  height: width * 0.72
-                  Loader {
-                    id: previewLoader
-                    active: root.opened && root.page === 1
-                    anchors.centerIn: parent
-                    source: root.mascotFile(card.modelData.kind)
-                    onLoaded: { item.u = Math.floor(preview.width / 25 * 2) / 2; item.sleepAnimation = false }
-                  }
-                  Binding { target: previewLoader.item; property: "hovered"; value: cardMouse.containsMouse; when: previewLoader.status === Loader.Ready }
-                }
-                Column {
-                  id: names
-                  anchors.top: preview.bottom
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: card.modelData.name
-                    color: card.chosen ? root.fg : Qt.darker(root.fg, 1.2)
-                    font.family: root.font
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: card.chosen
-                  }
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: card.modelData.tip
-                    color: root.dim
-                    font.family: root.font
-                    font.pixelSize: Style.font.caption
-                  }
-                }
-                MouseArea {
-                  id: cardMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onEntered: root.hover(1, card.index)
-                  onPositionChanged: (mouse) => {
-                    var it = previewLoader.item
-                    if (it) { it.pointerX = mouse.x / width; it.pointerY = mouse.y / preview.height }
-                  }
-                  onClicked: {
-                    if (previewLoader.item) previewLoader.item.poke()
-                    root.setMascot(card.modelData.kind)
-                  }
-                }
-              }
-            }
-          }
-
-          Toggle {
-            width: parent.width
-            label: "Speech bubble"
-            description: mascotPrefs.bubble ? "Transcript, activity and captions" : "Off: the mascot only"
-            checked: mascotPrefs.bubble
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(2)
-            onClicked: root.togglePref("bubble")
-            onHovered: function(h) { if (h) root.hover(2) }
-          }
-          Toggle {
-            width: parent.width
-            label: "Sleep animation"
-            description: mascotPrefs.sleepAnimation ? "Breathes while asleep (~6% CPU)" : "Still while asleep (saves CPU)"
-            checked: mascotPrefs.sleepAnimation
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(3)
-            onClicked: root.togglePref("sleepAnimation")
-            onHovered: function(h) { if (h) root.hover(3) }
-          }
-          Toggle {
-            width: parent.width
-            label: "Voice follows mascot"
-            description: root.mascots.map(function(m) { return m.name + " speaks with " + m.voice }).join(", ")
-            checked: mascotPrefs.matchVoice
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(4)
-            onClicked: root.togglePref("matchVoice")
-            onHovered: function(h) { if (h) root.hover(4) }
-          }
-          SliderRow {
-            id: fadeRow
-            width: parent.width
-            bar: root.bar
-            label: "Faded when idle"
-            valueText: Math.round(fadeRow.liveValue * 100) + "%"
-            minimum: root.sliders.opacity.min; maximum: root.sliders.opacity.max; step: root.sliders.opacity.step
-            value: mascotPrefs.idleOpacity
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(5)
-            onReleased: function(v) { mascotPrefs.idleOpacity = root.round(v, 0.05); root.savePrefs() }
-            onHovered: root.hover(5)
-          }
-          SliderRow {
-            id: sizeRow
-            width: parent.width
-            bar: root.bar
-            label: "Size"
-            valueText: sizeRow.liveValue.toFixed(1) + "×"
-            minimum: root.sliders.size.min; maximum: root.sliders.size.max; step: root.sliders.size.step
-            value: place.size
-            enabled: root.mascotActive
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(6)
-            onReleased: function(v) { root.mascotIpc(["size", root.round(v, 0.1).toFixed(2)]) }
-            onHovered: root.hover(6)
-          }
-          Choice {
-            width: parent.width
-            enabled: root.mascotActive
-            opacity: enabled ? 1 : 0.5
-            options: [
-              { value: "reset", label: "Reset place", icon: "󰦛", tip: "Back to the bottom-right corner, normal size" },
-              { value: "poke", label: "Poke", icon: "󰏩", tip: "Say hi" }
-            ]
-            foreground: root.fg; fontFamily: root.font
-            cursorIndex: root.has(7) ? root.cursorCol : -1
-            onPicked: function(v) { root.mascotIpc([v]) }
-            onHoveredIndex: function(i) { root.hover(7, i) }
-          }
-        }
-
-        // ================= Voice =================
-        Column {
-          width: parent.width
-          spacing: Style.space(10)
-          visible: root.page === 2
-          enabled: root.daemonAlive
-
-          Toggle {
-            width: parent.width
-            label: "Voice replies"
-            description: !root.daemonAlive ? "Auren is off" : root.voiceOn ? "Auren speaks its answers" : "Answers only in the bubble"
-            checked: root.voiceOn
-            foreground: root.fg; fontFamily: root.font
-            hasCursor: root.has(1)
-            onClicked: root.toggleVoice()
-            onHovered: function(h) { if (h) root.hover(1) }
-          }
-
+          // ---------------- Mascot ----------------
           Column {
+            id: mascotPage
             width: parent.width
-            spacing: Style.space(4)
-            Text {
-              text: (root.has(2) ? "› " : "") + "Reply language"
-              color: root.has(2) ? root.fg : Qt.darker(root.fg, 1.2)
-              font.family: root.font
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.has(2)
+            spacing: Style.space(12)
+            visible: root.page === 1
+
+            SectionTitle { text: "MASCOT" }
+
+            Row {         // the mascots, live
+              id: cards
+              width: parent.width
+              spacing: Style.space(8)
+              readonly property real cell: (width - spacing * (root.mascots.length - 1)) / root.mascots.length
+              Repeater {
+                model: root.mascots
+                Rectangle {
+                  id: card
+                  required property var modelData
+                  required property int index
+                  readonly property bool chosen: root.kind === modelData.kind
+                  readonly property bool hot: cardMouse.containsMouse || root.has(0, index)
+                  width: cards.cell
+                  height: preview.height + names.implicitHeight + Style.space(10)
+                  radius: Style.cornerRadius
+                  color: chosen ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.07) : "transparent"
+                  border.width: chosen ? 2 : 1
+                  border.color: chosen ? modelData.color : hot ? root.fg : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18)
+
+                  Item {
+                    id: preview
+                    width: parent.width
+                    height: Style.space(92)
+                    Loader {
+                      id: previewLoader
+                      active: root.opened && root.page === 1
+                      anchors.centerIn: parent
+                      source: root.mascotFile(card.modelData.kind)
+                      onLoaded: { item.u = Math.floor(preview.height / 18 * 2) / 2; item.sleepAnimation = false }
+                    }
+                    Binding { target: previewLoader.item; property: "hovered"; value: cardMouse.containsMouse; when: previewLoader.status === Loader.Ready }
+                  }
+                  Column {
+                    id: names
+                    anchors.top: preview.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    Text {
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      text: card.modelData.name
+                      color: card.chosen ? root.fg : Qt.darker(root.fg, 1.2)
+                      font.family: root.font
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: card.chosen
+                    }
+                    Text {
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      text: card.modelData.tip + " · " + card.modelData.voice
+                      color: root.dim
+                      font.family: root.font
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                  MouseArea {
+                    id: cardMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onEntered: root.hover(0, card.index)
+                    onPositionChanged: (mouse) => {
+                      var it = previewLoader.item
+                      if (it) { it.pointerX = mouse.x / width; it.pointerY = mouse.y / preview.height }
+                    }
+                    onClicked: {
+                      if (previewLoader.item) previewLoader.item.poke()
+                      root.setMascot(card.modelData.kind)
+                    }
+                  }
+                }
+              }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Speech bubble"
+              description: mascotPrefs.bubble ? "Transcript, activity and captions" : "Off: the mascot only"
+              checked: mascotPrefs.bubble
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(1)
+              onClicked: root.togglePref("bubble")
+              onHovered: function(h) { if (h) root.hover(1) }
+            }
+            Toggle {
+              width: parent.width
+              label: "Sleep animation"
+              description: mascotPrefs.sleepAnimation ? "Breathes while asleep (~6% CPU)" : "Still while asleep (saves CPU)"
+              checked: mascotPrefs.sleepAnimation
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(2)
+              onClicked: root.togglePref("sleepAnimation")
+              onHovered: function(h) { if (h) root.hover(2) }
+            }
+            Toggle {
+              width: parent.width
+              label: "Voice follows mascot"
+              description: root.mascots.map(function(m) { return m.name + " speaks with " + m.voice }).join(", ")
+              checked: mascotPrefs.matchVoice
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(3)
+              onClicked: root.togglePref("matchVoice")
+              onHovered: function(h) { if (h) root.hover(3) }
+            }
+            SliderRow {
+              id: fadeRow
+              width: parent.width
+              bar: root.bar
+              label: "Faded when idle"
+              valueText: Math.round(fadeRow.liveValue * 100) + "%"
+              minimum: root.sliders.opacity.min; maximum: root.sliders.opacity.max; step: root.sliders.opacity.step
+              value: mascotPrefs.idleOpacity
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(4)
+              onReleased: function(v) { mascotPrefs.idleOpacity = root.round(v, 0.05); root.savePrefs() }
+              onHovered: root.hover(4)
+            }
+            SliderRow {
+              id: sizeRow
+              width: parent.width
+              bar: root.bar
+              label: "Size"
+              valueText: sizeRow.liveValue.toFixed(1) + "×"
+              minimum: root.sliders.size.min; maximum: root.sliders.size.max; step: root.sliders.size.step
+              value: place.size
+              enabled: root.mascotActive
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(5)
+              onReleased: function(v) { root.mascotIpc(["size", root.round(v, 0.1).toFixed(2)]) }
+              onHovered: root.hover(5)
             }
             Choice {
               width: parent.width
+              options: root.asOptions(root.mascotActions)
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(6) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.mascotActions, i) }
+              onHoveredIndex: function(i) { root.hover(6, i) }
+            }
+          }
+
+          // ---------------- Voice ----------------
+          Column {
+            id: voicePage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 2
+            enabled: root.daemonAlive
+
+            SectionTitle { text: "VOICE" }
+
+            Toggle {
+              width: parent.width
+              label: "Voice replies"
+              description: !root.daemonAlive ? "Auren is off" : root.voiceOn ? "Auren speaks its answers" : "Answers only in the bubble"
+              checked: root.voiceOn
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(0)
+              onClicked: root.toggleVoice()
+              onHovered: function(h) { if (h) root.hover(0) }
+            }
+            Choice {
+              width: parent.width
+              title: "REPLY LANGUAGE"
               options: root.languages
               value: root.language
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(2) ? root.cursorCol : -1
+              cursorIndex: root.has(1) ? root.cursorCol : -1
               onPicked: function(v) { root.setLanguage(v) }
-              onHoveredIndex: function(i) { root.hover(2, i) }
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(10)
-            opacity: root.voiceOn ? 1 : 0.5
-
-            PanelSectionHeader { text: "VOICE"; foreground: root.fg; fontFamily: root.font }
-            Choice {
-              width: parent.width
-              options: root.voiceChoices
-              value: root.voiceName
-              foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(3) ? root.cursorCol : -1
-              onPicked: function(v) { root.setVoiceName(v) }
-              onHoveredIndex: function(i) { root.hover(3, i) }
-            }
-            SliderRow {
-              id: speedRow
-              width: parent.width
-              bar: root.bar
-              label: "Speed"
-              valueText: speedRow.liveValue.toFixed(2) + "×"
-              minimum: root.sliders.speed.min; maximum: root.sliders.speed.max; step: root.sliders.speed.step
-              value: root.ttsValue("speed")
-              foreground: root.fg; fontFamily: root.font
-              hasCursor: root.has(4)
-              onReleased: function(v) { root.setTts("speed", root.round(v, 0.05).toFixed(2)) }
-              onHovered: root.hover(4)
+              onHoveredIndex: function(i) { root.hover(1, i) }
             }
             Column {
               width: parent.width
-              spacing: Style.space(4)
-              Text {
-                text: (root.has(5) ? "› " : "") + "Quality"
-                color: root.has(5) ? root.fg : Qt.darker(root.fg, 1.2)
-                font.family: root.font
-                font.pixelSize: Style.font.bodySmall
-                font.bold: root.has(5)
+              spacing: Style.space(12)
+              opacity: root.voiceOn ? 1 : 0.5
+
+              Choice {
+                width: parent.width
+                title: "VOICE"
+                options: root.voiceChoices
+                value: root.voiceName
+                foreground: root.fg; fontFamily: root.font
+                cursorIndex: root.has(2) ? root.cursorCol : -1
+                onPicked: function(v) { root.setVoiceName(v) }
+                onHoveredIndex: function(i) { root.hover(2, i) }
+              }
+              SliderRow {
+                id: speedRow
+                width: parent.width
+                bar: root.bar
+                label: "Speed"
+                valueText: speedRow.liveValue.toFixed(2) + "×"
+                minimum: root.sliders.speed.min; maximum: root.sliders.speed.max; step: root.sliders.speed.step
+                value: root.ttsValue("speed")
+                foreground: root.fg; fontFamily: root.font
+                hasCursor: root.has(3)
+                onReleased: function(v) { root.setTts("speed", root.round(v, 0.05).toFixed(2)) }
+                onHovered: root.hover(3)
               }
               Choice {
                 width: parent.width
+                title: "QUALITY"
                 options: root.qualities
                 value: String(root.ttsValue("steps"))
                 foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(5) ? root.cursorCol : -1
+                cursorIndex: root.has(4) ? root.cursorCol : -1
                 onPicked: function(v) { root.setTts("steps", v) }
-                onHoveredIndex: function(i) { root.hover(5, i) }
+                onHoveredIndex: function(i) { root.hover(4, i) }
+              }
+              SliderRow {
+                id: volumeRow
+                width: parent.width
+                bar: root.bar
+                label: "Volume"
+                valueText: Math.round(volumeRow.liveValue * 100) + "%"
+                minimum: root.sliders.volume.min; maximum: root.sliders.volume.max; step: root.sliders.volume.step
+                value: root.ttsValue("volume")
+                foreground: root.fg; fontFamily: root.font
+                hasCursor: root.has(5)
+                onReleased: function(v) { root.setTts("volume", root.round(v, 0.05).toFixed(2)) }
+                onHovered: root.hover(5)
+              }
+              SliderRow {
+                id: pauseRow
+                width: parent.width
+                bar: root.bar
+                label: "Pause between sentences"
+                valueText: pauseRow.liveValue.toFixed(2) + " s"
+                minimum: root.sliders.pause.min; maximum: root.sliders.pause.max; step: root.sliders.pause.step
+                value: root.ttsValue("pause")
+                foreground: root.fg; fontFamily: root.font
+                hasCursor: root.has(6)
+                onReleased: function(v) { root.setTts("pause", root.round(v, 0.05).toFixed(2)) }
+                onHovered: root.hover(6)
+              }
+              Choice {
+                width: parent.width
+                options: root.asOptions(root.voiceActions)
+                foreground: root.fg; fontFamily: root.font
+                cursorIndex: root.has(7) ? root.cursorCol : -1
+                onPicked: function(v, i) { root.runAction(root.voiceActions, i) }
+                onHoveredIndex: function(i) { root.hover(7, i) }
               }
             }
-            SliderRow {
-              id: volumeRow
+          }
+
+          // ---------------- Brain ----------------
+          Column {
+            id: brainPage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 3
+
+            SectionTitle { text: "BRAIN" }
+
+            Choice {
               width: parent.width
-              bar: root.bar
-              label: "Volume"
-              valueText: Math.round(volumeRow.liveValue * 100) + "%"
-              minimum: root.sliders.volume.min; maximum: root.sliders.volume.max; step: root.sliders.volume.step
-              value: root.ttsValue("volume")
+              title: "WHO ANSWERS"
+              enabled: root.daemonAlive
+              options: root.brains
+              value: root.brainMode
               foreground: root.fg; fontFamily: root.font
-              hasCursor: root.has(6)
-              onReleased: function(v) { root.setTts("volume", root.round(v, 0.05).toFixed(2)) }
-              onHovered: root.hover(6)
+              cursorIndex: root.has(0) ? root.cursorCol : -1
+              onPicked: function(v) { root.setBrain(v) }
+              onHoveredIndex: function(i) { root.hover(0, i) }
             }
-            SliderRow {
-              id: pauseRow
+            Caption { text: "Now: " + root.brainText }
+
+            Choice {
               width: parent.width
-              bar: root.bar
-              label: "Pause between sentences"
-              valueText: pauseRow.liveValue.toFixed(2) + " s"
-              minimum: root.sliders.pause.min; maximum: root.sliders.pause.max; step: root.sliders.pause.step
-              value: root.ttsValue("pause")
+              title: "CLAUDE EFFORT"
+              enabled: root.daemonAlive && root.brainMode !== "codex"
+              options: root.efforts
+              value: root.effort
               foreground: root.fg; fontFamily: root.font
-              hasCursor: root.has(7)
-              onReleased: function(v) { root.setTts("pause", root.round(v, 0.05).toFixed(2)) }
-              onHovered: root.hover(7)
+              cursorIndex: root.has(1) ? root.cursorCol : -1
+              onPicked: function(v) { root.setEffort(v) }
+              onHoveredIndex: function(i) { root.hover(1, i) }
+            }
+            Caption {
+              text: root.brainMode === "codex" ? "Codex only: Claude isn't used"
+                    : "Higher thinks harder but answers slower. Changing it starts a fresh conversation."
+            }
+
+            PanelSectionHeader { text: "TODAY"; foreground: root.fg; fontFamily: root.font }
+            Card {
+              implicitHeight: today.implicitHeight + Style.space(20)
+              Text {
+                id: today
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.todayCount === 0 ? "No requests yet"
+                      : root.todayCount + (root.todayCount === 1 ? " request" : " requests")
+                        + " · " + root.todayAvg.toFixed(1) + " s on average"
+                        + (root.todayCodex ? " · " + root.todayCodex + " answered by Codex" : "")
+                color: root.fg
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.Wrap
+              }
+            }
+          }
+
+          // ---------------- Updates ----------------
+          Column {
+            id: updatesPage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 4
+
+            SectionTitle { text: "UPDATES" }
+
+            Card {
+              implicitHeight: updateText.implicitHeight + Style.space(24)
+              Row {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(14)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(12)
+                Text {
+                  id: updateIcon
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.updating || root.checking ? "󰑓" : root.updateAvailable ? "󰚰"
+                        : root.updState === "current" || root.updState === "done" ? "󰄬"
+                        : root.updState === "failed" || root.updState === "error" ? "󰀦" : "󰚰"
+                  color: root.updateAvailable ? Color.accent : root.fg
+                  font.family: root.font
+                  font.pixelSize: Style.font.title + 4
+                  RotationAnimation on rotation {
+                    running: root.updating || root.checking
+                    from: 0; to: 360; duration: 1100; loops: Animation.Infinite
+                    onRunningChanged: if (!running) updateIcon.rotation = 0
+                  }
+                }
+                Column {
+                  id: updateText
+                  width: parent.width - updateIcon.width - parent.spacing
+                  spacing: Style.space(3)
+                  Text {
+                    width: parent.width
+                    text: root.updateHeadline
+                    color: root.fg
+                    font.family: root.font
+                    font.pixelSize: Style.font.subtitle
+                    font.bold: true
+                    wrapMode: Text.Wrap
+                  }
+                  Text {
+                    width: parent.width
+                    visible: text !== ""
+                    text: root.updateDetail
+                    color: Qt.darker(root.fg, 1.5)
+                    font.family: root.font
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 4
+                    elide: Text.ElideRight
+                  }
+                }
+              }
+            }
+
+            Column {      // what's new
+              width: parent.width
+              spacing: Style.space(6)
+              visible: (root.updateAvailable || root.updating) && (root.upd.commits || []).length > 0
+              PanelSectionHeader { text: "WHAT'S NEW"; foreground: root.fg; fontFamily: root.font }
+              Caption { visible: !!root.upd.note; text: root.upd.note || "" }
+              Repeater {
+                model: (root.upd.commits || []).slice(0, 5)
+                Text {
+                  required property var modelData
+                  width: updatesPage.width
+                  text: "•  " + modelData.subject
+                  color: root.fg
+                  font.family: root.font
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+              }
+              Caption {
+                visible: (root.upd.count || 0) > 5
+                text: "and " + ((root.upd.count || 0) - 5) + " more"
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: root.confirmingUpdate
+              wrapMode: Text.WordWrap
+              text: "Auren waits until it's idle, stops, installs the new version and starts again (about a minute)."
+                    + " If the bar plugin changed, the bar restarts too. A failed install puts the current version back."
+              color: root.fg
+              font.family: root.font
+              font.pixelSize: Style.font.bodySmall
             }
             Choice {
               width: parent.width
-              options: [
-                { value: "test", label: "Test", icon: "󰐊", tip: "Say a sample sentence" },
-                { value: "reset", label: "Defaults", icon: "󰦛", tip: "Speed 1.05, balanced, full volume, no pause" }
-              ]
+              options: root.asOptions(root.updateActions)
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(8) ? root.cursorCol : -1
-              onPicked: function(v) { if (v === "test") root.ctlRun(["say", root.sample]); else root.ctlRun(["tts", "reset"]) }
-              onHoveredIndex: function(i) { root.hover(8, i) }
+              cursorIndex: root.has(0) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.updateActions, i) }
+              onHoveredIndex: function(i) { root.hover(0, i) }
+            }
+            Toggle {
+              width: parent.width
+              label: "Tell me about updates"
+              description: panelPrefs.notifyUpdates ? "A notification when a new version is out (checked every 6 hours)"
+                                                    : "Off: check here when you like"
+              checked: panelPrefs.notifyUpdates
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(1)
+              onClicked: { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() }
+              onHovered: function(h) { if (h) root.hover(1) }
+            }
+            Caption {
+              text: root.versionText + (root.installedInfo.committed ? " from " + root.day(root.installedInfo.committed) : "")
+                    + ". Updates come from the main branch while Auren is in development; releases come later."
             }
           }
         }
 
-        // ================= Brain =================
+        // ================= footer =================
         Column {
+          id: footer
+          anchors.bottom: parent.bottom
           width: parent.width
           spacing: Style.space(10)
-          visible: root.page === 3
-
-          Column {
+          PanelSeparator { foreground: root.fg }
+          Item {
             width: parent.width
-            spacing: Style.space(8)
-            enabled: root.daemonAlive
-            opacity: enabled ? 1 : 0.5
-            PanelSectionHeader { text: "WHO ANSWERS"; foreground: root.fg; fontFamily: root.font }
+            implicitHeight: footerButtons.implicitHeight
             Choice {
-              width: parent.width
-              options: [
-                { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
-                { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
-                { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6.1 Sol via Codex (saves Claude's allowance)" }
-              ]
-              value: root.brainMode
+              id: footerButtons
+              width: parent.width - versionLabel.implicitWidth - Style.space(12)
+              options: root.asOptions(root.footerActions)
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(1) ? root.cursorCol : -1
-              onPicked: function(v) { root.setBrain(v) }
-              onHoveredIndex: function(i) { root.hover(1, i) }
+              cursorIndex: root.has(root.footerRow) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.footerActions, i) }
+              onHoveredIndex: function(i) { root.hover(root.footerRow, i) }
             }
             Text {
-              width: parent.width
-              text: "Now: " + root.brainText
-              color: root.dim
+              id: versionLabel
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.updateAvailable ? "Update available" : root.versionText
+              color: root.updateAvailable ? Color.accent : root.dim
               font.family: root.font
               font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
+              font.bold: root.updateAvailable
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.showPage(4)
+              }
             }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(8)
-            enabled: root.daemonAlive && root.brainMode !== "codex"
-            opacity: enabled ? 1 : 0.5
-            PanelSectionHeader { text: "CLAUDE EFFORT"; foreground: root.fg; fontFamily: root.font }
-            Choice {
-              width: parent.width
-              options: root.efforts
-              value: root.effort
-              foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(2) ? root.cursorCol : -1
-              onPicked: function(v) { root.setEffort(v) }
-              onHoveredIndex: function(i) { root.hover(2, i) }
-            }
-            Text {
-              width: parent.width
-              text: root.brainMode === "codex" ? "Codex only: Claude isn't used"
-                    : "Higher thinks harder but answers slower. Changing it starts a fresh conversation."
-              color: root.dim
-              font.family: root.font
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.Wrap
-            }
-          }
-
-          PanelSectionHeader { text: "AUREN"; foreground: root.fg; fontFamily: root.font }
-          Choice {
-            width: parent.width
-            options: [
-              { value: "restart", label: "Restart", icon: "󰜉", tip: "Restart Auren" },
-              { value: "log", label: "Log", icon: "󰦪", tip: "Open Auren's log" },
-              { value: "power", label: root.daemonAlive || root.daemonActive ? "Turn off" : "Turn on", icon: "󰐥", tip: "Start or stop the voice daemon" }
-            ]
-            foreground: root.fg; fontFamily: root.font
-            cursorIndex: root.has(3) ? root.cursorCol : -1
-            onPicked: function(v, i) { [root.restartAuren, root.openLog, root.toggleAuren][i]() }
-            onHoveredIndex: function(i) { root.hover(3, i) }
-          }
-
-          Text {
-            width: parent.width
-            text: root.todayCount === 0 ? "No requests today yet"
-                  : "Today: " + root.todayCount + (root.todayCount === 1 ? " request" : " requests")
-                    + " · " + root.todayAvg.toFixed(1) + " s average"
-                    + (root.todayCodex ? " · " + root.todayCodex + " by Codex" : "")
-            color: root.dim
-            font.family: root.font
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
           }
         }
       }
     }
+  }
+
+  component SectionTitle: Text {
+    color: root.fg
+    font.family: root.font
+    font.pixelSize: Style.font.subtitle
+    font.bold: true
+  }
+
+  component Caption: Text {
+    width: parent ? parent.width : 0
+    color: root.dim
+    font.family: root.font
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.Wrap
+  }
+
+  component Card: Rectangle {
+    property bool hot: false
+    width: parent ? parent.width : 0
+    radius: Style.cornerRadius
+    color: hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+    border.width: 1
+    border.color: hot ? root.fg : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.25)
   }
 }

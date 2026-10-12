@@ -4,6 +4,7 @@
   auren doctor                # what works on this machine, and how to fix what doesn't
   auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
   auren voice-model           # download the voice model (install.sh runs this)
+  auren update                # check for a newer version, and install it if you say so
   auren chat                  # type requests, see tool calls and the reply
   auren ask "open whatsapp"   # one request
 """
@@ -54,6 +55,7 @@ def main() -> None:
     sub.add_parser("doctor")
     sub.add_parser("config").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("voice-model")
+    sub.add_parser("update").add_argument("args", nargs=argparse.REMAINDER)
     dmn = sub.add_parser("daemon")
     dmn.add_argument("--quiet", action="store_true", help="no voice; replies shown on the OSD")
     ask = sub.add_parser("ask")
@@ -75,6 +77,9 @@ def main() -> None:
     if a.cmd == "config":
         from .settings import main as config_main
         return config_main(a.args)
+    if a.cmd == "update":
+        from .update import main as update_main
+        return update_main(a.args)
     if a.cmd == "voice-model":
         from .voice import VoiceModelMissing, download_model
         try:
