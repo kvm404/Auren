@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
+@ENV@
 ExecStart=@SHARE@/venv/bin/auren daemon
 Restart=on-failure
 RestartSec=3

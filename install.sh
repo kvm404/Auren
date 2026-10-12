@@ -16,8 +16,9 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-config="${XDG_CONFIG_HOME:-$HOME/.config}"
-share="${XDG_DATA_HOME:-$HOME/.local/share}/auren"
+config="$(realpath -m "${XDG_CONFIG_HOME:-$HOME/.config}")"
+data="$(realpath -m "${XDG_DATA_HOME:-$HOME/.local/share}")"
+share="$data/auren"
 units="$config/systemd/user"
 plugins="$config/omarchy/plugins"
 userbin="$HOME/.local/bin"
@@ -31,6 +32,16 @@ esac
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
+
+# ---- where it goes -----------------------------------------------------------------------------
+# These paths end up in systemd units and sed replacements: keep them plain.
+for path in "$share" "$config"; do
+  [[ $path =~ ^/[A-Za-z0-9._/+-]+$ ]] || { warn "can't install with $path: use a folder without spaces or special characters"; exit 1; }
+done
+if [[ "$share/" == "$repo/"* || "$repo/" == "$share/"* ]]; then
+  warn "the checkout ($repo) and the install folder ($share) overlap: clone Auren somewhere else"
+  exit 1
+fi
 
 # ---- requirements ------------------------------------------------------------------------------
 missing=0
@@ -79,9 +90,16 @@ say "Voice model"
 # ---- systemd user services ---------------------------------------------------------------------
 say "Services: auren, auren-mascot"
 mkdir -p "$units"
+qs="$(command -v qs)"
+[[ $qs =~ ^/[A-Za-z0-9._/+-]+$ ]] || { warn "qs is at $qs: a path without spaces or special characters is needed"; exit 1; }
+# Folders other than the usual ones reach the services too (the user manager may not have them).
+env=""
+[[ $config == "$HOME/.config" ]] || env+="Environment=XDG_CONFIG_HOME=$config\n"
+[[ $data == "$HOME/.local/share" ]] || env+="Environment=XDG_DATA_HOME=$data\n"
 for unit in auren.service auren-mascot.service; do
-  sed -e "s#@SHARE@#$share#g" -e "s#@QS@#$(command -v qs)#g" "$repo/systemd/$unit" >"$units/$unit"
+  sed -e "s#@SHARE@#$share#g" -e "s#@QS@#$qs#g" -e "s#^@ENV@\$#$env#" "$repo/systemd/$unit" >"$units/$unit"
 done
+[[ -z $env ]] || warn "custom XDG folders: the bar plugin uses your session's, so set them there too"
 systemctl --user daemon-reload
 for unit in auren auren-mascot; do
   if systemctl --user is-active --quiet "$unit"; then

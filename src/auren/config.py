@@ -15,6 +15,7 @@ then the keyring (`secret-tool lookup auren <name>`). They are never logged.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -33,6 +34,9 @@ def _runtime_base() -> Path:
         return Path(value)
     fallback = Path(f"/tmp/auren-runtime-{os.getuid()}")
     fallback.mkdir(mode=0o700, exist_ok=True)
+    st = fallback.lstat()          # someone else may have made it first, to catch Auren's sockets
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise RuntimeError(f"{fallback} isn't a private folder of yours: remove it, or set XDG_RUNTIME_DIR")
     return fallback
 
 
