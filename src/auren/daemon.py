@@ -414,6 +414,8 @@ class Daemon:
             return
         async with self.busy:                          # one request at a time; later ones wait
             t0 = time.perf_counter()
+            # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
+            self.tools.new_turn(SESSION)              # once per user message, whichever brain answers
             self.set_state("thinking", text, transcript=text)
             osd("Thinking…", 1500)
             tools: list[str] = []
@@ -421,7 +423,6 @@ class Daemon:
 
             def run() -> str:
                 said = ""
-                self.tools.new_turn(SESSION)          # once per user message, whichever brain answers
                 for ev in self.brain.ask(text):
                     if ev[0] == "tool":
                         tools.append(ev[1])

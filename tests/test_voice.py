@@ -228,3 +228,34 @@ def test_brain_mode_command_warms_or_stops_claude(tmp_path, monkeypatch):
 
     d = asyncio.run(run())
     assert d.brain.mode == "codex" and d.brain.warmed == 1 and _saved(tmp_path)["brain"] == "codex"
+
+
+def test_a_cancel_before_the_brain_starts_still_stops_the_request(tmp_path, monkeypatch):
+    import asyncio
+
+    from auren import brain as b
+    from auren.tools import Runtime
+
+    answered, records = [], []
+    monkeypatch.setattr(b.ClaudeBrain, "start", lambda self: setattr(self, "proc", type("P", (), {"poll": lambda s: None})()))
+    monkeypatch.setattr(b.ClaudeBrain, "_ask", lambda self, text: answered.append(text) or iter([("say", "done")]))
+    monkeypatch.setattr(daemon, "osd", lambda *a, **k: None)
+    monkeypatch.setattr(daemon.Daemon, "_history", lambda self, record: records.append(record))
+    monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": None)
+
+    def set_state(self, state, detail="", **k):
+        self.state = state
+        if state == "thinking":                     # the user cancels right as "thinking" shows
+            self.tools.cancel(daemon.SESSION)
+            self.brain.interrupt()                  # nothing is being asked yet: a no-op
+
+    monkeypatch.setattr(daemon.Daemon, "set_state", set_state)
+
+    async def run():
+        d = _Quiet()
+        d.busy, d.tools = asyncio.Lock(), Runtime(tmp_path / "t.sock")
+        d.brain = b.Brain(d.tools, daemon.SESSION)
+        await d.respond("close everything", source="voice")
+
+    asyncio.run(run())
+    assert answered == [] and records[-1]["reply"] == "(cancelled)"

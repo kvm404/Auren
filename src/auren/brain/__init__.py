@@ -125,6 +125,9 @@ class ClaudeBrain:
             self.start()
         self._interrupted, self._asking = False, True
         try:
+            # A cancel that came before _asking was set found nothing to interrupt: it shows here instead.
+            if _cancelled(self.runtime, self.session):
+                raise Interrupted("cancelled")
             yield from self._ask(transcript)
         finally:
             self._asking = False
@@ -180,6 +183,10 @@ class ClaudeBrain:
         raise BrainError("the brain process stopped: " + "".join(self._stderr)[-500:])
 
 
+def _cancelled(runtime, session: str) -> bool:
+    return runtime is not None and runtime.cancelled(session)
+
+
 def _env_toml(env: dict) -> str:
     return "{" + ",".join(f"{k}={json.dumps(v)}" for k, v in env.items()) + "}"
 
@@ -231,6 +238,10 @@ class CodexBrain:
         sent = time.perf_counter()
         self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                             text=True, cwd=workdir)
+        if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
+            proc.kill()
+            proc.wait()
+            raise Interrupted("cancelled")
         proc.stdin.write(message)
         proc.stdin.close()
         for line in proc.stdout:
