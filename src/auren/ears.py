@@ -23,20 +23,25 @@ from urllib.parse import urlencode
 import numpy as np
 import websockets
 
-from .config import DATA, secret
+from .config import CONFIG_DIR, DATA, secret
 from .live import loudness
 
+USER_VOCAB = CONFIG_DIR / "vocab.txt"     # the user's own words (names, projects), most important first
 RATE, CHUNK = 16000, 1600                  # 50 ms of 16-bit mono
 MIN_SEND, MAX_SEND = 1600, 32000           # AssemblyAI wants 50-1000 ms per message
 URL = "wss://streaming.assemblyai.com/v3/ws"
 
 
 def vocabulary(profile=None, limit: int = 100) -> list[str]:
-    """Terms to bias recognition toward: the base list, then names from this laptop."""
+    """Terms to bias recognition toward: the user's own (~/.config/auren/vocab.txt), the base list, then
+    names from this laptop."""
     terms: list[str] = []
-    for line in (DATA / "vocab.txt").read_text().splitlines():
-        if line.strip() and not line.startswith("#"):
-            terms.append(line.strip())
+    for f in (USER_VOCAB, DATA / "vocab.txt"):
+        try:
+            lines = f.read_text().splitlines()
+        except OSError:
+            continue
+        terms += [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")]
     if profile is not None:      # most useful first: bookmarks, web apps, projects, then apps
         s = profile.static()
         for names in (s.get("bookmarks") or {}).values() if isinstance(s.get("bookmarks"), dict) else []:

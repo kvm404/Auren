@@ -35,7 +35,8 @@ from pathlib import Path
 
 from . import safety
 from .hands import browser as web
-from .hands import desktop, herdr, screen
+from .hands import desktop, herdr, screen, shell
+from .integrations import active, hidden_tools
 from .profile import Profile
 
 log = logging.getLogger("auren.tools")
@@ -120,6 +121,8 @@ class Runtime:
         t = TOOLS.get(name)
         if t is None:
             return [f"error: no tool called {name}"]
+        if name in hidden_tools():
+            return [f"error: {name} isn't available on this machine (see auren doctor)"]
         c = _Call(self, sid)
         token = _call.set(c)
         try:
@@ -137,6 +140,11 @@ class Runtime:
 
     # --- socket ------------------------------------------------------------------------------
 
+    def offered(self) -> list[str]:
+        """The tools the brain is offered: all but those of integrations that are off or missing."""
+        hidden = hidden_tools()
+        return [n for n in TOOLS if n not in hidden]
+
     def start(self) -> None:
         """Serve tool calls on the socket, in background threads."""
         runtime = self
@@ -145,6 +153,9 @@ class Runtime:
             def handle(self):
                 try:
                     req = json.loads(self.rfile.readline())
+                    if req.get("list"):
+                        self.wfile.write(json.dumps({"tools": runtime.offered()}).encode() + b"\n")
+                        return
                     out = runtime.call(str(req.get("session") or "daemon"), str(req["tool"]), dict(req.get("args") or {}))
                 except (ValueError, KeyError, TypeError) as e:
                     out = [f"error: bad request: {e}"]
@@ -182,8 +193,8 @@ def signature(name: str) -> inspect.Signature:
 def _run(fn, *args, **kwargs) -> str:
     try:
         out = fn(*args, **kwargs)
-    except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, PermissionError,
-            ValueError) as e:
+    except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, shell.ShellError,
+            PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
         return f"error: unexpected {type(e).__name__}: {e}\n{traceback.format_exc(limit=2)}"
@@ -367,10 +378,10 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
 
 
 @tool()
-def start_agent(kind: str = "codex", folder: str = "~", name: str = "", task: str = "",
+def start_agent(kind: str = "", folder: str = "~", name: str = "", task: str = "",
                 wait: bool = False, timeout_s: int = 180) -> str:
-    """Start a new coding agent (codex by default; claude, opencode, agy, grok, muse...) in its own tab of
-    auren's herdr workspace, in a folder, optionally with a first task. name: a short job name for the task
+    """Start a new coding agent (leave kind empty for the user's default agent, or name one: claude, codex,
+    opencode, agy, grok...) in its own tab of auren's herdr workspace, in a folder, optionally with a first task. name: a short job name for the task
     (like "lecture-notes"). The user's view switches to the new tab so they can watch (the result's
     `view` says whether they can see it; don't claim it's showing otherwise). For big jobs keep
     wait=False and tell the user it's running."""
@@ -385,8 +396,8 @@ def start_agent(kind: str = "codex", folder: str = "~", name: str = "", task: st
 
 @tool()
 def run_command(command: str, folder: str = "~", name: str = "", wait: bool = True, timeout_s: int = 60) -> str:
-    """Run a shell command in its own tab of auren's herdr workspace. Returns exit code and output when
-    wait=True. Commands that delete, overwrite, need root, restart services, push, or touch secrets need
+    """Run a shell command as a job (in its own tab of auren's herdr workspace when herdr is there, else in
+    the background). Returns exit code and output when wait=True. Commands that delete, overwrite, need root, restart services, push, or touch secrets need
     the user's confirmation first."""
     risk = safety.command_risk(command)
     if risk:
@@ -396,7 +407,8 @@ def run_command(command: str, folder: str = "~", name: str = "", wait: bool = Tr
 
 
 def _run_command(command: str, folder: str, name: str, wait: bool, timeout_s: int) -> str:
-    out = _run(herdr.run_command, command, folder, name, wait, timeout_s)
+    runner = herdr.run_command if active("herdr") else shell.run_command
+    out = _run(runner, command, folder, name, wait, timeout_s)
     if out.startswith("error:"):
         return out
     d = json.loads(out)
@@ -408,14 +420,15 @@ def _run_command(command: str, folder: str, name: str, wait: bool, timeout_s: in
 @tool(repeatable=True)
 def job_status(job: str, wait_s: int = 0) -> str:
     """Result of a run_command job (exit code, output); optionally wait up to wait_s seconds."""
-    out = _run(herdr.command_result, job, wait_s)
+    out = _run(shell.command_result if shell.has(job) else herdr.command_result, job, wait_s)
     return out if out.startswith("error:") else safety.untrusted(out, f"job {job}")
 
 
 @tool()
 def close_job(job: str) -> str:
-    """Close one of auren's own herdr tabs (never the user's)."""
-    return _run(herdr.close_job, job)
+    """Close one of auren's own jobs: its herdr tab, or stop it if it runs in the background (never the
+    user's)."""
+    return _run(shell.close_job if shell.has(job) else herdr.close_job, job)
 
 
 @tool(repeatable=True)
@@ -424,7 +437,7 @@ def show_agent(agent: str, hint: str = "") -> str:
     return _run(herdr.focus, agent, hint)
 
 
-# --- browser (the user's real, logged-in Chrome or Brave) ---------------------------------------------
+# --- browser (the user's real, logged-in Chromium browser) ---------------------------------------------
 
 def _same_page(before: dict) -> Callable[[], None]:
     def check() -> None:
@@ -438,11 +451,11 @@ def _same_page(before: dict) -> Callable[[], None]:
 
 
 @tool(repeatable=True)
-def browser_open(url: str, browser: str = "chrome") -> str:
+def browser_open(url: str, browser: str = "") -> str:
     """Open a page in a new auren tab of the user's real browser and read it: text plus numbered clickable
-    items. url can be 'bookmark:<name or folder/name>'. browser: chrome or brave (the user's routines may
-    say which). If the browser isn't open, this starts it and waits for it
-    to connect (up to ~25 s): don't launch it first."""
+    items. url can be 'bookmark:<name or folder/name>'. browser: leave empty for the user's browser, or
+    name one (chrome, brave, chromium, helium, edge, vivaldi) when the user or a routine asks for it. If
+    the browser isn't open, this starts it and waits for it to connect (up to ~25 s): don't launch it first."""
     return _web(_run(web.browser_open, url, browser))
 
 
@@ -507,13 +520,13 @@ def browser_close(keep_current: bool = False) -> str:
 
 
 @tool(repeatable=True)
-def browser_bookmarks(query: str = "", browser_name: str = "chrome") -> str:
+def browser_bookmarks(query: str = "", browser_name: str = "") -> str:
     """List the user's bookmarks matching words (folder/name → url)."""
     return _run(web.bookmarks, query, browser_name)
 
 
 @tool(repeatable=True)
-def recent_downloads(minutes: int = 30, browser_name: str = "chrome") -> str:
+def recent_downloads(minutes: int = 30, browser_name: str = "") -> str:
     """Files downloaded recently (path and size)."""
     return _run(web.recent_downloads, browser_name, minutes)
 

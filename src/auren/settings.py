@@ -16,6 +16,7 @@ is migrated once, then kept as settings.json.bak.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -71,6 +72,35 @@ def _choice(*options: str) -> Callable[[Any], str]:
     return check
 
 
+def _switch(v: Any) -> str | bool:
+    """auto (use it if it's installed), true or false."""
+    if str(v).strip().lower() == "auto":
+        return "auto"
+    try:
+        return _boolean(v)
+    except ValueError:
+        raise ValueError("auto, true or false") from None
+
+
+def _name(v: Any) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][\w .+-]{0,40}", str(v)):
+        raise ValueError("auto or a name")
+    return str(v)
+
+
+def _folders(v: Any) -> list[str]:
+    items = [v] if isinstance(v, str) else v
+    if not isinstance(items, list) or not all(isinstance(x, str) and x.strip() for x in items):
+        raise ValueError("a list of folders")
+    return [x.strip() for x in items]
+
+
+def _paths_by_name(v: Any) -> dict[str, str]:
+    if not isinstance(v, dict) or not all(isinstance(k, str) and isinstance(x, str) for k, x in v.items()):
+        raise ValueError('a table like { chrome = "/tmp/open-browser-use-chrome" }')
+    return {k.lower(): x for k, x in v.items()}
+
+
 def _voice_name(v: Any) -> str:
     if not re.fullmatch(r"[FM]\d", str(v)):
         raise ValueError("a voice like F2 or M3")
@@ -97,6 +127,22 @@ KEYS = [
     Key("voice.pause", "pause", 0.0, _number(0.0, 1.0), "Silence between sentences in seconds: 0 to 1"),
     Key("brain.mode", "brain", "auto", _choice(*MODES), "Who answers: auto (Claude Code, Codex when Claude hits a limit), claude or codex"),
     Key("brain.effort", "effort", "low", _choice(*EFFORTS), "Claude's effort: low, medium, high, xhigh or max"),
+    Key("integrations.herdr", "integrations.herdr", "auto", _switch,
+        "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
+    Key("integrations.browser", "integrations.browser", "auto", _switch,
+        "Browser tools through Open Browser Use: auto (if it's installed), true or false"),
+    Key("integrations.screen", "integrations.screen", "auto", _switch,
+        "Mouse control (click, drag, scroll on the screen): auto (if /dev/uinput is writable), true or false"),
+    Key("browser.name", "browser.name", "auto", _name,
+        "Browser for the browser tools: auto (your default browser), or chrome, chromium, brave, helium, edge, vivaldi"),
+    Key("browser.profile", "browser.profile", "auto", _name,
+        "Browser profile folder for bookmarks and downloads: auto (the last one used), or Default, Profile 1, ..."),
+    Key("browser.sockets", "browser.sockets", {}, _paths_by_name,
+        "Open Browser Use socket folder per browser, if you run more than one host (default /tmp/open-browser-use)"),
+    Key("projects.folders", "projects.folders", [], _folders,
+        "Folders that hold your projects; empty: the usual ones that exist (~/Projects, ~/Code, ~/src, ...)"),
+    Key("agents.default", "agents.default", "auto", _name,
+        "Coding agent for big jobs: auto (Omarchy's default agent, else the first installed), or codex, claude, opencode, ..."),
 ]
 BY_PATH = {k.path: k for k in KEYS}
 BY_FLAT = {k.flat: k for k in KEYS}
@@ -106,7 +152,7 @@ auren-ctl change some of them too (comments and order are kept)."""
 
 
 def defaults() -> dict:
-    return {k.flat: k.default for k in KEYS}
+    return {k.flat: copy.deepcopy(k.default) for k in KEYS}
 
 
 def _lookup(doc: dict, path: str) -> Any:
@@ -153,6 +199,15 @@ def read(text: str) -> tuple[dict, list[str]]:
     return values, problems
 
 
+def _item(value: Any) -> Any:
+    """Tables are written inline (`sockets = { chrome = "..." }`), so they stay next to their comment."""
+    if isinstance(value, dict):
+        t = tomlkit.inline_table()
+        t.update(value)
+        return t
+    return value
+
+
 def _template(values: dict) -> tomlkit.TOMLDocument:
     doc = tomlkit.document()
     for line in HEADER.splitlines():
@@ -168,7 +223,7 @@ def _template(values: dict) -> tomlkit.TOMLDocument:
                 doc.add(section, tables[section])
             target = tables[section]
         target.add(tomlkit.comment(k.help))
-        target.add(name, values.get(k.flat, k.default))
+        target.add(name, _item(values.get(k.flat, k.default)))
         if not section:
             target.add(tomlkit.nl())
     return doc
@@ -217,6 +272,22 @@ def load() -> dict:
     return values
 
 
+_current: tuple[tuple, dict] | None = None
+
+
+def current() -> dict:
+    """The settings now, re-read only when config.toml changes (for code that asks on every call)."""
+    global _current
+    try:
+        st = CONFIG_FILE.stat()
+    except OSError:
+        return defaults()
+    key = (str(CONFIG_FILE), st.st_mtime_ns, st.st_size)
+    if _current is None or _current[0] != key:
+        _current = (key, read(CONFIG_FILE.read_text())[0])
+    return _current[1]
+
+
 def save(values: dict) -> None:
     """Write the daemon's settings (flat) into config.toml, keeping everything else in the file."""
     ensure()
@@ -235,7 +306,7 @@ def save(values: dict) -> None:
                 doc.add(section, tomlkit.table())
             target = doc[section]
         if _plain(target.get(name)) != value:
-            target[name] = value
+            target[name] = _item(value)
     _write(doc)
 
 
@@ -269,7 +340,7 @@ def _show() -> int:
     print(f"\033[2m{CONFIG_FILE}\033[0m")
     for k in KEYS:
         v = values[k.flat]
-        shown = json.dumps(v) if isinstance(v, (str, bool)) else v
+        shown = v if isinstance(v, (int, float)) and not isinstance(v, bool) else json.dumps(v)
         print(f"  {k.path} = {shown}" + ("" if v != k.default else "  \033[2m(default)\033[0m"))
     for p in problems:
         print(f"\033[33m! {p}\033[0m")

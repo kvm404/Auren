@@ -122,3 +122,15 @@ def test_open_herdr_launches_it_and_waits_for_the_new_window(monkeypatch):
     monkeypatch.setattr(d.time, "sleep", lambda s: None)
     assert d.open_herdr()["address"] == "0x9"
     assert spawned == [["omarchy-launch-terminal", "herdr"]]
+
+
+def test_role_words_open_the_users_default_app():
+    class WithDefaults(FakeProfile):
+        def static(self):
+            s = super().static()
+            s["apps"]["apps"].append({"name": "Brave", "id": "brave-browser"})
+            s["defaults"] = {"browser": "brave-browser", "file_manager": "org.gnome.Nautilus"}
+            return s
+
+    assert d.find_app("browser", WithDefaults())["name"] == "Brave"
+    assert d.find_app("files", WithDefaults())["name"] == "Files"

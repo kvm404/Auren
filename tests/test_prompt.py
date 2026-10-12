@@ -1,0 +1,46 @@
+from pathlib import Path
+
+from auren.brain import prompt
+from auren.profile import render
+
+SRC = Path(__file__).parent.parent / "src" / "auren"
+
+
+def test_no_personal_words_in_the_code():
+    for f in [*SRC.rglob("*.py"), *SRC.rglob("*.txt")]:
+        text = f.read_text()
+        for word in ("Voisu", "Waisoo", "Raja", "Chrome otherwise"):
+            assert word not in text, (f, word)
+
+
+def test_rules_follow_the_integrations():
+    full = prompt.rules({"herdr", "browser", "screen"})
+    bare = prompt.rules(set())
+    assert "start_agent" in full and "browser_open" in full and "click_at" in full
+    assert "start_agent" not in bare and "browser_open" not in bare and "click_at" not in bare
+    assert "Coding agents aren't connected" in bare and "can't move or click the mouse" in bare
+
+
+def test_the_users_own_instructions_come_after_the_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompt, "INSTRUCTIONS", tmp_path / "instructions.md")
+    monkeypatch.setattr(prompt, "ROUTINES_DIR", tmp_path / "routines")
+    assert "own instructions" not in prompt.system_prompt("facts", set())
+    (tmp_path / "instructions.md").write_text("Call me Captain.\n")
+    text = prompt.system_prompt("facts", set())
+    assert text.index("facts") < text.index("Call me Captain.")
+
+
+def test_users_vocabulary_comes_first(tmp_path, monkeypatch):
+    from auren import ears
+
+    monkeypatch.setattr(ears, "USER_VOCAB", tmp_path / "vocab.txt")
+    (tmp_path / "vocab.txt").write_text("# my words\nZorblax\nherdr\n")
+    words = ears.vocabulary()
+    assert words[0] == "Zorblax" and words.count("herdr") == 1
+
+
+def test_snapshot_without_herdr_leaves_it_out():
+    live = {"now": {"date": "Monday", "time": "09:00", "timezone": "IST"},
+            "hyprland": {"windows": [], "active_workspace": 1}}
+    assert "herdr" not in render.render_live(live)
+    assert "herdr" in render.render_live({**live, "herdr": {"workspaces": []}})

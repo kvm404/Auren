@@ -1,8 +1,7 @@
 """Browser tools: work in the user's real, logged-in browser through Open Browser Use.
 
-- Chrome and Brave each run their own Open Browser Use native host. Chrome's uses
-  /tmp/open-browser-use-chrome (see ~/.local/share/open-browser-use/native-host/
-  chrome-host.sh); Brave's uses the default /tmp/open-browser-use.
+- Any Chromium browser Open Browser Use supports (see browsers.py for which one is used, its
+  profile and its host's socket folder).
 - auren works in tabs it opens itself (an Open Browser Use session, grouped as
   "auren" in the browser). It never closes or reuses the user's own tabs.
 - Pages are read as text plus a numbered list of links, buttons and fields;
@@ -22,14 +21,9 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import browsers
+
 HOME = Path.home()
-SOCKET_DIRS = {"chrome": "/tmp/open-browser-use-chrome", "brave": "/tmp/open-browser-use"}
-BOOKMARK_FILES = {"chrome": HOME / ".config/google-chrome/Default/Bookmarks",
-                  "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks"}
-PREFERENCES = {"chrome": HOME / ".config/google-chrome/Default/Preferences",
-               "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Preferences"}
-EXECUTABLES = {"chrome": "google-chrome-stable", "brave": "brave"}
-PROCESS_NAMES = {"chrome": "chrome", "brave": "brave"}
 CONNECT_WAIT = 25
 SESSION = "auren"
 MAX_TEXT = 5000
@@ -41,16 +35,25 @@ class BrowserError(RuntimeError):
     pass
 
 
-def _browser(name: str | None) -> str:
-    n = (name or _state["browser"] or "chrome").strip().lower()
-    n = {"google chrome": "chrome", "google-chrome": "chrome", "brave browser": "brave"}.get(n, n)
-    if n not in SOCKET_DIRS:
-        raise BrowserError(f"browser must be chrome or brave, not {name}")
-    return n
+def _browser(name: str | None = None) -> str:
+    """A browser's key (chrome, brave, ...): the one named, else the configured or detected one."""
+    try:
+        return browsers.resolve(name).key
+    except browsers.UnknownBrowser as e:
+        raise BrowserError(str(e)) from None
+
+
+def _current() -> str:
+    """The browser auren's tab is in (or would be)."""
+    return _state["browser"] or _browser()
+
+
+def _kind(browser: str) -> browsers.Kind:
+    return browsers.BY_KEY[browser]
 
 
 def _running(browser: str) -> bool:
-    return subprocess.run(["pgrep", "-x", PROCESS_NAMES[browser]], capture_output=True).returncode == 0
+    return browsers.running(_kind(browser))
 
 
 def ensure_connected(browser: str, wait: float = CONNECT_WAIT) -> None:
@@ -65,7 +68,7 @@ def ensure_connected(browser: str, wait: float = CONNECT_WAIT) -> None:
     if not _running(browser):
         from . import desktop
         desktop.hide_scratchpad()            # new windows open on a showing special workspace
-        desktop.spawn(["uwsm-app", "--", EXECUTABLES[browser]])
+        desktop.spawn(browsers.launcher(_kind(browser)))
         started = True
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
@@ -76,7 +79,7 @@ def ensure_connected(browser: str, wait: float = CONNECT_WAIT) -> None:
             return
         except BrowserError:
             continue
-    name = browser.title()
+    name = _kind(browser).name
     if started:
         raise BrowserError(f"I started {name}, but its Open Browser Use extension didn't connect within "
                            f"{wait:.0f} seconds. Is the extension installed and on in {name}?")
@@ -100,7 +103,7 @@ def obu(browser: str, *args: str, timeout: float = 30, retry: bool = True) -> di
 
 
 def _obu(browser: str, *args: str, timeout: float = 30) -> dict:
-    cmd = ["open-browser-use", *args, "--session-id", f"{SESSION}-{browser}", "--socket-dir", SOCKET_DIRS[browser]]
+    cmd = ["open-browser-use", *args, "--session-id", f"{SESSION}-{browser}", "--socket-dir", browsers.socket_dir(_kind(browser))]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -113,7 +116,7 @@ def _obu(browser: str, *args: str, timeout: float = 30) -> dict:
     if p.returncode != 0 or "error" in d:
         msg = (d.get("error") or {}).get("message") if isinstance(d.get("error"), dict) else (p.stderr or out)
         if "connect" in str(msg).lower() or "no active" in str(msg).lower() or "socket" in str(msg).lower():
-            raise _NotConnected(f"{browser.title()} isn't connected to auren (Open Browser Use)")
+            raise _NotConnected(f"{_kind(browser).name} isn't connected to auren (Open Browser Use)")
         raise BrowserError(f"browser: {str(msg).strip()[:300]}")
     return d.get("result", d)
 
@@ -215,7 +218,7 @@ def _mask_url(url: str) -> str:
 
 # --- tools ----------------------------------------------------------------------------
 
-def browser_open(url: str, browser: str = "chrome") -> str:
+def browser_open(url: str, browser: str = "") -> str:
     """Open a URL (or 'bookmark:<name or folder/name>') in a new auren tab and read it."""
     b = _browser(browser)
     if "…" in url:
@@ -246,14 +249,14 @@ def _front(browser: str, tab: int) -> None:
 
 
 def browser_read(tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     _front(b, t)
     return _format(_eval(b, t, _READ_JS))
 
 
 def browser_click(target: str, tab: int | None = None, expect_download: bool = False) -> str:
     """Click item number `target` from the last read (or the first item whose text matches `target`)."""
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     _front(b, t)
     before = _download_snapshot(b) if expect_download else None
     js = """
@@ -296,7 +299,7 @@ RISKY_CLICK = re.compile(r"\b(buy|pay|purchase|place order|order now|checkout|ch
 
 def label_of(target: str, tab: int | None = None) -> str | None:
     """The label of the item `target` would click, without clicking (for the safety check)."""
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     js = """((target) => { const all = [...document.querySelectorAll('[data-auren-id]')];
       const lab = e => (e.getAttribute('data-auren-label') || '');
       if (/^\\d+$/.test(target)) { const e = document.querySelector(`[data-auren-id="${target}"]`); return e ? lab(e) : null; }
@@ -307,14 +310,14 @@ def label_of(target: str, tab: int | None = None) -> str | None:
 
 def page() -> dict:
     """The auren tab now: browser, tab id and address (what a confirmation is bound to)."""
-    b, t = _state["browser"] or "chrome", _tab(None)
+    b, t = _current(), _tab(None)
     return {"browser": b, "tab": t, "url": _eval(b, t, "location.href")}
 
 
 def field_of(target: str, tab: int | None = None) -> dict | None:
     """A numbered field from the last read: its label and whether it's a search box (pressing Enter in a
     search box only searches; in other fields it can send or post)."""
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     js = """((target) => { const el = document.querySelector(`[data-auren-id="${target}"]`);
       if (!el) return null;
       const words = [el.type, el.name, el.id, el.getAttribute('role'), el.getAttribute('aria-label'),
@@ -326,7 +329,7 @@ def field_of(target: str, tab: int | None = None) -> dict | None:
 
 
 def browser_type(target: str, text: str, submit: bool = False, tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     js = """
     ((target, text, submit) => {
       const el = document.querySelector(`[data-auren-id="${target}"]`);
@@ -352,7 +355,7 @@ def browser_type(target: str, text: str, submit: bool = False, tab: int | None =
 
 
 def browser_scroll(direction: str = "down", tab: int | None = None) -> str:
-    b, t = _state["browser"] or "chrome", _tab(tab)
+    b, t = _current(), _tab(tab)
     _eval(b, t, f"window.scrollBy(0, {'' if direction == 'down' else '-'}window.innerHeight * 0.9)")
     time.sleep(0.6)
     return browser_read(t)
@@ -361,8 +364,9 @@ def browser_scroll(direction: str = "down", tab: int | None = None) -> str:
 # --- bookmarks ---------------------------------------------------------------------------
 
 def _bookmarks(browser: str) -> list[tuple[str, str]]:
-    path = BOOKMARK_FILES[browser]
-    if not path.exists():
+    profile = browsers.profile_dir(_kind(browser))
+    path = profile / "Bookmarks" if profile else None
+    if path is None or not path.exists():
         return []
     data = json.loads(path.read_text())
     out = []
@@ -378,7 +382,7 @@ def _bookmarks(browser: str) -> list[tuple[str, str]]:
     return out
 
 
-def bookmarks(query: str = "", browser: str = "chrome") -> str:
+def bookmarks(query: str = "", browser: str = "") -> str:
     b = _browser(browser)
     words = query.lower().split()
     hits = [(name, url) for name, url in _bookmarks(b) if all(w in name.lower() for w in words)]
@@ -402,7 +406,10 @@ def _bookmark_url(name: str, browser: str) -> str:
 
 def download_dir(browser: str) -> Path:
     try:
-        prefs = json.loads(PREFERENCES[browser].read_text())
+        profile = browsers.profile_dir(_kind(browser))
+        if profile is None:
+            raise OSError("no profile")
+        prefs = json.loads((profile / "Preferences").read_text())
         d = prefs.get("download", {}).get("default_directory") or prefs.get("savefile", {}).get("default_directory")
         if d:
             return Path(d)
@@ -429,7 +436,7 @@ def _wait_download(browser: str, before: dict[str, float], timeout: float = 60) 
     return None
 
 
-def recent_downloads(browser: str = "chrome", minutes: int = 30) -> str:
+def recent_downloads(browser: str = "", minutes: int = 30) -> str:
     d = download_dir(_browser(browser))
     cutoff = time.time() - minutes * 60
     files = sorted((p for p in d.iterdir() if p.stat().st_mtime > cutoff and p.is_file()),
@@ -439,7 +446,7 @@ def recent_downloads(browser: str = "chrome", minutes: int = 30) -> str:
 
 def browser_close(keep_current: bool = False) -> str:
     """Close the tabs auren opened (never the user's own). keep_current leaves the last one open."""
-    b = _state["browser"] or "chrome"
+    b = _current()
     keep = [{"tabId": _state["tab"], "status": "deliverable"}] if keep_current and _state["tab"] else []
     obu(b, "finalize-tabs", "--keep", json.dumps(keep))
     if not keep_current:

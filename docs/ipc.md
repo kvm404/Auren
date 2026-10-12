@@ -79,10 +79,13 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
+| `~/.config/auren/instructions.md` | user | Extra instructions for the brain (after the laptop facts) |
+| `~/.config/auren/vocab.txt` | user | Extra words for speech recognition, one per line, most important first |
 | `~/.local/state/auren/mascot.json` | mascot | Its place and size |
 | `~/.local/state/auren/history.jsonl` | daemon | Every exchange (read by the bar plugin) |
 | `~/.local/state/auren/daemon.log` | daemon | Log |
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
+| `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
