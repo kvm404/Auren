@@ -413,7 +413,7 @@ class Daemon:
                         self.loop.call_soon_threadsafe(lambda d=doing, t=ev[1], m=mouse: progress(
                             "working", d, tool=t, mouse=m, transcript=text))
                         if (kind := notice_kind(ev[1])) and not self.tools.cancelled(SESSION):
-                            notice.show(doing, kind)
+                            notice.show(doing, kind, always=True)      # actions show on the OSD with the bubble up too
                     elif ev[0] == "switch":
                         self.loop.call_soon_threadsafe(lambda d=ev[1]: progress("thinking", d))
                     elif ev[0] == "say":

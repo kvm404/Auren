@@ -3,7 +3,9 @@
 The mascot's bubble is the main place: what Auren heard, is doing, and says. When the mascot isn't
 running, is hidden, or has its bubble turned off, the same news goes elsewhere:
 - short statuses (listening, thinking, clicking...) to Omarchy's on-screen display, with an icon for
-  their kind. Without an icon the OSD reads the message as a volume of 0% and draws a muted speaker;
+  their kind. Without an icon the OSD reads the message as a volume of 0% and draws a muted speaker.
+  What Auren *does* (a click, a key press, opening an app...) is shown there even while the bubble is
+  up (`always`): the bubble is easy to miss, and this one-line note sits where the eye already is;
 - replies and errors, which need reading in full, to a notification (the OSD is one short line).
 
 Before a screenshot, `clear()` closes an OSD Auren opened, so the brain sees the screen and not Auren's
@@ -77,10 +79,10 @@ def mascot_showing() -> bool:
             and not _json(STATE_DIR / "mascot.json").get("hidden", False))
 
 
-def show(message: str, kind: str = "auren", ms: int = 1500) -> None:
-    """A one-line status on Omarchy's OSD, unless the mascot shows it already."""
+def show(message: str, kind: str = "auren", ms: int = 1500, always: bool = False) -> None:
+    """A one-line status on Omarchy's OSD, unless the mascot shows it already (`always`: even then)."""
     global _osd_at
-    if mascot_showing():
+    if not always and mascot_showing():
         return
     with _osd:
         _osd_at = time.monotonic()

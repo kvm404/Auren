@@ -260,6 +260,44 @@ def test_a_cancel_before_the_brain_starts_still_stops_the_request(tmp_path, monk
     assert answered == [] and records[-1]["reply"] == "(cancelled)"
 
 
+def test_actions_show_on_the_osd_with_the_mascot_up_but_other_news_does_not(tmp_path, monkeypatch, _no_notices):
+    import asyncio
+
+    from auren import notice
+    from auren.tools import Runtime
+
+    monkeypatch.setattr(notice, "CONFIG_DIR", tmp_path / "config")      # no mascot.json: the bubble is on
+    monkeypatch.setattr(notice, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(notice, "_mascot_running", lambda: True)
+    monkeypatch.setattr(daemon.Daemon, "_history", lambda self, record: None)
+    monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": None)
+    monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, state, detail="", **k: setattr(self, "state", state))
+
+    class Brain:
+        using_backup = False
+
+        def ask(self, text):
+            yield ("tool", "click_at", {"target": "Send"})
+            yield ("tool", "system_info", {"what": "time"})            # a quick read: no notice
+            yield ("tool", "launch_app", {"app": "WhatsApp"})
+            yield ("say", "done")
+
+    async def say(self, text):
+        pass
+
+    monkeypatch.setattr(daemon.Daemon, "say", say)
+
+    async def run():
+        d = _Quiet()
+        d.busy, d.tools, d.listening, d.brain = asyncio.Lock(), Runtime(tmp_path / "t.sock"), None, Brain()
+        d.loop = asyncio.get_running_loop()
+        await d.respond("send it", source="voice")
+
+    asyncio.run(run())
+    shown = [cmd[cmd.index("-m") + 1] for cmd in _no_notices]
+    assert shown == ["Clicking Send", "Opening WhatsApp"]           # not "Thinking…": the bubble has that
+
+
 def test_a_panel_change_keeps_edits_made_to_the_file(tmp_path, monkeypatch):
     import asyncio
 

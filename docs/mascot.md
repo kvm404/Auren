@@ -83,7 +83,7 @@ systemctl --user restart auren-mascot
   its loudness envelope; a small thread reports the current sentence and level (`src/auren/voice.py`).
   The mic level comes from the audio chunks the ears already read (`src/auren/ears.py`).
 - **Activity phrases:** `src/auren/live.py` turns tool calls into short phrases.
-- While the mascot is on screen with its bubble on, nothing else pops up. Otherwise the daemon shows the same news itself (`src/auren/notice.py`): short statuses on Omarchy's OSD, each with its own icon, and replies and errors as notifications.
+- While the mascot is on screen with its bubble on, its bubble is the only place for listening, thinking, stopped, replies and errors. Otherwise the daemon shows the same news itself (`src/auren/notice.py`): short statuses on Omarchy's OSD, each with its own icon, and replies and errors as notifications. What Auren does (clicks, drags, typing, opening an app...) also shows on the OSD while the bubble is up.
 - Bubble colours follow the current Omarchy theme (`~/.local/state/omarchy/current/theme/colors.toml`).
 
 ## Measured (2026-10-10)
