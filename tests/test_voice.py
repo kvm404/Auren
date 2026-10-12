@@ -178,3 +178,27 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
     assert d.brain.mode == "codex" and d.brain.set == [("hi", "male")] and efforts == ["high"]
     assert d.refreshed == 1
+
+
+def test_cancel_while_working_stops_the_brain_and_its_tools(tmp_path, monkeypatch):
+    import asyncio
+
+    from auren.tools import Runtime
+
+    monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, state, detail="", **k: setattr(self, "state", state))
+
+    class Brain:
+        interrupted = 0
+
+        def interrupt(self):
+            self.interrupted += 1
+
+    d = _Quiet()
+    d.listening, d.level, d.state = None, daemon.Level(), "working"
+    d.tools, d.brain = Runtime(tmp_path / "t.sock"), Brain()
+    d.tools.new_turn(daemon.SESSION)
+    asyncio.run(d.cancel())
+    assert d.brain.interrupted == 1 and d.state == "idle"
+    assert "cancelled" in d.tools.call(daemon.SESSION, "system_info", {"what": "time"})[0]
+    asyncio.run(d.cancel())                              # idle: nothing to stop
+    assert d.brain.interrupted == 1

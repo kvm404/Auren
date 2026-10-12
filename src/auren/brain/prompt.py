@@ -62,9 +62,9 @@ def reply_language(language: str, speaker: str = "female") -> str:
             "Tool calls, commands and searches stay in English.\n</reply_language>")
 
 
-def user_message(transcript: str, live_context: str, language: str = "en", speaker: str = "female") -> str:
-    from ..safety import Confirmations
-    pending = Confirmations().summary()
+def user_message(transcript: str, live_context: str, language: str = "en", speaker: str = "female",
+                 pending: str = "") -> str:
+    """pending: the confirmations still waiting for the user's answer (tools.Runtime.summary)."""
     waiting = (f"\n\n<awaiting_confirmation>\nYou asked the user about these; if this message is their yes, "
                f"call confirm_action with the token:\n{pending}\n</awaiting_confirmation>") if pending else ""
     lang = reply_language(language, speaker)

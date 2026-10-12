@@ -136,6 +136,16 @@ def _move(x: int, y: int) -> None:
         raise ScreenError(f"couldn't move the cursor: {out}")
 
 
+def view_id() -> float | None:
+    """Which screenshot click_at coordinates refer to now (None: no recent look)."""
+    return _last_view["at"] if _last_view else None
+
+
+def active_window() -> str:
+    """The focused window's address."""
+    return _active_window()
+
+
 def _active_window() -> str:
     try:
         return json.loads(_sh(["hyprctl", "activewindow", "-j"])).get("address", "")

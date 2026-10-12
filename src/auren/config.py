@@ -43,6 +43,7 @@ DATA_HOME = _xdg("XDG_DATA_HOME", HOME / ".local/share") / "auren"
 RUNTIME_DIR = _runtime_base() / "auren"
 
 SOCKET = RUNTIME_DIR / "auren.sock"
+TOOLS_SOCKET = RUNTIME_DIR / "tools.sock"     # the tool runtime, for the brains' MCP adapter
 LOCK = RUNTIME_DIR / "daemon.lock"           # held by the running daemon: only one at a time
 STATE_FILE = RUNTIME_DIR / "state.json"      # current state, for the mascot and the bar plugin
 BRAIN_DIR = RUNTIME_DIR / "brain"            # the brain's working folder: outside $HOME on purpose

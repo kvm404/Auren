@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from .brain import Brain, BrainError, CodexBrain, UsageLimit
@@ -82,7 +83,14 @@ def main() -> None:
             print(f"{RED}{e}{END}")
             return 1
         return 0
-    brain = CodexBrain() if a.backup else Brain(model=a.model, think=not a.no_think, effort=a.effort)
+    # This process runs its own tool runtime and session: confirmations and turns are its own.
+    from .config import RUNTIME_DIR
+    from .tools import Runtime
+    session = f"chat-{os.getpid()}"
+    runtime = Runtime(RUNTIME_DIR / f"tools-{os.getpid()}.sock")
+    runtime.start()
+    brain = CodexBrain(runtime, session) if a.backup else \
+        Brain(runtime, session, model=a.model, think=not a.no_think, effort=a.effort)
     if a.language != "en":
         if isinstance(brain, Brain):
             brain.set_language(a.language, "male" if a.male else "female")
@@ -90,6 +98,7 @@ def main() -> None:
             brain.language, brain.speaker = a.language, "male" if a.male else "female"
     try:
         if a.cmd == "ask":
+            runtime.new_turn(session)
             handle(brain, " ".join(a.text))
         else:
             print(f"{DIM}auren chat: type a request (Ctrl-D to quit){END}")
@@ -99,9 +108,11 @@ def main() -> None:
                 except EOFError:
                     break
                 if text:
+                    runtime.new_turn(session)
                     handle(brain, text)
     finally:
         brain.stop()
+        runtime.stop()
 
 
 if __name__ == "__main__":

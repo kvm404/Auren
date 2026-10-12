@@ -1,6 +1,6 @@
 # Hands
 
-The tools the brain uses to act. Each group is a Python module in `src/auren/hands/`. They are served to the brain as one MCP server, `src/auren/server.py` (27 tools). Safety rules: [safety.md](safety.md).
+The tools the brain uses to act. Each group is a Python module in `src/auren/hands/`. They run in the daemon's tool runtime, `src/auren/tools.py`, and reach the brain through a thin MCP adapter, `src/auren/server.py`, which forwards each call over a socket. Safety rules: [safety.md](safety.md).
 
 | Group | Module | Status |
 |---|---|---|
@@ -101,10 +101,10 @@ uv run auren ask "open whatsapp on workspace 2"
 ```
 
 - **The brain** (`src/auren/brain/`) keeps one Claude Code process running: Haiku 5.5, thinking on, effort low. It uses Auren's instructions (`brain/prompt.py`) plus the static system profile (~900 tokens). Every message carries the live snapshot (~220 tokens).
-- **Tools:** only Auren's tools (`--tools ""`, `--mcp-config` → `python -m auren.server`, `--allowedTools mcp__auren`).
+- **Tools:** only Auren's tools (`--tools ""`, `--mcp-config` → `python -m auren.server`, `--allowedTools mcp__auren`). The adapter forwards to the tool runtime: the daemon's, or for `auren chat` one of its own (its own session).
 - **Fresh conversation** after 40k tokens of context.
 - **Replies are cleaned for speech:** backticks, bold and bullets are removed, and the brain is told to speak plainly without paths or commands.
-- **Isolation from the user's own Claude settings:** the process runs from `$XDG_RUNTIME_DIR/auren-brain` (outside `$HOME`) with `--setting-sources local`. Claude Code loads `.claude/CLAUDE.md` from **every parent folder**, so a working folder under `$HOME` picks up the user's personal `~/.claude/CLAUDE.md` even with `--setting-sources project`. That happened once: the brain started Codex with the user's personal `codex exec` flags. Checked afterwards: the brain reports no CLAUDE.md content.
+- **Isolation from the user's own Claude settings:** the process runs from `$XDG_RUNTIME_DIR/auren/brain` (outside `$HOME`) with `--setting-sources local`. Claude Code loads `.claude/CLAUDE.md` from **every parent folder**, so a working folder under `$HOME` picks up the user's personal `~/.claude/CLAUDE.md` even with `--setting-sources project`. That happened once: the brain started Codex with the user's personal `codex exec` flags. Checked afterwards: the brain reports no CLAUDE.md content.
 
 Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 - which agents are running;
@@ -154,8 +154,9 @@ herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). H
 
 `Brain` (used by `auren chat`) runs Claude first. On a usage-limit error it switches to `CodexBrain`, which runs GPT-6.1 Sol at low effort with the same tool server through `codex exec`, and it retries Claude after 30 minutes.
 - Codex can't replace its own system prompt, so Auren's instructions go in the message with the last 4 exchanges.
-- It starts the tool server with a minimal environment, so Auren passes the desktop session's variables (`HYPRLAND_INSTANCE_SIGNATURE`, `WAYLAND_DISPLAY`, …) via `mcp_servers.auren.env`.
-- Pending confirmations live in `~/.local/state/auren/confirmations.json`, and each message lists them in `<awaiting_confirmation>`, so a "yes" works even though every Codex run is fresh.
+- Its MCP adapter only needs the runtime's socket and the session (`AUREN_TOOLS`, `AUREN_SESSION` via `mcp_servers.auren.env`): the tools themselves run in the daemon, with the desktop session's environment.
+- Pending confirmations live in the runtime, and each message lists them in `<awaiting_confirmation>`, so a "yes" works even though every Codex run is fresh.
+- It only takes over before anything has been done in that request (see [safety.md](safety.md#stopping)).
 - Speed: ~13–17 s per request against ~3–5 s for Claude. `auren chat --backup` forces it.
 
 ## Lessons from the user's first voice test (2026-10-10)

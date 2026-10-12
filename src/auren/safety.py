@@ -8,9 +8,13 @@ Levels:
   run it.
 
 Why the next message: the brain could otherwise "confirm" its own request in
-the same turn. The chat loop / voice daemon bumps a turn counter
-(~/.local/state/auren/turn) before each user message; a token is only valid in
-a later turn than the one that issued it, and only once.
+the same turn. The tool runtime (tools.py) counts a turn once per user message,
+per session (the daemon, or one `auren chat`); a token is only valid in a later
+turn of the same session than the one that issued it, and only once.
+
+A confirmation is bound to what it resolved to when asked (a window's address, a tab
+and its page, the screenshot a click was aimed at): before it runs, `check` makes sure
+that is still what it would act on.
 
 Command classification is deliberately simple and errs on the side of asking.
 """
@@ -20,12 +24,12 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import threading
 import time
-from pathlib import Path
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
-from .config import STATE_DIR
-
-TURN_FILE = STATE_DIR / "turn"
 TOKEN_TTL = 300   # seconds a confirmation stays valid
 
 # Shell commands that change the system, lose data, need root, publish, or touch secrets.
@@ -56,66 +60,60 @@ def command_risk(command: str) -> str | None:
     return f"it can change your system or data ({hit})"
 
 
-# --- turns and tokens -----------------------------------------------------------
+# --- confirmations -----------------------------------------------------------------
 
-def current_turn() -> int:
-    try:
-        return int(TURN_FILE.read_text().strip())
-    except (OSError, ValueError):
-        return 0
-
-
-def next_turn() -> int:
-    """Called by the chat loop / daemon right before each user message reaches the brain."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    n = current_turn() + 1
-    TURN_FILE.write_text(str(n))
-    return n
+@dataclass
+class Pending:
+    question: str
+    run: Callable[[], Any]                    # does the action
+    check: Callable[[], None] | None          # raises if the target changed since the question
+    turn: int
+    at: float
 
 
 class Confirmations:
-    """Pending risky actions, kept in a file so they survive the tool server restarting between turns
-    (the backup brain starts a fresh tool server for every request)."""
+    """Pending risky actions, per session. They live in the tool runtime, which runs for as long as the
+    daemon does, so both brains see the same ones."""
 
-    def __init__(self, path: Path | None = None):
-        self.path = path or STATE_DIR / "confirmations.json"
+    def __init__(self):
+        self._pending: dict[str, dict[str, Pending]] = {}
+        self._lock = threading.Lock()
 
-    @property
-    def pending(self) -> dict[str, dict]:
-        try:
-            data = json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return {k: v for k, v in data.items() if time.time() - v["at"] < TOKEN_TTL}
+    def pending(self, session: str) -> dict[str, Pending]:
+        with self._lock:
+            mine = self._pending.setdefault(session, {})
+            for token in [t for t, p in mine.items() if time.time() - p.at >= TOKEN_TTL]:
+                del mine[token]
+            return dict(mine)
 
-    def _save(self, pending: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(pending))
-        self.path.chmod(0o600)
-
-    def request(self, tool: str, args: dict, question: str) -> dict:
+    def request(self, session: str, turn: int, question: str, run: Callable[[], Any],
+                check: Callable[[], None] | None = None) -> dict:
         token = secrets.token_hex(3)
-        pending = self.pending
-        pending[token] = {"tool": tool, "args": args, "turn": current_turn(), "at": time.time(), "question": question}
-        self._save(pending)
+        with self._lock:
+            self._pending.setdefault(session, {})[token] = Pending(question, run, check, turn, time.time())
         return {"status": "needs_confirmation", "token": token, "ask_user": question,
                 "note": "Ask the user this question and stop. Only if they say yes in their next message, "
                         f"call confirm_action with token {token}."}
 
-    def summary(self) -> str:
+    def summary(self, session: str) -> str:
         """Pending confirmations, for the brain's next message."""
-        return "\n".join(f"- token {t}: {p.get('question', p['tool'])}" for t, p in self.pending.items())
+        return "\n".join(f"- token {t}: {p.question}" for t, p in self.pending(session).items())
 
-    def redeem(self, token: str) -> tuple[str, dict]:
-        pending = self.pending          # expired tokens are already dropped
-        p = pending.get(token)
+    def latest(self, session: str) -> Pending | None:
+        return max(self.pending(session).values(), key=lambda p: p.at, default=None)
+
+    def redeem(self, session: str, token: str, turn: int) -> Pending:
+        """The approved action, after checking the user answered and its target is unchanged."""
+        p = self.pending(session).get(token)           # expired tokens are already dropped
         if p is None:
             raise PermissionError("unknown, expired or already used confirmation token; ask the user again")
-        if current_turn() <= p["turn"]:
+        if turn <= p.turn:
             raise PermissionError("the user hasn't answered yet: ask them and wait for their reply")
-        del pending[token]
-        self._save(pending)
-        return p["tool"], p["args"]
+        with self._lock:
+            self._pending.get(session, {}).pop(token, None)
+        if p.check:
+            p.check()
+        return p
 
 
 def untrusted(text: str, source: str) -> str:

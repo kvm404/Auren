@@ -1,14 +1,16 @@
 """The brain: Claude Haiku 5.5 through a long-running Claude Code process (decision 0003).
 
-    brain = ClaudeBrain()
+    brain = Brain(runtime)              # runtime: the tool runtime (auren.tools), already serving
+    runtime.new_turn(brain.session)     # the caller counts each user message once
     for event in brain.ask("open whatsapp on workspace 2"):
         ...   # ("tool", name, input) / ("result", name, text) / ("say", text) / ("done", info)
 
 One `claude -p --input-format stream-json` process is kept running, so requests
 don't pay Claude Code's start-up. It gets auren's own instructions (not Claude
-Code's), only auren's tools (the MCP server in auren.server), and none of the
-user's personal Claude settings (--setting-sources local, and a working folder outside $HOME). The process is
-restarted when its conversation grows past MAX_CONTEXT tokens.
+Code's), only auren's tools (the MCP adapter in auren.server, which forwards to the
+runtime), and none of the user's personal Claude settings (--setting-sources local,
+and a working folder outside $HOME). The process is restarted when its conversation
+grows past MAX_CONTEXT tokens. `interrupt()` stops an answer in progress.
 """
 
 from __future__ import annotations
@@ -23,13 +25,11 @@ import threading
 import time
 from collections.abc import Iterator
 
-from .. import safety
 from ..config import BRAIN_DIR
 from ..profile import Profile
 from . import prompt
 
 log = logging.getLogger("auren")
-STATE_DIR = safety.STATE_DIR
 MAX_CONTEXT = 40_000            # tokens; then start a fresh conversation
 LIMIT_WORDS = ("usage limit", "rate limit", "limit reached", "out of usage", "quota")
 
@@ -50,9 +50,19 @@ class UsageLimit(BrainError):
     """Claude's plan limit is reached: time to switch to the backup brain."""
 
 
+class Interrupted(BrainError):
+    """The user cancelled the answer in progress."""
+
+
+def _mcp_env(runtime, session: str) -> dict:
+    return {"AUREN_TOOLS": str(runtime.socket), "AUREN_SESSION": session}
+
+
 class ClaudeBrain:
-    def __init__(self, model: str = "haiku", effort: str = "low", think: bool = True):
+    def __init__(self, runtime, session: str = "daemon", model: str = "haiku", effort: str = "low", think: bool = True):
+        self.runtime, self.session = runtime, session
         self.model, self.effort, self.think = model, effort, think
+        self._interrupted = self._asking = False
         self.profile = Profile()
         self.language, self.speaker = "en", "female"      # reply language and the voice's gender (set by Brain)
         self.proc: subprocess.Popen | None = None
@@ -62,7 +72,8 @@ class ClaudeBrain:
     # --- process --------------------------------------------------------------
 
     def _command(self) -> list[str]:
-        mcp = {"mcpServers": {"auren": {"command": sys.executable, "args": ["-m", "auren.server"]}}}
+        mcp = {"mcpServers": {"auren": {"command": sys.executable, "args": ["-m", "auren.server"],
+                                        "env": _mcp_env(self.runtime, self.session)}}}
         return ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                 "--model", self.model, "--effort", self.effort,
                 "--settings", json.dumps({"alwaysThinkingEnabled": self.think}),
@@ -88,6 +99,15 @@ class ClaudeBrain:
             self._stderr.append(line)
             del self._stderr[:-50]
 
+    def interrupt(self) -> None:
+        """Stop the answer in progress: the process is killed (the conversation goes with it) and starts
+        again on the next request."""
+        if not self._asking:
+            return                       # nothing in progress: keep the warm process
+        self._interrupted = True
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
             self.proc.stdin.close()
@@ -102,8 +122,15 @@ class ClaudeBrain:
     def ask(self, transcript: str) -> Iterator[tuple]:
         if self.proc is None or self.proc.poll() is not None or self.context_tokens > MAX_CONTEXT:
             self.start()
-        safety.next_turn()     # a new user message: confirmations from earlier turns become redeemable
-        msg = prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker)
+        self._interrupted, self._asking = False, True
+        try:
+            yield from self._ask(transcript)
+        finally:
+            self._asking = False
+
+    def _ask(self, transcript: str) -> Iterator[tuple]:
+        msg = prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker,
+                                  self.runtime.summary(self.session))
         sent = time.perf_counter()
         self.proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": msg}}) + "\n")
         self.proc.stdin.flush()
@@ -146,19 +173,14 @@ class ClaudeBrain:
                 yield ("done", {"seconds": round(time.perf_counter() - sent, 2),
                                 "context_tokens": self.context_tokens, "turns": ev.get("num_turns")})
                 return
+        if self._interrupted:
+            self.proc = None
+            raise Interrupted("cancelled")
         raise BrainError("the brain process stopped: " + "".join(self._stderr)[-500:])
 
 
-# Codex starts tool servers with a minimal environment; the tools need the desktop session's.
-SESSION_VARS = ("HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
-                "DISPLAY", "HOME", "PATH", "USER", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
-                "XDG_DATA_HOME", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "LANG", "OMARCHY_PATH", "SHELL", "TERMINAL",
-                "BROWSER", "EDITOR")
-
-
-def _session_env_toml() -> str:
-    pairs = [f"{k}={json.dumps(os.environ[k])}" for k in SESSION_VARS if os.environ.get(k)]
-    return "{" + ",".join(pairs) + "}"
+def _env_toml(env: dict) -> str:
+    return "{" + ",".join(f"{k}={json.dumps(v)}" for k, v in env.items()) + "}"
 
 
 class CodexBrain:
@@ -169,17 +191,25 @@ class CodexBrain:
     (~10-15 s) but on a separate allowance.
     """
 
-    def __init__(self, model: str = "gpt-6.1-sol", effort: str = "low"):
+    def __init__(self, runtime, session: str = "daemon", model: str = "gpt-6.1-sol", effort: str = "low"):
+        self.runtime, self.session = runtime, session
         self.model, self.effort = model, effort
         self.profile = Profile()
         self.language, self.speaker = "en", "female"
         self.history: list[tuple[str, str]] = []
+        self.proc: subprocess.Popen | None = None
+        self._interrupted = False
+
+    def interrupt(self) -> None:
+        self._interrupted = True
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
 
     def stop(self) -> None:
-        pass
+        self.interrupt()
 
     def ask(self, transcript: str) -> Iterator[tuple]:
-        safety.next_turn()
+        self._interrupted = False
         workdir = BRAIN_DIR
         workdir.mkdir(parents=True, exist_ok=True)
         last = workdir / "codex-last.txt"
@@ -188,17 +218,18 @@ class CodexBrain:
             prompt.system_prompt(self.profile.static_context()),
             "Use only the auren tools to act; do not run shell commands yourself.",
             f"Recent conversation:\n{recent}" if recent else "",
-            prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker)) if x)
+            prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker,
+                                self.runtime.summary(self.session))) if x)
         cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
                "-m", self.model, "-c", f"model_reasoning_effort={self.effort}", "-c", "project_doc_max_bytes=0",
                "-c", f'mcp_servers.auren.command="{sys.executable}"',
                "-c", 'mcp_servers.auren.args=["-m","auren.server"]',
                "-c", 'mcp_servers.auren.default_tools_approval_mode="approve"',
-               "-c", "mcp_servers.auren.env=" + _session_env_toml(),
+               "-c", "mcp_servers.auren.env=" + _env_toml(_mcp_env(self.runtime, self.session)),
                "--json", "--output-last-message", str(last), "-"]
         sent = time.perf_counter()
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, cwd=workdir)
+        self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            text=True, cwd=workdir)
         proc.stdin.write(message)
         proc.stdin.close()
         for line in proc.stdout:
@@ -220,6 +251,8 @@ class CodexBrain:
                 if any(w in err.lower() for w in LIMIT_WORDS):
                     raise UsageLimit(err)
         proc.wait()
+        if self._interrupted:
+            raise Interrupted("cancelled")
         text = last.read_text().strip() if last.exists() else ""
         if proc.returncode != 0 or not text:
             raise BrainError("codex failed: " + proc.stderr.read()[-300:])
@@ -240,9 +273,12 @@ class Brain:
     MODES = ("auto", "claude", "codex")
     EFFORTS = ("low", "medium", "high", "xhigh", "max")      # Claude Code's --effort; low is decision 0003's
 
-    def __init__(self, model: str = "haiku", think: bool = True, mode: str = "auto", effort: str = "low"):
-        self.primary = ClaudeBrain(model=model, think=think, effort=effort if effort in self.EFFORTS else "low")
-        self.backup = CodexBrain()
+    def __init__(self, runtime, session: str = "daemon", model: str = "haiku", think: bool = True, mode: str = "auto",
+                 effort: str = "low"):
+        self.runtime, self.session = runtime, session
+        self.primary = ClaudeBrain(runtime, session, model=model, think=think,
+                                   effort=effort if effort in self.EFFORTS else "low")
+        self.backup = CodexBrain(runtime, session)
         self.limited_since: float | None = None
         self.mode = mode if mode in self.MODES else "auto"
 
@@ -268,8 +304,19 @@ class Brain:
                 return
             except UsageLimit as e:
                 self.limited_since = time.time()
+                if self.runtime.acted(self.session):
+                    # Codex would start the request over and could do something twice.
+                    log.warning("usage limit after acting; not handing over: %s", e)
+                    yield ("say", "Claude's usage limit was reached partway through, after I'd already started. "
+                                  "I stopped there; ask again and Codex will take it from here.")
+                    return
                 yield ("switch", f"Claude's limit is reached ({str(e)[:120]}); using Codex for now")
         yield from self.backup.ask(transcript)
+
+    def interrupt(self) -> None:
+        """Stop the answer in progress (whichever brain is giving it)."""
+        self.primary.interrupt()
+        self.backup.interrupt()
 
     def stop(self) -> None:
         self.primary.stop()
