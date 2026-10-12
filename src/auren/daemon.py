@@ -90,7 +90,9 @@ class Daemon:
         self.settings = load_settings()
         self.profile = Profile()
         self.tools = Runtime(TOOLS_SOCKET)           # serving from serve() on
-        self.brain = Brain(self.tools, SESSION, mode=self.settings["brain"], effort=self.settings["effort"])
+        s = self.settings
+        self.brain = Brain(self.tools, SESSION, mode=s["brain"], effort=s["effort"], claude_model=s["brain.claude_model"],
+                           codex_model=s["brain.codex_model"], codex_effort=s["brain.codex_effort"])
         self.brain.set_language(self.settings["language"], self.speaker)
         self.voice = None
         self.speak_enabled = speak                    # False: started with --quiet, the voice isn't even loaded
@@ -143,8 +145,9 @@ class Daemon:
     # --- warm-up ------------------------------------------------------------------------
 
     async def warm_up(self) -> None:
-        """Load the voice and start the brain. Neither failing stops the daemon: without the voice,
-        replies show in the mascot's bubble; a brain that didn't start is retried on the first request."""
+        """Load the voice and start the brain (Claude's process; none in codex mode). Neither failing stops
+        the daemon: without the voice, replies show in the mascot's bubble; a brain that didn't start is
+        retried on the first request."""
         t = time.perf_counter()
         problems = []
         if self.speak_enabled:
@@ -160,7 +163,7 @@ class Daemon:
                 log.error("voice didn't load, replies are text only: %s", e)
                 problems.append(f"voice off ({str(e)[:80]})")
         try:
-            await asyncio.to_thread(self.brain.primary.start)
+            await asyncio.to_thread(self.brain.warm)
         except Exception as e:  # noqa: BLE001
             log.error("brain didn't start: %s", e)
             problems.append(f"brain didn't start ({str(e)[:80]})")
@@ -224,6 +227,7 @@ class Daemon:
                 return "usage: brain auto|claude|codex"
             self.settings["brain"] = self.brain.mode = mode
             save_settings(self.settings)
+            asyncio.create_task(self._warm())
             self._refresh_state()
             return "brain " + mode
         if cmd == "language":
@@ -241,7 +245,7 @@ class Daemon:
                 return "usage: effort " + "|".join(Brain.EFFORTS)
             self.settings["effort"] = level
             save_settings(self.settings)
-            asyncio.create_task(self._set_effort(level))
+            asyncio.create_task(self._set_claude(effort=level))
             return "effort " + level
         if cmd == "status":
             return json.dumps({"state": self.state, "detail": self.detail,
@@ -274,8 +278,16 @@ class Daemon:
                 self.voice.stop()
         self.brain.mode = new["brain"]
         self.brain.set_language(new["language"], self.speaker)
+        self.brain.set_codex(new["brain.codex_model"], new["brain.codex_effort"])
+        claude = {}
         if new["effort"] != old["effort"]:
-            asyncio.create_task(self._set_effort(new["effort"]))
+            claude["effort"] = new["effort"]
+        if new["brain.claude_model"] != old["brain.claude_model"]:
+            claude["model"] = new["brain.claude_model"]
+        if claude:
+            asyncio.create_task(self._set_claude(**claude))
+        elif new["brain"] != old["brain"]:
+            asyncio.create_task(self._warm())
         self._refresh_state()
         return "Auren picked it up"
 
@@ -321,14 +333,23 @@ class Daemon:
             log.info("listening stopped after %ss", MAX_LISTEN)
             await self.release()
 
-    async def _set_effort(self, level: str) -> None:
+    async def _set_claude(self, effort: str | None = None, model: str | None = None) -> None:
+        what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)
         async with self.busy:              # after the current answer, if there is one
-            self.set_state("thinking", f"Switching to {level} effort…")
-            await asyncio.to_thread(self.brain.set_effort, level)
-            log.info("effort %s (fresh conversation)", level)
-            self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"(effort {level})",
+            self.set_state("thinking", f"Switching to {what}…")
+            await asyncio.to_thread(self.brain.set_claude, effort, model)
+            log.info("claude: %s (fresh conversation)", what)
+            self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"({what})",
                            "tools": [], "brain": "claude"})
         self.idle()
+
+    async def _warm(self) -> None:
+        """After a mode change: start Claude if the mode now uses it, stop it if not (between answers)."""
+        async with self.busy:
+            try:
+                await asyncio.to_thread(self.brain.warm)
+            except Exception as e:  # noqa: BLE001 - retried on the next request
+                log.error("brain didn't start: %s", e)
 
     async def _forget_quietly(self) -> None:
         async with self.busy:

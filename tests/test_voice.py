@@ -56,10 +56,16 @@ class _FakeBrain:
     mode, using_backup = "auto", False
 
     def __init__(self):
-        self.efforts = []
+        self.efforts, self.codex, self.warmed = [], None, 0
 
-    def set_effort(self, level):
-        self.efforts.append(level)
+    def set_claude(self, effort=None, model=None):
+        self.efforts.append(effort or model)
+
+    def set_codex(self, model, effort):
+        self.codex = (model, effort)
+
+    def warm(self):
+        self.warmed += 1
 
 
 def test_effort_command_saves_and_restarts_the_brain(tmp_path, monkeypatch):
@@ -157,10 +163,10 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     _config_in(tmp_path, monkeypatch)
     efforts = []
 
-    async def set_effort(self, level):
-        efforts.append(level)
+    async def set_claude(self, effort=None, model=None):
+        efforts.append((effort, model))
 
-    monkeypatch.setattr(daemon.Daemon, "_set_effort", set_effort)
+    monkeypatch.setattr(daemon.Daemon, "_set_claude", set_claude)
 
     async def run():
         d = _Quiet()
@@ -168,7 +174,8 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
         d.brain, d.voice = _LangBrain(), _FakeVoice()
         assert await d.command("reload") == "no changes"
         for path, value in (("voice.name", "M3"), ("voice.speed", "1.3"), ("voice.enabled", "false"),
-                            ("brain.mode", "codex"), ("brain.effort", "high"), ("language", "hi")):
+                            ("brain.mode", "codex"), ("brain.effort", "high"), ("language", "hi"),
+                            ("brain.claude_model", "sonnet"), ("brain.codex_effort", "medium")):
             settings.set_value(path, value)
         assert await d.command("reload") == "Auren picked it up"
         await asyncio.sleep(0)
@@ -176,7 +183,8 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
 
     d = asyncio.run(run())
     assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
-    assert d.brain.mode == "codex" and d.brain.set == [("hi", "male")] and efforts == ["high"]
+    assert d.brain.mode == "codex" and d.brain.set == [("hi", "male")] and efforts == [("high", "sonnet")]
+    assert d.brain.codex == ("gpt-6.1-sol", "medium")
     assert d.refreshed == 1
 
 
@@ -202,3 +210,21 @@ def test_cancel_while_working_stops_the_brain_and_its_tools(tmp_path, monkeypatc
     assert "cancelled" in d.tools.call(daemon.SESSION, "system_info", {"what": "time"})[0]
     asyncio.run(d.cancel())                              # idle: nothing to stop
     assert d.brain.interrupted == 1
+
+
+def test_brain_mode_command_warms_or_stops_claude(tmp_path, monkeypatch):
+    import asyncio
+
+    _config_in(tmp_path, monkeypatch)
+    monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, *a, **k: None)
+
+    async def run():
+        d = _Quiet()
+        d.brain, d.busy = _FakeBrain(), asyncio.Lock()
+        assert (await d.command("brain gpt")).startswith("usage:")
+        assert await d.command("brain codex") == "brain codex"
+        await asyncio.sleep(0.05)
+        return d
+
+    d = asyncio.run(run())
+    assert d.brain.mode == "codex" and d.brain.warmed == 1 and _saved(tmp_path)["brain"] == "codex"

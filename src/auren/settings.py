@@ -37,6 +37,7 @@ log = logging.getLogger("auren.settings")
 LANGUAGES = ("en", "hi")                                  # brain.prompt.LANGUAGES
 MODES = ("auto", "claude", "codex")                       # Brain.MODES
 EFFORTS = ("low", "medium", "high", "xhigh", "max")       # Brain.EFFORTS
+CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")   # Brain.CODEX_EFFORTS
 
 
 def _boolean(v: Any) -> bool:
@@ -88,6 +89,12 @@ def _name(v: Any) -> str:
     return str(v)
 
 
+def _model(v: Any) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][\w.:\[\]/-]{0,80}", str(v)):
+        raise ValueError("a model name like haiku or gpt-6.1-sol")
+    return str(v)
+
+
 def _folders(v: Any) -> list[str]:
     items = [v] if isinstance(v, str) else v
     if not isinstance(items, list) or not all(isinstance(x, str) and x.strip() for x in items):
@@ -127,6 +134,11 @@ KEYS = [
     Key("voice.pause", "pause", 0.0, _number(0.0, 1.0), "Silence between sentences in seconds: 0 to 1"),
     Key("brain.mode", "brain", "auto", _choice(*MODES), "Who answers: auto (Claude Code, Codex when Claude hits a limit), claude or codex"),
     Key("brain.effort", "effort", "low", _choice(*EFFORTS), "Claude's effort: low, medium, high, xhigh or max"),
+    Key("brain.claude_model", "brain.claude_model", "haiku", _model,
+        "Claude Code's --model: haiku, sonnet, opus, or a full model id"),
+    Key("brain.codex_model", "brain.codex_model", "gpt-6.1-sol", _model, "Codex's model (codex exec -m)"),
+    Key("brain.codex_effort", "brain.codex_effort", "low", _choice(*CODEX_EFFORTS),
+        "Codex's reasoning effort: minimal, low, medium, high or xhigh"),
     Key("integrations.herdr", "integrations.herdr", "auto", _switch,
         "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
     Key("integrations.browser", "integrations.browser", "auto", _switch,

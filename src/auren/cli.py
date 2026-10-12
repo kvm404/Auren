@@ -59,9 +59,9 @@ def main() -> None:
     ask = sub.add_parser("ask")
     ask.add_argument("text", nargs="+")
     for sp in (sub.choices["chat"], sub.choices["ask"]):
-        sp.add_argument("--model", default="haiku")
+        sp.add_argument("--model", help="Claude's model (default: brain.claude_model in config.toml)")
         sp.add_argument("--no-think", action="store_true")
-        sp.add_argument("--effort", default="low", choices=Brain.EFFORTS)
+        sp.add_argument("--effort", choices=Brain.EFFORTS, help="Claude's effort (default: brain.effort)")
         sp.add_argument("--language", default="en", choices=["en", "hi"], help="reply language")
         sp.add_argument("--male", action="store_true", help="Hindi: male verb forms (for an M voice)")
         sp.add_argument("--backup", action="store_true", help="use the backup brain (Codex) directly")
@@ -89,8 +89,14 @@ def main() -> None:
     session = f"chat-{os.getpid()}"
     runtime = Runtime(RUNTIME_DIR / f"tools-{os.getpid()}.sock")
     runtime.start()
-    brain = CodexBrain(runtime, session) if a.backup else \
-        Brain(runtime, session, model=a.model, think=not a.no_think, effort=a.effort)
+    from .settings import load
+    s = load()
+    if a.backup:
+        brain = CodexBrain(runtime, session, model=s["brain.codex_model"], effort=s["brain.codex_effort"])
+    else:
+        brain = Brain(runtime, session, mode=s["brain"], effort=a.effort or s["effort"],
+                      claude_model=a.model or s["brain.claude_model"], codex_model=s["brain.codex_model"],
+                      codex_effort=s["brain.codex_effort"], think=not a.no_think)
     if a.language != "en":
         if isinstance(brain, Brain):
             brain.set_language(a.language, "male" if a.male else "female")
