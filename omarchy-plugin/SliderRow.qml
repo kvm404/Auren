@@ -2,7 +2,8 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// A label with its value on the right, and a slider under it.
+// A small-caps title with the value on the right, and a slider under it (Omarchy's settings style).
+// With the keyboard cursor on it, a frame shows and left/right change it (the panel does that).
 Column {
   id: row
 
@@ -22,26 +23,26 @@ Column {
   signal released(real value)
   signal hovered()
 
-  spacing: Style.space(2)
+  spacing: Style.space(6)
   opacity: enabled ? 1 : 0.5
 
   Item {
     width: parent.width
-    height: labelText.implicitHeight
-    Text {
-      id: labelText
-      text: (row.hasCursor ? "› " : "") + row.label
-      color: row.hasCursor ? row.foreground : Qt.darker(row.foreground, 1.2)
-      font.family: row.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      font.bold: row.hasCursor
+    implicitHeight: header.implicitHeight
+    PanelSectionHeader {
+      id: header
+      text: (row.hasCursor ? "› " : "") + row.label.toUpperCase()
+      foreground: row.foreground
+      fontFamily: row.fontFamily
     }
     Text {
       anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
       text: row.valueText
-      color: Qt.darker(row.foreground, 1.45)
+      color: row.foreground
       font.family: row.fontFamily
       font.pixelSize: Style.font.bodySmall
+      font.bold: true
     }
   }
 
@@ -55,6 +56,14 @@ Column {
     step: row.step
     onMoved: function(v) { row.moved(v) }
     onReleased: function(v) { row.released(v) }
+    Rectangle {
+      anchors.fill: parent
+      anchors.margins: -2
+      visible: row.hasCursor
+      color: "transparent"
+      border.color: row.foreground
+      radius: Style.cornerRadius
+    }
   }
 
   HoverHandler { onHoveredChanged: if (hovered) row.hovered() }

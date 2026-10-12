@@ -118,6 +118,24 @@ if command -v omarchy >/dev/null; then
   grep -q '"krvm.auren"' "$config/omarchy/shell.json" 2>/dev/null || omarchy plugin enable krvm.auren
 fi
 
+# ---- what's installed, for auren update ----------------------------------------------------------
+# Written last, so it only names an install that finished.
+if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+  "$share/venv/bin/python" - "$share/install.json" "$repo" "$mode" \
+    "$(git -C "$repo" rev-parse HEAD)" "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" \
+    "$(git -C "$repo" log -1 --format=%ct)" "$(git -C "$repo" remote get-url origin 2>/dev/null || true)" <<'PY'
+import json, sys, time
+from importlib.metadata import version
+path, source, mode, commit, branch, committed, remote = sys.argv[1:]
+with open(path, "w") as f:
+    json.dump({"version": version("auren"), "commit": commit, "branch": branch, "committed": int(committed),
+               "remote": remote, "source": source, "mode": mode, "installed_at": int(time.time())}, f)
+PY
+else
+  rm -f "$share/install.json"
+  warn "not a git checkout: auren update can't tell which version this is"
+fi
+
 # ---- Hyprland (printed, not edited) ------------------------------------------------------------
 cat <<EOF
 
