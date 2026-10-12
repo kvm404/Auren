@@ -2,7 +2,7 @@
 
 Every path Auren uses comes from here, following the XDG base directories:
 
-    CONFIG_DIR   ~/.config/auren          config, secrets, routines, the user's own vocabulary
+    CONFIG_DIR   ~/.config/auren          config.toml, secrets, routines, the user's own vocabulary
     STATE_DIR    ~/.local/state/auren     history, log, herdr jobs, confirmations
     CACHE_DIR    ~/.cache/auren           the machine profile
     DATA_HOME    ~/.local/share/auren     the installed program: venv, UI files, auren-ctl, voice model
@@ -47,7 +47,8 @@ LOCK = RUNTIME_DIR / "daemon.lock"           # held by the running daemon: only 
 STATE_FILE = RUNTIME_DIR / "state.json"      # current state, for the mascot and the bar plugin
 BRAIN_DIR = RUNTIME_DIR / "brain"            # the brain's working folder: outside $HOME on purpose
 SECRETS = CONFIG_DIR / "secrets.env"
-SETTINGS = CONFIG_DIR / "settings.json"     # voice on/off and brain mode, changed from the bar plugin
+CONFIG_FILE = CONFIG_DIR / "config.toml"    # the user's settings (settings.py)
+SETTINGS = CONFIG_DIR / "settings.json"     # the old settings file, moved into config.toml once
 ROUTINES_DIR = CONFIG_DIR / "routines"
 MODELS_DIR = DATA_HOME / "models"
 DATA = Path(__file__).parent / "data"

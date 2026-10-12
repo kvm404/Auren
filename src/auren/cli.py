@@ -2,6 +2,7 @@
 
   auren daemon                # the voice daemon (the auren systemd service runs this)
   auren doctor                # what works on this machine, and how to fix what doesn't
+  auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
   auren voice-model           # download the voice model (install.sh runs this)
   auren chat                  # type requests, see tool calls and the reply
   auren ask "open whatsapp"   # one request
@@ -50,6 +51,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("chat")
     sub.add_parser("doctor")
+    sub.add_parser("config").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("voice-model")
     dmn = sub.add_parser("daemon")
     dmn.add_argument("--quiet", action="store_true", help="no voice; replies shown on the OSD")
@@ -69,6 +71,9 @@ def main() -> None:
     if a.cmd == "doctor":
         from .doctor import main as doctor_main
         return doctor_main()
+    if a.cmd == "config":
+        from .settings import main as config_main
+        return config_main(a.args)
     if a.cmd == "voice-model":
         from .voice import VoiceModelMissing, download_model
         try:

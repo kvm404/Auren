@@ -10,9 +10,10 @@
     auren-ctl voice on|off|toggle     # spoken replies (off: replies only in the mascot's bubble)
     auren-ctl voice-name F1..F5|M1..M5 [sample] # which Supertonic voice (says the sample, or a short default one)
     auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
-    auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/settings.json)
+    auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
     auren-ctl language en|hi          # reply language: Hindi replies are in Devanagari, spoken in Hindi
+    auren-ctl reload                  # re-read config.toml (auren config sends this)
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
 state (idle, listening, thinking, working, speaking, error) is written to
@@ -36,11 +37,13 @@ import time
 
 from .brain import Brain, BrainError
 from .brain.prompt import LANGUAGES
-from .config import LOCK, RUNTIME_DIR, SETTINGS, SOCKET, STATE_DIR, STATE_FILE
+from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE
 from .ears import Listening, vocabulary
 from .live import Level, describe
 from .profile import Profile
 from .safety import Confirmations
+from .settings import load as load_settings
+from .settings import save as save_settings
 from .voice import TUNING, tuning
 
 log = logging.getLogger("auren")
@@ -78,24 +81,6 @@ def osd(message: str, ms: int = 1500, always: bool = False) -> None:
         return
     subprocess.Popen(["omarchy-osd", "-m", message, "-d", str(ms)], stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
-
-
-def load_settings() -> dict:
-    try:
-        s = json.loads(SETTINGS.read_text())
-    except (OSError, json.JSONDecodeError):
-        s = {}
-    return {"voice": s.get("voice", True) is not False, "brain": s.get("brain", "auto"),
-            "effort": s.get("effort") if s.get("effort") in Brain.EFFORTS else "low",
-            "language": s.get("language") if s.get("language") in LANGUAGES else "en",
-            "voiceName": s.get("voiceName", "F2"), **tuning(s)}
-
-
-def save_settings(settings: dict) -> None:
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SETTINGS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(settings, indent=2) + "\n")
-    tmp.replace(SETTINGS)
 
 
 class Daemon:
@@ -260,10 +245,36 @@ class Daemon:
                                "brain": "codex" if self.brain.using_backup else "claude",
                                "mode": self.brain.mode, "effort": self.brain.primary.effort,
                                "language": self.settings["language"], "voice": self.voice_on})
+        if cmd == "reload":
+            return self._reload()
         if cmd == "quit":
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
         return f"unknown command: {cmd}"
+
+    def _reload(self) -> str:
+        """Apply config.toml as it is now (after `auren config set` or an edit)."""
+        new = load_settings()
+        changed = [k for k in new if new[k] != self.settings.get(k)]
+        if not changed:
+            return "no changes"
+        old, self.settings = self.settings, new
+        if self.voice:
+            if new["voiceName"] != old["voiceName"]:
+                try:
+                    self.voice.set_voice(new["voiceName"])
+                except ValueError as e:
+                    log.warning("config: %s", e)
+                    self.settings["voiceName"] = self.voice.name
+            self.voice.tune(new)
+            if old["voice"] and not new["voice"]:
+                self.voice.stop()
+        self.brain.mode = new["brain"]
+        self.brain.set_language(new["language"], self.speaker)
+        if new["effort"] != old["effort"]:
+            asyncio.create_task(self._set_effort(new["effort"]))
+        self._refresh_state()
+        return "Auren picked it up"
 
     def _tts(self, words: list[str]) -> str:
         """tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 (several at once is fine) | reset"""

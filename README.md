@@ -96,7 +96,7 @@ Files:
 | Path | What |
 |---|---|
 | `~/.config/auren/secrets.env` | API keys (chmod 600) |
-| `~/.config/auren/settings.json` | Voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort, reply language (written by the panel and `auren-ctl`) |
+| `~/.config/auren/config.toml` | Settings: reply language, voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort. Edit it, or use `auren config` (`set voice.speed 1.1`, `edit`); the panel and `auren-ctl` change it too |
 | `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (auren, veyra), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |

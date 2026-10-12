@@ -1,6 +1,5 @@
-import json
 
-from auren import daemon
+from auren import daemon, settings
 from auren.voice import tuning
 
 
@@ -25,22 +24,31 @@ class _Quiet(daemon.Daemon):
         self.refreshed += 1
 
 
+def _config_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "CONFIG_FILE", tmp_path / "config.toml")
+    monkeypatch.setattr(settings, "LEGACY", tmp_path / "settings.json")
+
+
+def _saved(tmp_path) -> dict:
+    return settings.read((tmp_path / "config.toml").read_text())[0]
+
+
 def test_tts_command_saves_and_resets(tmp_path, monkeypatch):
-    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    _config_in(tmp_path, monkeypatch)
     d = _Quiet()
     assert d._tts(["speed", "1.2", "pause", "0.3"]) == "tts speed 1.2 steps 5 volume 1.0 pause 0.3"
-    saved = json.loads((tmp_path / "settings.json").read_text())
+    saved = _saved(tmp_path)
     assert saved["speed"] == 1.2 and saved["pause"] == 0.3 and saved["voiceName"] == "F2"
     assert d._tts(["reset"]).startswith("tts speed 1.05 steps 5")
     assert d.refreshed == 2
 
 
 def test_tts_command_rejects_bad_input(tmp_path, monkeypatch):
-    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    _config_in(tmp_path, monkeypatch)
     d = _Quiet()
     for words in ([], ["speed"], ["pitch", "2"]):
         assert d._tts(words).startswith("usage:")
-    assert not (tmp_path / "settings.json").exists()
+    assert not (tmp_path / "config.toml").exists()
 
 
 class _FakeBrain:
@@ -57,7 +65,7 @@ class _FakeBrain:
 def test_effort_command_saves_and_restarts_the_brain(tmp_path, monkeypatch):
     import asyncio
 
-    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    _config_in(tmp_path, monkeypatch)
     monkeypatch.setattr(daemon.Daemon, "set_state", lambda self, *a, **k: None)
     monkeypatch.setattr(daemon.Daemon, "_history", lambda self, record: None)
     monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": None)
@@ -72,12 +80,12 @@ def test_effort_command_saves_and_restarts_the_brain(tmp_path, monkeypatch):
 
     d = asyncio.run(run())
     assert d.brain.efforts == ["high"]
-    assert json.loads((tmp_path / "settings.json").read_text())["effort"] == "high"
+    assert _saved(tmp_path)["effort"] == "high"
 
 
 def test_settings_ignore_an_unknown_effort(tmp_path, monkeypatch):
-    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
-    (tmp_path / "settings.json").write_text('{"effort": "ludicrous"}')
+    _config_in(tmp_path, monkeypatch)
+    (tmp_path / "config.toml").write_text('[brain]\neffort = "ludicrous"\n')
     assert daemon.load_settings()["effort"] == "low"
 
 
@@ -111,7 +119,7 @@ class _LangBrain(_FakeBrain):
 
 
 def test_language_command_follows_the_voice_gender(tmp_path, monkeypatch):
-    monkeypatch.setattr(daemon, "SETTINGS", tmp_path / "settings.json")
+    _config_in(tmp_path, monkeypatch)
     d = _Quiet()
     d.settings["language"] = "en"
     d.brain = _LangBrain()
@@ -122,4 +130,51 @@ def test_language_command_follows_the_voice_gender(tmp_path, monkeypatch):
     d.settings["voiceName"] = "M3"
     assert asyncio.run(d.command("language hi")) == "language hi"
     assert d.brain.set == [("hi", "female"), ("hi", "male")]
-    assert json.loads((tmp_path / "settings.json").read_text())["language"] == "hi"
+    assert _saved(tmp_path)["language"] == "hi"
+
+
+class _FakeVoice:
+    name = "F2"
+
+    def __init__(self):
+        self.tuned, self.stopped = None, False
+
+    def set_voice(self, name):
+        if name == "M9":
+            raise ValueError("no voice M9")
+        self.name = name
+
+    def tune(self, values):
+        self.tuned = tuning(values)
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
+    import asyncio
+
+    _config_in(tmp_path, monkeypatch)
+    efforts = []
+
+    async def set_effort(self, level):
+        efforts.append(level)
+
+    monkeypatch.setattr(daemon.Daemon, "_set_effort", set_effort)
+
+    async def run():
+        d = _Quiet()
+        d.settings = settings.load()
+        d.brain, d.voice = _LangBrain(), _FakeVoice()
+        assert await d.command("reload") == "no changes"
+        for path, value in (("voice.name", "M3"), ("voice.speed", "1.3"), ("voice.enabled", "false"),
+                            ("brain.mode", "codex"), ("brain.effort", "high"), ("language", "hi")):
+            settings.set_value(path, value)
+        assert await d.command("reload") == "Auren picked it up"
+        await asyncio.sleep(0)
+        return d
+
+    d = asyncio.run(run())
+    assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
+    assert d.brain.mode == "codex" and d.brain.set == [("hi", "male")] and efforts == ["high"]
+    assert d.refreshed == 1
