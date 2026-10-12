@@ -32,7 +32,7 @@ APP_WORDS = {
     "vs code": "visual studio code", "vscode": "visual studio code", "code": "visual studio code",
     "file manager": "files", "nautilus": "files", "files app": "files",
     "pdf viewer": "document viewer", "evince": "document viewer",
-    "music": "yt music", "youtube music": "yt music",
+    "youtube music": "yt music",
     "calculator": "omacalc",
 }
 
@@ -264,12 +264,26 @@ def close_window(window: str | dict) -> str:
 
 # --- apps --------------------------------------------------------------------------
 
+# Words for a kind of app: they open whichever app the user has set as the default for it.
+ROLE_WORDS = {"browser": "browser", "web browser": "browser", "the browser": "browser", "terminal": "terminal",
+              "file manager": "file_manager", "files": "file_manager", "editor": "editor", "text editor": "editor"}
+
+
 def find_app(name: str, profile: Profile | None = None) -> dict:
-    """An installed app or web app by spoken name. Raises with the closest options when not installed."""
-    apps = (profile or Profile()).static()["apps"]
-    q = APP_WORDS.get(name.strip().lower(), name.strip().lower())
+    """An installed app or web app by spoken name, or a role ("browser", "terminal") for the user's default
+    app. Raises with the closest options when not installed."""
+    static = (profile or Profile()).static()
+    apps = static["apps"]
+    q = name.strip().lower()
     pool = [dict(a, kind="webapp") for a in apps["webapps"]] + [dict(a, kind="app") for a in apps["apps"]] \
         + [dict(a, kind="tui") for a in apps["tuis"]]
+    role = ROLE_WORDS.get(q)
+    default = (static.get("defaults") or {}).get(role) if role else None
+    if isinstance(default, str):
+        hit = next((a for a in pool if a["id"].lower() == default.lower()), None)
+        if hit:
+            return hit
+    q = APP_WORDS.get(q, q)
     for test in (lambda a: a["name"].lower() == q or a["id"].lower() == q,
                  lambda a: a["name"].lower().startswith(q),
                  lambda a: re.search(rf"\b{re.escape(q)}\b", a["name"].lower() + " " + a["id"].lower())):
@@ -319,19 +333,20 @@ def launch_app(app: str, workspace: str | int | None = None, follow: bool = True
     return msg
 
 
-BROWSERS = {"chrome": "google-chrome-stable", "google chrome": "google-chrome-stable", "brave": "brave",
-            "chromium": "chromium"}
-
-
 def open_url(url: str, app_mode: bool = False, browser: str = "") -> str:
-    """Open a URL in the default browser, or in a named one (chrome, brave, chromium)."""
+    """Open a URL in the default browser, or in a named Chromium one (chrome, brave, chromium, ...)."""
+    from . import browsers
     if not re.match(r"^[a-z][a-z0-9+.-]*://", url, re.I):
         url = "https://" + url
     hide_scratchpad()
     if browser:
-        exe = BROWSERS.get(browser.strip().lower())
-        if exe is None or not shutil.which(exe):
-            raise DesktopError(f"{browser} is not installed")
+        try:
+            kind = browsers.resolve(browser)
+        except browsers.UnknownBrowser as e:
+            raise DesktopError(str(e)) from None
+        exe = browsers.command(kind)
+        if exe is None:
+            raise DesktopError(f"{kind.name} is not installed")
         spawn(["uwsm-app", "--", exe, *([f"--app={url}"] if app_mode else [url])])
         return f"opened {url} in {browser}"
     spawn(["omarchy-launch-webapp" if app_mode else "omarchy-launch-browser", url])

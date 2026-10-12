@@ -126,16 +126,39 @@ def checks() -> list[Check]:
         out.append(Check(g, "a brain", FAIL, "neither Claude Code nor Codex can run", "install one of them"))
 
     # --- optional integrations ------------------------------------------------------------------------
+    from . import integrations
+    from .hands import browsers
+
     g = "Optional"
-    herdr = _command(g, "herdr", "coding agents in herdr", svc, required=False, fix="https://herdr.dev")
-    if herdr.status == OK and _run(["herdr", "workspace", "list"])[0] != 0:
-        herdr = Check(g, "herdr", WARN, "installed but not running", "open it: omarchy-launch-terminal herdr")
-    out.append(herdr)
-    out.append(_command(g, "open-browser-use", "browser tools", svc, required=False,
-                        fix="install Open Browser Use and its browser extension"))
-    out.append(Check(g, "/dev/uinput", OK, "screen control can click and drag") if os.access("/dev/uinput", os.W_OK)
-               else Check(g, "/dev/uinput", WARN, "not writable: clicking and dragging won't work",
-                          "add a udev rule giving your user access to /dev/uinput (see README)"))
+    fixes = {"herdr": "https://herdr.dev, or turn it off: auren config set integrations.herdr false",
+             "browser": "install Open Browser Use and its extension, or: auren config set integrations.browser false",
+             "screen": "add a udev rule giving your user access to /dev/uinput (see README)"}
+    for name, i in integrations.INTEGRATIONS.items():
+        st, why = integrations.state(name)
+        if st == "off":
+            out.append(Check(g, i.what, OK, "turned off"))
+        elif st == "missing":
+            wanted = integrations.settings()[f"integrations.{name}"] is True
+            out.append(Check(g, i.what, FAIL if wanted else WARN, f"{why}: its tools are left out", fixes[name]))
+        elif name == "herdr" and _run(["herdr", "workspace", "list"])[0] != 0:
+            out.append(Check(g, i.what, WARN, "installed but not running", "open it: omarchy-launch-terminal herdr"))
+        elif name == "browser":
+            kind = browsers.resolve()
+            profile = browsers.profile_dir(kind)
+            out.append(Check(g, i.what, OK if profile else WARN,
+                             f"{kind.name}, profile {profile.name if profile else 'not found'}, "
+                             f"sockets in {browsers.socket_dir(kind)}",
+                             "" if profile else "open the browser once, or set browser.profile"))
+        else:
+            out.append(Check(g, i.what, OK, "on"))
+    agent = integrations.default_agent()
+    out.append(Check(g, "default coding agent", OK if integrations.agent_installed(agent) else WARN, agent,
+                     "" if integrations.agent_installed(agent) else f"install {agent}, or: auren config set agents.default <agent>"))
+    from .profile.collect import project_folders
+    folders = project_folders()
+    out.append(Check(g, "project folders", OK if folders else WARN,
+                     ", ".join(str(f).replace(str(Path.home()), "~") for f in folders) or "none found",
+                     "" if folders else 'auren config set projects.folders "~/where/they/are"'))
 
     # --- install ----------------------------------------------------------------------------------
     g = "Install"

@@ -1,7 +1,6 @@
 # Terms to bias speech recognition toward. One per line, most distinctive first.
 # Deepgram uses the first 100; Whisper reads ~224 tokens of them.
 herdr
-Voisu
 Codex
 Claude Code
 Claude

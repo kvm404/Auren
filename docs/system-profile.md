@@ -11,7 +11,7 @@ uv run auren-profile --refresh              # rebuild the cache now
 
 ## How it works
 
-- **Static facts** are cached in `~/.cache/auren/profile-static.json`. They are rebuilt automatically when a source changes: launcher folders, `~/.config/hypr`, `~/.bashrc`, the Omarchy defaults, the Obsidian config, `~/Projects`, or the Omarchy version. They are also rebuilt after 6 hours.
+- **Static facts** are cached in `~/.cache/auren/profile-static.json`. They are rebuilt automatically when a source changes: launcher folders, `~/.config/hypr`, `~/.bashrc`, the Omarchy defaults, the Obsidian config, the project folders, the browser's bookmarks, `config.toml`, or the Omarchy version. They are also rebuilt after 6 hours.
 - **Live facts** are read on every request: windows, herdr panes, volume, battery, memory and time. The whole snapshot takes ~70 ms.
 - **The brain gets a compact summary** (`context()`) with every request. Long lists stay out of the prompt and are searched on demand with `lookup(topic, words)`.
 - **Secrets are masked** in every output (`redact.py`, tested):
@@ -34,7 +34,7 @@ uv run auren-profile --refresh              # rebuild the cache now
 | Aliases and functions | `bash -ic alias`, `bash -ic 'declare -F'`. Omarchy's own (`~/.local/share/omarchy/default/bash/*`) plus the user's `.bashrc` |
 | Windows, workspaces, monitors | `hyprctl clients/activewindow/monitors -j` |
 | herdr workspaces, tabs, panes, agents | `herdr workspace/tab/pane/agent list` (JSON) |
-| Projects | `~/Projects/*`, newest first, with the first README line |
+| Projects | the folders in `projects.folders`, or the usual ones that exist (`~/Projects`, `~/Code`, `~/src`, …); newest first, with the first README line |
 | Obsidian vaults | `~/.config/obsidian/obsidian.json` (here: `~/Obsidian`) |
 | Battery, volume, memory | `/sys/class/power_supply`, `wpctl get-volume`, `/proc/meminfo` |
 | User services | `systemctl --user` (running, minus desktop plumbing) |

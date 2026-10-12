@@ -39,7 +39,7 @@ def test_settings_json_is_moved_in_once(cfg):
         {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
          "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1, "nonsense": 1}))
     values = settings.load()
-    assert values == {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
+    assert {k: values[k] for k in json.loads((cfg / "settings.json.bak").read_text()) if k in values} == {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
                       "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1}
     assert not (cfg / "settings.json").exists() and (cfg / "settings.json.bak").exists()
     assert settings.load() == values
@@ -82,3 +82,17 @@ def test_auren_config_set_and_get(cfg, monkeypatch, capsys):
     assert settings.main(["show"]) == 0
     assert "brain.effort = \"high\"" in capsys.readouterr().out
     assert settings.main(["frobnicate"]) == 2
+
+
+def test_tables_lists_and_switches(cfg):
+    settings.save({"browser.sockets": {"chrome": "/tmp/obu-chrome"}, "projects.folders": ["~/work"]})
+    text = (cfg / "config.toml").read_text()
+    assert 'sockets = {chrome = "/tmp/obu-chrome"}' in text
+    values = settings.load()
+    assert values["browser.sockets"] == {"chrome": "/tmp/obu-chrome"} and values["projects.folders"] == ["~/work"]
+    assert settings.set_value("integrations.herdr", "off") is False
+    assert settings.set_value("integrations.herdr", "auto") == "auto"
+    with pytest.raises(ValueError, match="auto, true or false"):
+        settings.set_value("integrations.herdr", "maybe")
+    assert settings.current()["integrations.herdr"] == "auto"
+    assert settings.defaults()["projects.folders"] is not settings.defaults()["projects.folders"]

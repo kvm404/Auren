@@ -8,7 +8,7 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | herdr: coding agents and commands in panes | `hands/herdr.py` | ✅ |
 | Desktop and system: apps, windows, screenshots, volume, media, reminders | `hands/desktop.py` | ✅ |
 | Screen control: see the screen, mouse and keyboard (fallback) | `hands/screen.py` | ✅ |
-| Browser (user's real Chrome/Brave via Open Browser Use), routines | `hands/browser.py`, `~/.config/auren/routines/` | ✅ first routine |
+| Browser (the user's real Chromium browser via Open Browser Use), routines | `hands/browser.py`, `~/.config/auren/routines/` | ✅ first routine |
 
 ## herdr
 
@@ -18,7 +18,8 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 - **One tab per job,** named after the job (`lecture-notes`, `review-voisu`). An agent started in it gets the same name, which herdr requires to be `[a-z][a-z0-9_-]{0,31}` and unique; Auren adds `-2`, `-3` when taken.
 - **Ownership:** jobs are recorded in `~/.local/state/auren/herdr-jobs.json`, and jobs whose tab was closed are forgotten. `close_job` only closes tabs listed there. Asked to close anything else, it refuses: "Auren only closes tabs it created".
 - **The user's agents are found live,** wherever they are, by name, pane id, kind ("codex", "claude code", including misheard "cloud code"), or a hint: project folder, workspace or tab label. Two candidates with no hint means "which one?", listing both.
-- **Heavy jobs go to Codex by default** (`DEFAULT_KIND`). Claude's 5-hour allowance is shared with the brain and the user's own coding, so it's the scarce one. The user can name another agent.
+- **Heavy jobs go to the default coding agent:** `agents.default` in config.toml, else Omarchy's default agent (`~/.config/omarchy/defaults/agent`), else the first installed (Claude Code, Codex, OpenCode, …). The user can name another agent.
+- **Without herdr** (not installed, or `integrations.herdr = false`) the agent tools are left out, and `run_command` runs commands in the background instead (`hands/shell.py`, logs in `~/.local/state/auren/jobs/`), with the same results; `job_status` and `close_job` work on both.
 - **Approval questions are never answered automatically.** If an agent is `blocked`, the tool returns its screen and the brain tells the user what it's asking. On a timeout or stalled prompt the tool says "may have been delivered; don't resend".
 
 ### Tools
@@ -119,17 +120,18 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 
 ## Browser
 
-**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use** (open source, already installed). Chrome and Brave each run their own native host:
-- **Chrome:** `/tmp/open-browser-use-chrome`, set up by `~/.local/share/open-browser-use/native-host/chrome-host.sh`.
-- **Brave:** the default `/tmp/open-browser-use`.
+**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use**. Which browser (`hands/browsers.py`):
+- **The browser:** `browser.name` in config.toml, or with `auto` the system default (`xdg-settings get default-web-browser`) if it's a Chromium browser Auren knows (Chrome, Chromium, Brave, Helium, Edge, Vivaldi), else the first one installed. The brain can name another for one request.
+- **Its profile** (bookmarks, download folder): `browser.profile`, or the last one used, from the browser's `Local State`.
+- **Its Open Browser Use host:** the default socket folder `/tmp/open-browser-use`, unless `browser.sockets` names another for that browser. People who run one host per browser set it, for example `sockets = { chrome = "/tmp/open-browser-use-chrome" }`; a bare `obu` command goes to the default one, which is why it once "got confused about which browser".
 
-A bare `obu` command goes to Brave; that's why it "got confused about which browser". Auren always passes `--socket-dir` for the named browser.
+Without Open Browser Use (or with `integrations.browser = false`) the browser tools are left out and the brain is told it can only show pages.
 
 | Tool | What it does |
 |---|---|
 | `browser_open(url, browser)` | New tab in Auren's own session (tab group "auren"), then read. `url` may be `bookmark:<folder/name>`; the URL comes from the browser's `Bookmarks` file |
 | `browser_read()` | Page text (first 5,000 characters) plus numbered clickable items: links, buttons, fields. Image-only links are labelled `image: <file>` with their target. Identical labels get their row's name: "More actions (Alt+A) (Week 3)" |
-| `browser_click(target, expect_download)` | By number or by words of the label. `target=_blank` links open in the same tab. `expect_download` watches the download folder (Chrome: `~/Downloads`) for a new finished file and returns its path |
+| `browser_click(target, expect_download)` | By number or by words of the label. `target=_blank` links open in the same tab. `expect_download` watches the profile's download folder (from its `Preferences`, else `~/Downloads`) for a new finished file and returns its path |
 | `browser_type(target, text, submit)`, `browser_scroll` | Type into a field; scroll |
 | `browser_bookmarks`, `recent_downloads`, `browser_close` | Bookmark names (URLs with long tokens are shortened in output); recent files; close Auren's tabs |
 

@@ -42,6 +42,21 @@ def forward(name: str, args: dict) -> list:
             else c.get("text", "") for c in reply.get("content", [])]
 
 
+def offered() -> list[str]:
+    """The tools to show the brain, as the runtime decides (integrations that are off or missing are left
+    out); all of them if it can't be asked."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect(SOCKET)
+            s.sendall(b'{"list": true}\n')
+            with s.makefile("rb") as f:
+                names = json.loads(f.readline())["tools"]
+        return [n for n in names if n in tools.TOOLS]
+    except (OSError, ValueError, KeyError):
+        return list(tools.TOOLS)
+
+
 def _register(name: str) -> None:
     def call(**kwargs):
         out = forward(name, kwargs)
@@ -53,11 +68,9 @@ def _register(name: str) -> None:
     server.tool()(call)
 
 
-for _name in tools.TOOLS:
-    _register(_name)
-
-
 def main() -> None:
+    for name in offered():
+        _register(name)
     server.run("stdio")
 
 

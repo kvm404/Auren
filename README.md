@@ -55,8 +55,9 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - `uv`, `quickshell` (`qs`), `wtype`, `grim`, and write access to `/dev/uinput` for screen
   control.
 - Claude Code (`claude`, logged in) for the brain; Codex (`codex`) for the backup brain.
-- Optional: `herdr` for coding agents, Open Browser Use (`obu` plus its browser extension) for the
-  browser tools.
+- Optional: `herdr` for coding agents (without it, commands run in the background), Open Browser Use
+  (`obu` plus its extension, in a Chromium browser) for the browser tools. Auren finds what's
+  installed; `auren doctor` shows it, and `config.toml`'s `[integrations]` can turn any of them off.
 - An AssemblyAI API key.
 
 ## Install
@@ -99,6 +100,8 @@ Files:
 | `~/.config/auren/config.toml` | Settings: reply language, voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort. Edit it, or use `auren config` (`set voice.speed 1.1`, `edit`); the panel and `auren-ctl` change it too |
 | `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (auren, veyra), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
+| `~/.config/auren/instructions.md` | Anything else the brain should know about you (optional) |
+| `~/.config/auren/vocab.txt` | Names speech recognition should expect, one per line (optional) |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |
 | `~/.local/share/auren/` | The installed program and the voice model |
 

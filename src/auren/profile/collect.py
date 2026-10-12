@@ -25,7 +25,9 @@ from datetime import datetime
 from pathlib import Path
 
 HOME = Path.home()
-PROJECTS = HOME / "Projects"
+# Where people keep projects, when config.toml's projects.folders doesn't say.
+PROJECT_FOLDERS = ["~/Projects", "~/projects", "~/Code", "~/code", "~/src", "~/dev", "~/Developer", "~/work",
+                   "~/repos", "~/git", "~/Documents/GitHub"]
 
 DESKTOP_DIRS = [  # later entries win, so user launchers override system ones
     Path("/usr/share/applications"),
@@ -189,10 +191,22 @@ def omarchy_commands() -> list[dict]:
             for c in data.get("commands", []) if not c.get("hidden")]
 
 
+def project_folders() -> list[Path]:
+    from ..settings import current
+    configured = current()["projects.folders"]
+    folders = [Path(os.path.expanduser(f)) for f in (configured or PROJECT_FOLDERS)]
+    seen, out = set(), []
+    for f in folders:
+        if f.is_dir() and f.resolve() not in seen:
+            seen.add(f.resolve())
+            out.append(f)
+    return out
+
+
 @soft
 def projects() -> list[dict]:
     items = []
-    for d in PROJECTS.iterdir() if PROJECTS.is_dir() else []:
+    for d in (c for f in project_folders() for c in f.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
             continue
         item = {"name": d.name, "path": str(d), "modified": int(d.stat().st_mtime)}
@@ -215,11 +229,23 @@ def obsidian() -> list[str]:
     return [v["path"] for v in vaults.values() if v.get("path")]
 
 
+def bookmark_file() -> tuple[str, Path] | None:
+    """The browser tools' browser and its Bookmarks file."""
+    from ..hands import browsers
+    try:
+        kind = browsers.resolve()
+    except browsers.UnknownBrowser:
+        return None
+    profile = browsers.profile_dir(kind)
+    return (kind.name, profile / "Bookmarks") if profile else None
+
+
 @soft
 def bookmarks() -> dict[str, list[str]]:
-    """Bookmark names per browser, as "Folder/Name" (no URLs: they can hold login tokens)."""
-    files = {"chrome": HOME / ".config/google-chrome/Default/Bookmarks",
-             "brave": HOME / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks"}
+    """Bookmark names of the browser the browser tools use, as "Folder/Name" (no URLs: they can hold
+    login tokens)."""
+    found = bookmark_file()
+    files = dict([found]) if found else {}
     out = {}
     for browser, path in files.items():
         if not path.exists():
@@ -278,7 +304,11 @@ def hyprland() -> dict:
 
 
 @soft
-def herdr() -> dict:
+def herdr() -> dict | None:
+    from ..integrations import active
+    if not active("herdr"):
+        return None                      # not set up here: left out of the snapshot
+
     def get(*args) -> dict:
         return json.loads(run(["herdr", *args]))["result"]
 
@@ -361,6 +391,8 @@ def collect(names: dict) -> dict:
     out = {}
     for key, fn in names.items():
         start = time.perf_counter()
-        out[key] = fn()
+        value = fn()
+        if value is not None:            # None: doesn't apply on this machine
+            out[key] = value
         out.setdefault("_timing_ms", {})[key] = round((time.perf_counter() - start) * 1000)
     return out

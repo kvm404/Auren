@@ -38,7 +38,6 @@ KINDS = {
     "antigravity": "agy", "agy": "agy", "gemini": "gemini", "grok": "grok", "muse": "muse",
     "cursor": "cursor", "copilot": "copilot", "kimi": "kimi", "pi": "pi", "amp": "amp", "qwen": "qwen",
 }
-DEFAULT_KIND = "codex"   # heavy jobs go to Codex by default; Claude's allowance is the scarce one
 
 # Footer lines agent TUIs draw under the reply (Codex, Claude Code, OpenCode).
 _FOOTER = re.compile(
@@ -295,12 +294,15 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
     return out
 
 
-def start_agent(kind: str = DEFAULT_KIND, cwd: str = "~", name: str = "", task: str = "",
+def start_agent(kind: str = "", cwd: str = "~", name: str = "", task: str = "",
                 wait: bool = False, timeout_s: int = 1800, agent_args: list[str] | None = None,
                 show: bool = False) -> dict:
     """Start a new agent in its own tab of the auren workspace, optionally with a first task. show:
     switch the user's view to the new tab once the agent runs (not before: keys the user is still
-    typing would land in the tab's shell)."""
+    typing would land in the tab's shell). kind: empty for the user's default agent."""
+    if not kind.strip():
+        from ..integrations import default_agent
+        kind = default_agent()
     kind = KINDS.get(kind.strip().lower(), kind.strip().lower())
     cwd = str(Path(os.path.expanduser(cwd)).resolve())
     if not Path(cwd).is_dir():

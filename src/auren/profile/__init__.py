@@ -18,7 +18,7 @@ import json
 import time
 from pathlib import Path
 
-from ..config import CACHE_DIR
+from ..config import CACHE_DIR, CONFIG_FILE
 from . import collect
 from .redact import redact, redact_all
 
@@ -32,16 +32,20 @@ WATCHED = [  # a change to any of these rebuilds the static part
     Path.home() / ".config/omarchy/defaults",
     Path.home() / ".local/state/omarchy/defaults",
     Path.home() / ".config/obsidian/obsidian.json",
-    Path.home() / ".config/google-chrome/Default/Bookmarks",
-    Path.home() / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks",
-    collect.PROJECTS,
     Path("/usr/share/omarchy/bin"),
 ]
+RECHECK = 30          # seconds between checks whether the static part went stale
+
+
+def _watched() -> list[Path]:
+    """WATCHED, plus what depends on the user's setup: project folders, the browser's bookmarks, config."""
+    found = collect.bookmark_file()
+    return [*WATCHED, *collect.project_folders(), *([found[1]] if found else []), CONFIG_FILE]
 
 
 def _fingerprint() -> dict[str, float]:
     out = {}
-    for p in WATCHED:
+    for p in _watched():
         if p.exists():
             mtimes = [p.stat().st_mtime]
             if p.is_dir():
@@ -54,13 +58,18 @@ class Profile:
     def __init__(self, cache: Path = CACHE):
         self.cache = cache
         self._static: dict | None = None
+        self._checked = 0.0
 
     # --- data ----------------------------------------------------------------
 
     def static(self, refresh: bool = False) -> dict:
-        if self._static is not None and not refresh:
+        if self._static is not None and not refresh and time.monotonic() - self._checked < RECHECK:
             return self._static
+        self._checked = time.monotonic()
         fp = _fingerprint()
+        if self._static is not None and not refresh and self._static.get("_fingerprint") == fp \
+                and time.time() - self._static.get("_built_at", 0) < MAX_AGE:
+            return self._static
         if not refresh and self.cache.exists():
             cached = json.loads(self.cache.read_text())
             if cached.get("_fingerprint") == fp and time.time() - cached.get("_built_at", 0) < MAX_AGE:

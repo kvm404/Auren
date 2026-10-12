@@ -103,7 +103,8 @@ def render_live(l: dict) -> str:
     if status:
         parts.append("Status: " + ", ".join(status) + ".")
     parts += ["Windows (Hyprland):", *_windows(l.get("hyprland", {}))]
-    parts += ["herdr (terminal workspaces with coding agents):", *_herdr(l.get("herdr", {}))]
+    if "herdr" in l:
+        parts += ["herdr (terminal workspaces with coding agents):", *_herdr(l["herdr"])]
     return "\n".join(parts)
 
 
@@ -123,8 +124,9 @@ def render_static(s: dict) -> str:
     parts += ["", "## Key bindings", *_keys(s.get("keybindings", []), s.get("apps", {}))]
 
     projects = s.get("projects", [])
-    if not _err(projects):
-        parts += ["", "## Projects (~/Projects, most recently changed first)",
+    if projects and not _err(projects):
+        folders = sorted({short(str(Path(p["path"]).parent)) for p in projects})
+        parts += ["", f"## Projects (in {', '.join(folders)}, most recently changed first)",
                   "- " + ", ".join(p["name"] for p in projects[:25])]
     vaults = s.get("obsidian_vaults", [])
     if vaults and not _err(vaults):
