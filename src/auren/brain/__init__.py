@@ -10,7 +10,8 @@ don't pay Claude Code's start-up. It gets auren's own instructions (not Claude
 Code's), only auren's tools (the MCP adapter in auren.server, which forwards to the
 runtime), and none of the user's personal Claude settings (--setting-sources local,
 and a working folder outside $HOME). The process is restarted when its conversation
-grows past MAX_CONTEXT tokens. `interrupt()` stops an answer in progress.
+grows past MAX_CONTEXT tokens. `interrupt()` stops an answer in progress. In codex mode the Claude
+process isn't started at all (`warm()`).
 """
 
 from __future__ import annotations
@@ -272,13 +273,16 @@ class Brain:
     RETRY_AFTER = 30 * 60
     MODES = ("auto", "claude", "codex")
     EFFORTS = ("low", "medium", "high", "xhigh", "max")      # Claude Code's --effort; low is decision 0003's
+    CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 
-    def __init__(self, runtime, session: str = "daemon", model: str = "haiku", think: bool = True, mode: str = "auto",
-                 effort: str = "low"):
+    def __init__(self, runtime, session: str = "daemon", mode: str = "auto", effort: str = "low",
+                 claude_model: str = "haiku", codex_model: str = "gpt-6.1-sol", codex_effort: str = "low",
+                 think: bool = True):
         self.runtime, self.session = runtime, session
-        self.primary = ClaudeBrain(runtime, session, model=model, think=think,
+        self.primary = ClaudeBrain(runtime, session, model=claude_model, think=think,
                                    effort=effort if effort in self.EFFORTS else "low")
-        self.backup = CodexBrain(runtime, session)
+        self.backup = CodexBrain(runtime, session, model=codex_model,
+                                 effort=codex_effort if codex_effort in self.CODEX_EFFORTS else "low")
         self.limited_since: float | None = None
         self.mode = mode if mode in self.MODES else "auto"
 
@@ -313,6 +317,14 @@ class Brain:
                 yield ("switch", f"Claude's limit is reached ({str(e)[:120]}); using Codex for now")
         yield from self.backup.ask(transcript)
 
+    def warm(self) -> None:
+        """Match the Claude process to the mode: start it now if it will answer (so the first answer isn't
+        slow), stop it in codex mode (it would only hold memory). Call it between answers."""
+        if self.mode == "codex":
+            self.primary.stop()
+        elif self.primary.proc is None or self.primary.proc.poll() is not None:
+            self.primary.start()
+
     def interrupt(self) -> None:
         """Stop the answer in progress (whichever brain is giving it)."""
         self.primary.interrupt()
@@ -333,16 +345,24 @@ class Brain:
     def language(self) -> str:
         return self.primary.language
 
-    def set_effort(self, effort: str) -> None:
-        """Claude's effort is fixed when its process starts: restart it (warm), which starts a fresh conversation."""
-        if effort not in self.EFFORTS:
+    def set_claude(self, effort: str | None = None, model: str | None = None) -> None:
+        """Claude's effort and model are fixed when its process starts: restart it, which starts a fresh
+        conversation."""
+        if effort is not None and effort not in self.EFFORTS:
             raise ValueError(f"effort must be one of {', '.join(self.EFFORTS)}")
-        self.primary.effort = effort
+        self.primary.effort = effort or self.primary.effort
+        self.primary.model = model or self.primary.model
         self.forget()
 
+    def set_codex(self, model: str, effort: str) -> None:
+        """Codex starts a process per request, so this applies from the next one."""
+        if effort not in self.CODEX_EFFORTS:
+            raise ValueError(f"Codex effort must be one of {', '.join(self.CODEX_EFFORTS)}")
+        self.backup.model, self.backup.effort = model, effort
+
     def forget(self) -> None:
-        """Start a fresh conversation: a new Claude process (warmed up now, so the next answer isn't slow)
+        """Start a fresh conversation: a new Claude process (warmed up now unless the mode is codex)
         and no Codex history."""
         self.primary.stop()
-        self.primary.start()
+        self.warm()
         self.backup.history.clear()
