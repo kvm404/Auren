@@ -59,7 +59,7 @@ After a reply it smiles (^ ^).
 Remote control (for the bar plugin):
 
 ```bash
-qs -p ~/.local/share/auren/mascot ipc call mascot toggle   # show, hide, poke, reset, state, size 1.2
+qs -p ~/.local/share/auren/mascot ipc call -- mascot toggle   # show, hide, poke, reset, state, size 1.2
 systemctl --user restart auren-mascot
 ```
 
@@ -68,10 +68,18 @@ systemctl --user restart auren-mascot
 - **Quickshell** (QML), the same toolkit as the Omarchy shell, run as its own small instance so a
   mascot bug can't affect the bar. It's a layer-shell surface on the overlay layer: on every
   workspace, never takes keyboard focus, not in the window list.
-- **Input mask** = the body only, so clicks around it reach the windows below. The bubble is a
+- **Input mask** = the body's mouse area outside a held gesture, so clicks around it reach the windows below. The bubble is a
   second layer surface with an empty input mask (fully click-through).
-- **Dragging:** while dragging, the window covers the whole screen and the mascot moves inside it, so no
-  compositor round trip per mouse move; on release it shrinks back to the mascot's size at the new place.
+- **Dragging:** the transparent layer surface stays screen-sized at a fixed origin. Only the mascot
+  moves, so pressing, dragging and releasing never resize or move the Wayland surface. The input mask
+  follows the same body rectangle as the mouse area; it covers the screen during a held gesture so a
+  fast pointer can't outrun it. Outside a gesture, the rest of the desktop remains click-through.
+  `MascotDragArea.qml` measures each event in the fixed surface coordinate space, applies Qt's drag
+  threshold, and keeps the original grab offset through edge clamping and direction changes. Only
+  the left button drags. Cancelled or interrupted drags save their last position and never trigger talk.
+- The mascot waits for its saved position, character and screen geometry before appearing. Resizing,
+  switching characters or changing screen geometry cancels any active drag and clamps the position
+  to the available screen. Saved coordinates are written together after the gesture, not per motion.
 - **Animation:** every pose is oscillators driven by one clock × mood weights that fade in and out,
   so moods blend instead of jumping. The clock runs every frame only while Auren is doing something.
   Idle breathing is stepped at 10 fps, and the clock stops once the mascot has faded. All of this is in
@@ -98,21 +106,35 @@ systemctl --user restart auren-mascot
 
 ## Gotchas
 
-- **Hyprland animates layer surfaces when they move or resize** (Omarchy's `layers` animation). A drag
-  resizes the window to full screen, so during the slide the pointer positions were relative to a moving
-  window and the mascot drifted away from the cursor (reported by the user with a recording). Fix: a layer
-  rule in `~/.config/hypr/hyprland.lua`, the same thing Omarchy does for its bar:
+- The former drag implementation changed the layer surface between mascot-sized and screen-sized
+  and guessed each event's origin. On empty workspaces it could lose the grab; during reconfiguration
+  the character could briefly appear at the screen origin. The fixed surface removes both transitions.
+  Dragging no longer depends on a layer-animation rule. The existing optional rule can stay if you
+  prefer instant mascot appearance:
   `hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })`.
-  The drag code also checks each event against both possible window origins (mascot-sized or full
-  screen), because Qt learns the new size a moment before the compositor applies it.
-- Before that fix, one fast drag test crashed the mascot with "Wayland connection experienced a fatal
-  error: Protocol error" (systemd restarted it in 3 s). It didn't happen again in 75 rapid drags after
-  the fix, and the cause isn't known.
 
 - Cursor warps (`hyprctl dispatch hl.dsp.cursor.move`) during a button press don't produce motion
   events for clients. To test dragging, use relative motion from a virtual mouse (`REL_X`/`REL_Y`).
-- Quickshell hot-reloads on save, but a reload can leave a layer surface's margins stale until the next
-  change; restart the service to be sure.
+- Quickshell hot-reloads on save. Restart the mascot service when switching to this fixed-surface
+  implementation, so the previous surface is recreated.
+
+## Testing dragging
+
+The Qt interaction tests exercise the production `MascotDragArea` without a running desktop or
+daemon. They cover click jitter, fast movement, reversing at edges, fractional coordinates,
+cancellation, hiding/disabling, right-clicks, mixed buttons and repeated drags. CI runs them separately
+from the Python suite:
+
+```bash
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input tests/mascot
+```
+
+For compositor checks, use an isolated copy of `mascot/` with temporary XDG config/state folders,
+stub the talk action, and send real relative motion from a virtual mouse. Wait until Qt has received
+the button press before sending motion; the input stack can delay a synthetic press. Check dragging
+on an empty workspace, over a test app and outside its bounds, with both mascots and sizes 0.6, 1 and
+2.2. Check that background clicks pass through before and after dragging, hiding/resize cancels a grab,
+and a restart restores the dropped position. Restore the workspace and cursor when finished.
 
 ## Making a mascot
 

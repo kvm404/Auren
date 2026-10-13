@@ -16,3 +16,15 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+
+  mascot-drag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-declarative-dev-tools qt6-qpa-plugins qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qml6-module-qttest
+      - run: /usr/lib/qt6/bin/qmltestrunner -input tests/mascot
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
