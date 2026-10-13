@@ -71,7 +71,6 @@ class ClaudeBrain:
         # a stop is either in time to keep the message from being sent, or sent after it and for it only.
         self._lock = threading.Lock()
         self.profile = Profile()
-        self.language, self.speaker = "en", "female"      # reply language and the voice's gender (set by Brain)
         self.proc: subprocess.Popen | None = None
         self.context_tokens = 0
         self._stderr: list[str] = []
@@ -178,8 +177,7 @@ class ClaudeBrain:
                 self._asking = False
 
     def _ask(self, transcript: str) -> Iterator[tuple]:
-        msg = prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker,
-                                  self.runtime.summary(self.session))
+        msg = prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session))
         sent = time.perf_counter()
         with self._lock:
             if self._interrupted or _cancelled(self.runtime, self.session):    # stopped while preparing
@@ -261,7 +259,6 @@ class CodexBrain:
         self.runtime, self.session = runtime, session
         self.model, self.effort = model, effort
         self.profile = Profile()
-        self.language, self.speaker = "en", "female"
         self.history: list[tuple[str, str]] = []
         self.proc: subprocess.Popen | None = None
         self._interrupted = False
@@ -284,8 +281,7 @@ class CodexBrain:
             prompt.system_prompt(self.profile.static_context()),
             "Use only the auren tools to act; do not run shell commands yourself.",
             f"Recent conversation:\n{recent}" if recent else "",
-            prompt.user_message(transcript, self.profile.live_context(), self.language, self.speaker,
-                                self.runtime.summary(self.session))) if x)
+            prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session))) if x)
         cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
                "-m", self.model, "-c", f"model_reasoning_effort={self.effort}", "-c", "project_doc_max_bytes=0",
                "-c", f'mcp_servers.auren.command="{sys.executable}"',
@@ -402,17 +398,6 @@ class Brain:
     def stop(self) -> None:
         self.primary.stop()
         self.backup.stop()
-
-    def set_language(self, language: str, speaker: str = "female") -> None:
-        """Reply language (en, hi) and the voice's gender; both brains use them from the next request on."""
-        if language not in prompt.LANGUAGES:
-            raise ValueError(f"language must be one of {', '.join(prompt.LANGUAGES)}")
-        for b in (self.primary, self.backup):
-            b.language, b.speaker = language, speaker
-
-    @property
-    def language(self) -> str:
-        return self.primary.language
 
     def set_claude(self, effort: str | None = None, model: str | None = None) -> None:
         """Claude's effort and model are fixed when its process starts: restart it, which starts a fresh

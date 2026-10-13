@@ -12,7 +12,7 @@ The assistant speaks with **Supertonic 3** running locally (ONNX, CPU), configur
 | Alternatives | M3 (normal pace), F1 / M1 (slower, calmer) | Same cost; switch per preference |
 | Steps | **5** | Cheapest setting; quality was good enough by ear. 8 costs ~45% more CPU |
 | Speed | **1.05** | Supertonic's default; what F2 sounded like when it was chosen |
-| Language | **English (`en`)** | What the user speaks most. Hindi is supported but out of scope for now |
+| Language | **English (`en`)** | Auren replies and synthesizes speech only in English |
 
 ## Why Supertonic
 
@@ -25,11 +25,11 @@ scripts in `experiments/tts/`.
 - The only tested engine that speaks Hindi properly.
 - Custom voices are possible later via Supertonic Voice Builder (JSON export).
 
-## Hindi and Hinglish
+## Historical Hindi and Hinglish experiments
 
-Picked up on 2026-10-10 as a reply-language setting (`auren-ctl language hi`, the panel's Voice page): the
-brain writes option C below (Hindi in Devanagari, English names in Latin) and each sentence with
-Devanagari is synthesized with `lang="hi"`. What the original test found:
+Hindi replies were added on 2026-10-10 and removed on 2026-10-13 when Auren became English-only.
+The language selector and script-based TTS routing are gone. The original experiment findings
+below remain for reference; they do not describe the current runtime.
 
 - Hindi must be written in **Devanagari** and synthesized with `lang="hi"`.
 - Hinglish in Roman letters ("main abhi Firefox khol raha hoon") is spoken badly by every engine tested.

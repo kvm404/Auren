@@ -14,11 +14,9 @@ def cfg(tmp_path, monkeypatch):
 
 def test_choices_match_the_code_that_uses_them():
     from auren.brain import Brain
-    from auren.brain.prompt import LANGUAGES
     from auren.voice import TUNING
 
     assert settings.MODES == Brain.MODES and settings.EFFORTS == Brain.EFFORTS
-    assert settings.LANGUAGES == tuple(LANGUAGES)
     for name, (default, low, high) in TUNING.items():
         k = settings.BY_FLAT[name]
         assert k.default == default and k.check(low) == low and k.check(high) == high
@@ -39,25 +37,50 @@ def test_settings_json_is_moved_in_once(cfg):
         {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
          "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1, "nonsense": 1}))
     values = settings.load()
-    assert {k: values[k] for k in json.loads((cfg / "settings.json.bak").read_text()) if k in values} == {"voice": False, "brain": "codex", "effort": "high", "language": "hi", "voiceName": "M1",
+    assert {k: values[k] for k in json.loads((cfg / "settings.json.bak").read_text()) if k in values} == {"voice": False, "brain": "codex", "effort": "high", "voiceName": "M1",
                       "speed": 1.2, "steps": 7, "volume": 0.8, "pause": 0.1}
     assert not (cfg / "settings.json").exists() and (cfg / "settings.json.bak").exists()
     assert settings.load() == values
+    assert "language" not in values and "language" not in (cfg / "config.toml").read_text()
 
 
 def test_saving_keeps_the_users_comments_and_extras(cfg):
-    (cfg / "config.toml").write_text('# mine\nlanguage = "en"  # english please\n\n[voice]\nspeed = 1.1\n')
-    settings.save({"speed": 1.3, "brain": "claude", "language": "en"})
+    (cfg / "config.toml").write_text('# mine\n\n[voice]\nspeed = 1.1  # my pace\n\n[extra]\nx = 1\n')
+    settings.save({"speed": 1.3, "brain": "claude"})
     text = (cfg / "config.toml").read_text()
-    assert "# mine" in text and "# english please" in text
+    assert "# mine" in text and "# my pace" in text and "[extra]\nx = 1" in text
     values, problems = settings.read(text)
-    assert values["speed"] == 1.3 and values["brain"] == "claude" and problems == []
+    assert values["speed"] == 1.3 and values["brain"] == "claude" and problems == ["unknown setting extra.x"]
+
+
+@pytest.mark.parametrize("language", ["hi", "en"])
+@pytest.mark.parametrize("operation", ["load", "save"])
+def test_old_language_setting_is_removed_without_changing_other_preferences(cfg, language, operation):
+    text = f'# my settings\nlanguage = "{language}"\n\n[voice]\nname = "M3"\nspeed = 1.2  # my pace\n'
+    path = cfg / "config.toml"
+    path.write_text(text)
+    # Readers used by tools must also tolerate the setting before daemon startup migrates it.
+    assert settings.read(text)[1] == [] and "language" not in settings.current()
+    if operation == "save":
+        assert settings.save({"volume": 0.8})
+    values = settings.load()
+    assert "language" not in values and "language" not in path.read_text()
+    assert values["voiceName"] == "M3" and values["speed"] == 1.2
+    assert "# my settings" in path.read_text() and "# my pace" in path.read_text()
+    if operation == "save":
+        assert values["volume"] == 0.8
+    # Migration only rewrites once, rather than rewriting on every settings load.
+    changed = path.stat().st_mtime_ns
+    settings.load()
+    assert path.stat().st_mtime_ns == changed
+    with pytest.raises(ValueError, match="unknown setting language"):
+        settings.set_value("language", language)
 
 
 def test_bad_values_fall_back_and_are_reported(cfg):
-    values, problems = settings.read('language = "fr"\n[voice]\nspeed = 9\nname = "Z9"\n[extra]\nx = 1\n')
-    assert values["language"] == "en" and values["speed"] == 1.05 and values["voiceName"] == "F2"
-    assert len(problems) == 4 and any("extra.x" in p for p in problems)
+    values, problems = settings.read('[voice]\nspeed = 9\nname = "Z9"\n[extra]\nx = 1\n')
+    assert values["speed"] == 1.05 and values["voiceName"] == "F2"
+    assert len(problems) == 3 and any("extra.x" in p for p in problems)
     values, problems = settings.read("this is = not toml [")
     assert values == settings.defaults() and problems
 
@@ -116,13 +139,13 @@ def test_parallel_writers_keep_each_others_changes(tmp_path, monkeypatch):
     settings.ensure()
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path)}
     changes = [("voice.speed", "1.3"), ("voice.volume", "0.5"), ("voice.pause", "0.4"), ("voice.steps", "9"),
-               ("brain.effort", "high"), ("language", "hi")]
+               ("brain.effort", "high"), ("voice.name", "M3")]
     procs = [subprocess.Popen([sys.executable, "-c", f"from auren import settings; settings.set_value({p!r}, {v!r})"],
                               env=env) for p, v in changes]
     assert [p.wait() for p in procs] == [0] * len(procs)
     got = settings.load()
-    assert (got["speed"], got["volume"], got["pause"], got["steps"], got["effort"], got["language"]) == \
-        (1.3, 0.5, 0.4, 9, "high", "hi")
+    assert (got["speed"], got["volume"], got["pause"], got["steps"], got["effort"], got["voiceName"]) == \
+        (1.3, 0.5, 0.4, 9, "high", "M3")
     assert not list((tmp_path / "auren").glob(".config.*.tmp"))
 
 

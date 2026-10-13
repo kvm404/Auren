@@ -12,7 +12,7 @@ import qs.Ui
 //                 pages on the left, the page on the right, and Auren's on/off, restart and log below:
 //                   Home     the live mascot (click it to talk), status, last exchange, quick switches
 //                   Mascot   Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
-//                   Voice    spoken replies, reply language (English, Hindi), voice (F2, M3, F1, M1), speed,
+//                   Voice    spoken replies in English, voice (F2, M3, F1, M1), speed,
 //                            quality, volume, pause, test
 //                   Brain    auto / Claude / Codex, Claude's effort, today's numbers
 //                   Updates  the installed version, a check for a newer one, and the update (auren update)
@@ -66,7 +66,6 @@ Panel {
   readonly property bool voiceOn: st.voice !== false
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
-  readonly property string language: st.language || "en"
   readonly property string voiceName: st.voiceName || "F2"
   readonly property var tts: st.tts || ({ speed: 1.05, steps: 5, volume: 1.0, pause: 0.0 })
   // The voices picked by ear in decision 0001: F2 (chosen), M3 (normal pace), F1 and M1 (slower, calmer).
@@ -321,7 +320,6 @@ Panel {
   function toggleVoice() { ctlRun(["voice", root.voiceOn ? "off" : "on"]) }
   function toggleMascot() { systemctl(root.mascotActive ? "stop" : "start", "auren-mascot") }
   function setBrain(mode) { ctlRun(["brain", mode]) }
-  function setLanguage(lang) { if (lang !== root.language) ctlRun(["language", lang]) }
   function setEffort(level) { if (level !== root.effort) ctlRun(["effort", level]) }
   function setVoiceName(name) { ctlRun(["voice-name", name]) }
   function startFresh() { ctlRun(["forget"]) }
@@ -405,19 +403,12 @@ Panel {
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the Claude allowance" },
     { value: "max", label: "Max", tip: "Slowest and most expensive" }
   ]
-  readonly property var languages: [
-    { value: "en", label: "English", tip: "Replies in English" },
-    { value: "hi", label: "Hindi · हिंदी", tip: "Replies in Hindi (Devanagari), names stay in English; spoken in Hindi" }
-  ]
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
     { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
     { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6.1 Sol via Codex (saves Claude's allowance)" }
   ]
-  // Hindi verbs agree with the speaker: the F voices are female, the M voices male.
-  readonly property string sample: language !== "hi" ? "Hi, this is how I sound now. Does this pace work for you?"
-                                 : voiceName.charAt(0) === "M" ? "नमस्ते! अब मैं ऐसे बोल रहा हूँ। क्या यह रफ़्तार ठीक है?"
-                                 : "नमस्ते! अब मैं ऐसे बोल रही हूँ। क्या यह रफ़्तार ठीक है?"
+  readonly property string sample: "Hi, this is how I sound now. Does this pace work for you?"
 
   // Rows of buttons, each { label, icon, tip, run, on?, enabled? }: drawn by a Repeater and driven by the
   // keyboard through the same list.
@@ -479,7 +470,6 @@ Panel {
       { n: root.mascotActions.length, act: function(c) { root.runAction(root.mascotActions, c) } }]
     if (page === 2) return [
       { n: 1, act: function() { root.toggleVoice() } },
-      { n: 2, act: function(c) { root.setLanguage(root.languages[c].value) } },
       { n: 4, act: function(c) { root.setVoiceName(root.voiceChoices[c].value) } },
       { n: 1, adjust: function(dx) { root.nudge("speed", dx) } },
       { n: 3, act: function(c) { root.setTts("steps", root.qualities[c].value) } },
@@ -984,16 +974,6 @@ Panel {
               onClicked: root.toggleVoice()
               onHovered: function(h) { if (h) root.hover(0) }
             }
-            Choice {
-              width: parent.width
-              title: "REPLY LANGUAGE"
-              options: root.languages
-              value: root.language
-              foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(1) ? root.cursorCol : -1
-              onPicked: function(v) { root.setLanguage(v) }
-              onHoveredIndex: function(i) { root.hover(1, i) }
-            }
             Column {
               width: parent.width
               spacing: Style.space(12)
@@ -1005,9 +985,9 @@ Panel {
                 options: root.voiceChoices
                 value: root.voiceName
                 foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(2) ? root.cursorCol : -1
+                cursorIndex: root.has(1) ? root.cursorCol : -1
                 onPicked: function(v) { root.setVoiceName(v) }
-                onHoveredIndex: function(i) { root.hover(2, i) }
+                onHoveredIndex: function(i) { root.hover(1, i) }
               }
               SliderRow {
                 id: speedRow
@@ -1018,9 +998,9 @@ Panel {
                 minimum: root.sliders.speed.min; maximum: root.sliders.speed.max; step: root.sliders.speed.step
                 value: root.ttsValue("speed")
                 foreground: root.fg; fontFamily: root.font
-                hasCursor: root.has(3)
+                hasCursor: root.has(2)
                 onReleased: function(v) { root.setTts("speed", root.round(v, 0.05).toFixed(2)) }
-                onHovered: root.hover(3)
+                onHovered: root.hover(2)
               }
               Choice {
                 width: parent.width
@@ -1028,9 +1008,9 @@ Panel {
                 options: root.qualities
                 value: String(root.ttsValue("steps"))
                 foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(4) ? root.cursorCol : -1
+                cursorIndex: root.has(3) ? root.cursorCol : -1
                 onPicked: function(v) { root.setTts("steps", v) }
-                onHoveredIndex: function(i) { root.hover(4, i) }
+                onHoveredIndex: function(i) { root.hover(3, i) }
               }
               SliderRow {
                 id: volumeRow
@@ -1041,9 +1021,9 @@ Panel {
                 minimum: root.sliders.volume.min; maximum: root.sliders.volume.max; step: root.sliders.volume.step
                 value: root.ttsValue("volume")
                 foreground: root.fg; fontFamily: root.font
-                hasCursor: root.has(5)
+                hasCursor: root.has(4)
                 onReleased: function(v) { root.setTts("volume", root.round(v, 0.05).toFixed(2)) }
-                onHovered: root.hover(5)
+                onHovered: root.hover(4)
               }
               SliderRow {
                 id: pauseRow
@@ -1054,17 +1034,17 @@ Panel {
                 minimum: root.sliders.pause.min; maximum: root.sliders.pause.max; step: root.sliders.pause.step
                 value: root.ttsValue("pause")
                 foreground: root.fg; fontFamily: root.font
-                hasCursor: root.has(6)
+                hasCursor: root.has(5)
                 onReleased: function(v) { root.setTts("pause", root.round(v, 0.05).toFixed(2)) }
-                onHovered: root.hover(6)
+                onHovered: root.hover(5)
               }
               Choice {
                 width: parent.width
                 options: root.asOptions(root.voiceActions)
                 foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(7) ? root.cursorCol : -1
+                cursorIndex: root.has(6) ? root.cursorCol : -1
                 onPicked: function(v, i) { root.runAction(root.voiceActions, i) }
-                onHoveredIndex: function(i) { root.hover(7, i) }
+                onHoveredIndex: function(i) { root.hover(6, i) }
               }
             }
           }

@@ -8,9 +8,7 @@ Adjustable (the bar panel's Voice page, `auren-ctl tts ...`): speed, steps
 (quality: more steps cost more CPU), volume (scales the samples, relative to the
 system volume) and a pause between sentences.
 
-Hindi (decision 0001): a sentence with Devanagari in it is spoken in Hindi mode,
-English words in Latin letters included; anything else in English mode. So the
-brain's Hindi replies and the daemon's own English phrases both sound right.
+All speech is synthesized in English (decision 0001).
 
 For the mascot, a small clock thread follows the playback: it reports which
 sentence is being heard (captions) and how loud it is (the mascot bounces), using
@@ -55,17 +53,11 @@ def tuning(values: dict | None = None) -> dict:
         out[name] = int(round(v)) if name == "steps" else round(v, 2)
     return out
 
-_SENTENCE_END = re.compile(r"(?<=[.!?।])\s+")       # । is the Hindi full stop
-_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
 def sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_END.split(text.strip()) if s.strip()]
-
-
-def language_of(sentence: str) -> str:
-    """Supertonic's language for a sentence: Hindi if it has Devanagari in it, otherwise English."""
-    return "hi" if _DEVANAGARI.search(sentence) else "en"
 
 
 MODEL = "supertonic-3"
@@ -152,7 +144,7 @@ class Voice:
                     if self._stop.is_set():
                         break
                     wav, _ = self.tts.synthesize(text=sentence, voice_style=self.style, total_steps=self.steps,
-                                                 speed=self.speed, lang=language_of(sentence))
+                                                 speed=self.speed, lang="en")
                     if self._stop.is_set():
                         break
                     audio = np.asarray(wav, dtype=np.float32).reshape(-1)

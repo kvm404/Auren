@@ -21,6 +21,16 @@ def test_rules_follow_the_integrations():
     assert "Coding agents aren't connected" in bare and "can't move or click the mouse" in bare
 
 
+def test_english_only_rules_preserve_the_snapshot_and_pending_confirmations():
+    rules = prompt.rules(set())
+    assert "Always reply in English, even if the user speaks or asks for another language." in rules
+    msg = prompt.user_message("Reply in Hindi", "time: now", "- token abc: Close the window?")
+    assert "<snapshot>\ntime: now\n</snapshot>" in msg
+    assert msg.index("<awaiting_confirmation>") < msg.index("Transcript: Reply in Hindi")
+    assert "- token abc: Close the window?" in msg
+    assert "<reply_language>" not in msg
+
+
 def test_the_users_own_instructions_come_after_the_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(prompt, "INSTRUCTIONS", tmp_path / "instructions.md")
     monkeypatch.setattr(prompt, "ROUTINES_DIR", tmp_path / "routines")

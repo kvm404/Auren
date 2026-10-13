@@ -95,48 +95,64 @@ def test_settings_ignore_an_unknown_effort(tmp_path, monkeypatch):
     assert daemon.load_settings()["effort"] == "low"
 
 
-def test_hindi_sentences_split_on_the_danda_and_pick_hindi_mode():
-    from auren.voice import language_of, sentences
-
-    text = "ठीक है, मैं अभी Firefox खोल रही हूँ। बस दो second। Done?"
-    assert sentences(text) == ["ठीक है, मैं अभी Firefox खोल रही हूँ।", "बस दो second।", "Done?"]
-    assert [language_of(s) for s in sentences(text)] == ["hi", "hi", "en"]
-    assert language_of("Okay, fresh start.") == "en"
-
-
-def test_reply_language_note():
-    from auren.brain import prompt
-
-    assert prompt.reply_language("en") == ""
-    female, male = prompt.reply_language("hi", "female"), prompt.reply_language("hi", "male")
-    assert "Devanagari" in female and "रही हूँ" in female and "रहा हूँ" in male
-    msg = prompt.user_message("open whatsapp", "time: now", "hi", "male")
-    assert msg.index("<reply_language>") < msg.index("Transcript: open whatsapp")
-    assert "<reply_language>" not in prompt.user_message("open whatsapp", "time: now")
-
-
-class _LangBrain(_FakeBrain):
-    def __init__(self):
-        super().__init__()
-        self.set = []
-
-    def set_language(self, language, speaker="female"):
-        self.set.append((language, speaker))
-
-
-def test_language_command_follows_the_voice_gender(tmp_path, monkeypatch):
+def test_language_command_is_removed(tmp_path, monkeypatch):
     _config_in(tmp_path, monkeypatch)
     d = _Quiet()
-    d.settings["language"] = "en"
-    d.brain = _LangBrain()
-    assert d._refresh_state() is None
     import asyncio
-    assert asyncio.run(d.command("language fr")).startswith("usage:")
-    assert asyncio.run(d.command("language hi")) == "language hi"
-    d.settings["voiceName"] = "M3"
-    assert asyncio.run(d.command("language hi")) == "language hi"
-    assert d.brain.set == [("hi", "female"), ("hi", "male")]
-    assert _saved(tmp_path)["language"] == "hi"
+    for language in ("en", "hi"):
+        assert asyncio.run(d.command(f"language {language}")) == "unknown command: language"
+    assert not (tmp_path / "config.toml").exists()
+
+
+def test_daemon_state_and_status_have_no_language_field(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(daemon, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(daemon, "STATE_FILE", tmp_path / "state.json")
+    d = _Quiet()
+    d.brain = _FakeBrain()
+    d.brain.primary = SimpleNamespace(effort="low")
+    d.set_state("idle")
+    state = json.loads((tmp_path / "state.json").read_text())
+    status = json.loads(asyncio.run(d.command("status")))
+    assert state["state"] == status["state"] == "idle"
+    assert state["voiceName"] == "F2"
+    assert "language" not in state and "language" not in status
+
+
+def test_voice_synthesizes_every_sentence_in_english(monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from auren import voice
+
+    calls = []
+
+    class TTS:
+        sample_rate = 44100
+
+        def __init__(self, **kwargs):
+            pass
+
+        def get_voice_style(self, **kwargs):
+            return "style"
+
+        def synthesize(self, **kwargs):
+            calls.append(kwargs)
+            return np.zeros(100, dtype=np.float32), None
+
+    monkeypatch.setattr("supertonic.TTS", TTS)
+    monkeypatch.setattr(voice, "model_dir", lambda: "fake-model")
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: SimpleNamespace(stdin=io.BytesIO(), wait=lambda: 0))
+    monkeypatch.setattr(voice.Voice, "_follow", lambda self: None)
+    # Unexpected non-English text must never switch the engine into Hindi mode.
+    assert voice.Voice().speak("Firefox is open. नमस्ते! Done?")
+    assert [c["text"] for c in calls] == ["Firefox is open.", "नमस्ते!", "Done?"]
+    assert all(c["lang"] == "en" for c in calls)
 
 
 class _FakeVoice:
@@ -171,10 +187,10 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     async def run():
         d = _Quiet()
         d.settings = settings.load()
-        d.brain, d.voice = _LangBrain(), _FakeVoice()
+        d.brain, d.voice = _FakeBrain(), _FakeVoice()
         assert await d.command("reload") == "no changes"
         for path, value in (("voice.name", "M3"), ("voice.speed", "1.3"), ("voice.enabled", "false"),
-                            ("brain.mode", "codex"), ("brain.effort", "high"), ("language", "hi"),
+                            ("brain.mode", "codex"), ("brain.effort", "high"),
                             ("brain.claude_model", "sonnet"), ("brain.codex_effort", "medium")):
             settings.set_value(path, value)
         assert await d.command("reload") == "Auren picked it up"
@@ -183,7 +199,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
 
     d = asyncio.run(run())
     assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
-    assert d.brain.mode == "codex" and d.brain.set == [("hi", "male")] and efforts == [("high", "sonnet")]
+    assert d.brain.mode == "codex" and efforts == [("high", "sonnet")]
     assert d.brain.codex == ("gpt-6.1-sol", "medium")
     assert d.refreshed == 1
 
