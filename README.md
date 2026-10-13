@@ -17,9 +17,8 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - **Hands:** about 40 tools over MCP, covering apps, windows, workspaces, media, volume, shell commands,
   herdr agents and jobs, the browser (Open Browser Use), screen control (look, click, drag, type) and
   saved routines.
-- **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English or Hindi
-  (Devanagari, names kept in English). Speed, quality, volume and the pause between sentences are
-  adjustable.
+- **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English. Speed, quality,
+  volume and the pause between sentences are adjustable.
 - **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first. Text from
   screens and web pages is treated as untrusted.
 - **Mascot:** Auren (a hover-bot) or Veyra (a fox spirit). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
@@ -94,14 +93,14 @@ releases will replace that. `git pull && ./install.sh` still works too. To work 
 | `auren doctor` | What works on this machine and how to fix what doesn't |
 | `auren update` | Check for a newer version and install it if you say so (`check`, `apply`, `status`) |
 | `auren chat` | Type requests in a terminal and see the tool calls |
-| `auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `language en\|hi`, `forget`, `quit` |
+| `auren-ctl status` | Daemon state; also `voice on\|off`, `voice-name F2\|M3\|F1\|M1`, `tts speed 1.1 pause 0.2`, `brain auto\|claude\|codex`, `effort low…max`, `forget`, `quit` |
 
 Files:
 
 | Path | What |
 |---|---|
 | `~/.config/auren/secrets.env` | API keys (chmod 600) |
-| `~/.config/auren/config.toml` | Settings: reply language, voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort. Edit it, or use `auren config` (`set voice.speed 1.1`, `edit`); the panel and `auren-ctl` change it too |
+| `~/.config/auren/config.toml` | Settings: voice on/off, voice name, speed, steps, volume, pause, brain mode, Claude's effort. Edit it, or use `auren config` (`set voice.speed 1.1`, `edit`); the panel and `auren-ctl` change it too |
 | `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (auren, veyra), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.config/auren/instructions.md` | Anything else the brain should know about you (optional) |

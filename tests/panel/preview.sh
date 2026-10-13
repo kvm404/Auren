@@ -41,7 +41,7 @@ theme="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
 bash -c 'exec -a auren-preview sleep 600' & keeper=$!
 trap 'kill $keeper 2>/dev/null; rm -rf "$tmp"' EXIT
 now=$(date +%s)
-printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","language":"en","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1}}' \
+printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1}}' \
   "$now" "$keeper" >"$tmp/run/auren/state.json"
 printf '{"at":%s,"source":"voice","transcript":"Open Excalidraw.","reply":"Excalidraw is open now.","tools":["launch_app"],"think_s":3.2,"brain":"claude"}\n' \
   "$now" >"$tmp/state/auren/history.jsonl"

@@ -33,7 +33,6 @@ Always present:
 | `mode` | Brain mode: `auto`, `claude` or `codex` |
 | `effort` | Claude's effort |
 | `voice` | Spoken replies on |
-| `language` | Reply language: `en` or `hi` |
 | `voiceName` | Supertonic voice (`F2`, `M3`, …) |
 | `voices` | Voices available |
 | `tts` | `{speed, steps, volume, pause}` |
@@ -66,8 +65,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `tts speed X steps N volume X pause X` / `tts reset` | Voice tuning |
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
-| `language en\|hi` | Reply language |
-| `status` | JSON: state, brain, mode, effort, language, voice |
+| `status` | JSON: state, brain, mode, effort, voice |
 | `reload` | Re-read `config.toml` and apply what changed (`auren config` sends it) |
 | `quit` | Stop the daemon |
 
@@ -75,7 +73,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: language, `[voice]` (on, name, tuning), `[brain]` (mode, effort). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[brain]` (mode, effort). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
@@ -94,3 +92,11 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (checking, current, available, updating, done, failed, error, unknown), `step`, `message`, `latest`, `commits`, `count`, `checked_at` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |
 | `~/.config/auren/panel.json` | bar plugin | The panel's own settings (`notifyUpdates`) |
+
+## English-only replies
+
+Auren always replies and synthesizes speech in English. The language selector, CLI flags
+`--language` and `--male`, socket command `language`, and state/status field `language` have been
+removed. Loading or saving settings removes the old top-level `language` key from `config.toml`,
+keeping the other settings and their comments. Legacy `settings.json` migration ignores that key
+and keeps the original file as `settings.json.bak`.

@@ -45,7 +45,7 @@ ShellRoot {
     readonly property var commits: [
       { subject: "Redesign the bar panel" }, { subject: "Check for updates from the panel" },
       { subject: "Fix the bubble after a stop" }, { subject: "Faster first reply" },
-      { subject: "Hindi voice tweaks" }, { subject: "Docs" }, { subject: "Tests" }
+      { subject: "Voice tuning tweaks" }, { subject: "Docs" }, { subject: "Tests" }
     ]
     function fake(kind) {
       var now = Date.now() / 1000

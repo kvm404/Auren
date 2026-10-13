@@ -64,8 +64,6 @@ def main() -> None:
         sp.add_argument("--model", help="Claude's model (default: brain.claude_model in config.toml)")
         sp.add_argument("--no-think", action="store_true")
         sp.add_argument("--effort", choices=Brain.EFFORTS, help="Claude's effort (default: brain.effort)")
-        sp.add_argument("--language", default="en", choices=["en", "hi"], help="reply language")
-        sp.add_argument("--male", action="store_true", help="Hindi: male verb forms (for an M voice)")
         sp.add_argument("--backup", action="store_true", help="use the backup brain (Codex) directly")
     a = p.parse_args()
     if a.cmd == "daemon":
@@ -102,11 +100,6 @@ def main() -> None:
         brain = Brain(runtime, session, mode=s["brain"], effort=a.effort or s["effort"],
                       claude_model=a.model or s["brain.claude_model"], codex_model=s["brain.codex_model"],
                       codex_effort=s["brain.codex_effort"], think=not a.no_think)
-    if a.language != "en":
-        if isinstance(brain, Brain):
-            brain.set_language(a.language, "male" if a.male else "female")
-        else:
-            brain.language, brain.speaker = a.language, "male" if a.male else "female"
     try:
         if a.cmd == "ask":
             runtime.new_turn(session)

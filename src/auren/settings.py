@@ -1,6 +1,6 @@
 """~/.config/auren/config.toml: the user's settings.
 
-The daemon keeps them as a flat dict (voice, voiceName, speed, ..., brain, effort, language); the file
+The daemon keeps them as a flat dict (voice, voiceName, speed, ..., brain, effort); the file
 groups them in sections. The bar panel and auren-ctl change some of them through the daemon, which
 rewrites only those values: comments and anything else in the file are kept.
 
@@ -37,7 +37,6 @@ from .config import SETTINGS as LEGACY
 
 log = logging.getLogger("auren.settings")
 
-LANGUAGES = ("en", "hi")                                  # brain.prompt.LANGUAGES
 MODES = ("auto", "claude", "codex")                       # Brain.MODES
 EFFORTS = ("low", "medium", "high", "xhigh", "max")       # Brain.EFFORTS
 CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")   # Brain.CODEX_EFFORTS
@@ -128,7 +127,6 @@ class Key:
 
 # Ranges match voice.TUNING (decision 0001's defaults); a test keeps them in step.
 KEYS = [
-    Key("language", "language", "en", _choice(*LANGUAGES), "Reply language: en or hi (Hindi replies are in Devanagari)"),
     Key("voice.enabled", "voice", True, _boolean, "Speak replies (false: they only show in the mascot's bubble)"),
     Key("voice.name", "voiceName", "F2", _voice_name, "Supertonic voice: F1..F5 or M1..M5"),
     Key("voice.speed", "speed", 1.05, _number(0.7, 1.6), "How fast it speaks: 0.7 to 1.6"),
@@ -187,6 +185,8 @@ def _unknown(doc: dict, prefix: str = "") -> list[str]:
     out = []
     for name, value in doc.items():
         path = prefix + name
+        if path == "language":        # retired setting: older installs may still have it
+            continue
         if isinstance(value, dict) and not any(k.path == path for k in KEYS):
             out += _unknown(value, path + ".")
         elif path not in BY_PATH:
@@ -267,15 +267,20 @@ def _write(doc: tomlkit.TOMLDocument) -> None:
 
 
 def ensure() -> None:
-    """Create config.toml if it's missing: from the old settings.json once, else with the defaults."""
-    if CONFIG_FILE.exists():
-        return
+    """Create config.toml if missing and remove the retired language setting from older installs."""
     with _locked():
         _ensure()
 
 
 def _ensure() -> None:
-    if CONFIG_FILE.exists():            # another process made it while we waited
+    if CONFIG_FILE.exists():
+        try:
+            doc = tomlkit.parse(CONFIG_FILE.read_text())
+        except (OSError, tomlkit.exceptions.TOMLKitError):
+            return                    # leave unreadable files alone, as save() does
+        if "language" in doc:
+            del doc["language"]
+            _write(doc)
         return
     values = defaults()
     if LEGACY.exists():

@@ -12,7 +12,6 @@
     auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
-    auren-ctl language en|hi          # reply language: Hindi replies are in Devanagari, spoken in Hindi
     auren-ctl reload                  # re-read config.toml (auren config sends this)
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
@@ -36,7 +35,6 @@ import time
 
 from . import notice
 from .brain import Brain, BrainError, Interrupted
-from .brain.prompt import LANGUAGES
 from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
 from .ears import Listening, vocabulary
 from .live import Level, describe, notice_kind
@@ -65,7 +63,6 @@ class Daemon:
         s = self.settings
         self.brain = Brain(self.tools, SESSION, mode=s["brain"], effort=s["effort"], claude_model=s["brain.claude_model"],
                            codex_model=s["brain.codex_model"], codex_effort=s["brain.codex_effort"])
-        self.brain.set_language(self.settings["language"], self.speaker)
         self.voice = None
         self.speak_enabled = speak                    # False: started with --quiet, the voice isn't even loaded
         self.vocab = vocabulary(self.profile)
@@ -84,18 +81,12 @@ class Daemon:
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
                                    "brain": "codex" if self.brain.using_backup else "claude",
                                    "mode": self.brain.mode, "effort": self.brain.primary.effort, "voice": self.voice_on,
-                                   "language": self.settings["language"],
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
                                    "tts": tuning(self.settings), **extra}))
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
-
-    @property
-    def speaker(self) -> str:
-        """The voice's gender, for Hindi verb forms: Supertonic's voices are F1..F5 and M1..M5."""
-        return "male" if self.settings["voiceName"].startswith("M") else "female"
 
     @property
     def voice_on(self) -> bool:
@@ -105,7 +96,7 @@ class Daemon:
         """A setting changed: rewrite the state file so the mascot and the bar see it."""
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
-                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "language", "voice", "voiceName",
+                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "voice", "voiceName",
                                   "voices", "tts")}
         except (OSError, json.JSONDecodeError):
             extra = {}
@@ -166,7 +157,6 @@ class Daemon:
             except ValueError as e:
                 return str(e)
             self._save({"voiceName": self.voice.name})
-            self.brain.set_language(self.settings["language"], self.speaker)
             self._refresh_state()
             if self.state == "idle":
                 asyncio.create_task(self.say(sample.strip() or f"Hi, this is voice {self.voice.name}."))
@@ -203,14 +193,6 @@ class Daemon:
             asyncio.create_task(self._warm())
             self._refresh_state()
             return "brain " + mode
-        if cmd == "language":
-            lang = arg.strip()
-            if lang not in LANGUAGES:
-                return "usage: language " + "|".join(LANGUAGES)
-            self._save({"language": lang})
-            self.brain.set_language(lang, self.speaker)
-            self._refresh_state()
-            return "language " + lang
         if cmd == "effort":
             level = arg.strip()
             if level not in Brain.EFFORTS:
@@ -222,7 +204,7 @@ class Daemon:
             return json.dumps({"state": self.state, "detail": self.detail,
                                "brain": "codex" if self.brain.using_backup else "claude",
                                "mode": self.brain.mode, "effort": self.brain.primary.effort,
-                               "language": self.settings["language"], "voice": self.voice_on})
+                               "voice": self.voice_on})
         if cmd == "reload":
             return self._reload()
         if cmd == "quit":
@@ -254,7 +236,6 @@ class Daemon:
             if old["voice"] and not new["voice"]:
                 self.voice.stop()
         self.brain.mode = new["brain"]
-        self.brain.set_language(new["language"], self.speaker)
         self.brain.set_codex(new["brain.codex_model"], new["brain.codex_effort"])
         claude = {}
         if new["effort"] != old["effort"]:
