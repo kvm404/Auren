@@ -320,6 +320,14 @@ ShellRoot {
     if (hovered && hoverHint.shown) return mood === "off" ? "Auren is off: click to start" : "Click to talk · drag · scroll to resize"
     return ""
   }
+  // the control hints that bubbleText appends; shown pinned under the scrolling text
+  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Press Super+A to answer yes or no"]
+  readonly property string bubbleHint: {
+    for (var i = 0; i < bubbleHints.length; i++)
+      if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]
+    return ""
+  }
+  readonly property string bubbleBody: bubbleHint ? bubbleText.slice(0, bubbleText.length - bubbleHint.length - 1) : bubbleText
   readonly property bool bubbleMuted: mood === "thinking" || mood === "working" || mood === "starting"
                                      || (mood === "listening" && !st.detail) || (hovered && !active && !awaiting)
   // keep the last spoken sentence up for a moment after auren stops talking
@@ -361,26 +369,87 @@ ShellRoot {
     Rectangle {
       id: card
       y: bubbleWin.above ? 0 : tail.height
-      width: Math.min(300, label.implicitWidth + 24)
-      height: label.implicitHeight + 16
+      width: Math.min(300, measure.implicitWidth + 24)
+      height: column.implicitHeight + 16
       radius: 10
       color: Qt.rgba(root.bg.r, root.bg.g, root.bg.b, 0.97)
       border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.8)
       border.width: 1
 
+      readonly property color textColor: root.bubbleMuted ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.7) : root.fg
+      readonly property int maxLines: 5
+
+      // unwrapped copy of the text: gives the natural width, capped at the wrap width
       Text {
-        id: label
+        id: measure
+        visible: false
+        text: root.bubbleText
+        font: body.font
+      }
+
+      Column {
+        id: column
         x: 12
         y: 8
-        width: Math.min(276, implicitWidth)
-        text: root.bubbleText
-        color: root.bubbleMuted ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.7) : root.fg
-        font.family: "monospace"
-        font.pixelSize: 13
-        font.italic: root.bubbleMuted
-        wrapMode: Text.Wrap
-        maximumLineCount: 5
-        elide: Text.ElideLeft
+        width: Math.min(276, measure.implicitWidth)
+
+        // the hint ("Press ... ") stays pinned under the text; only the body scrolls
+        Item {
+          id: viewport
+          width: parent.width
+          clip: true
+          // the body shows at most maxLines (minus the hint line); longer text slides up so the newest words stay in view
+          height: Math.min(body.contentHeight, Math.max(1, card.maxLines - (hint.visible ? 1 : 0)) * body.lineHeightPx)
+
+          Text {
+            id: body
+            width: parent.width
+            // lineCount * line height: contentHeight is the wrapped height of the full text
+            readonly property real lineHeightPx: lineCount > 0 ? contentHeight / lineCount : 16
+            text: root.bubbleBody
+            color: card.textColor
+            font.family: "monospace"
+            font.pixelSize: 13
+            font.italic: root.bubbleMuted
+            wrapMode: Text.Wrap
+            readonly property real targetY: viewport.height - contentHeight
+            // slide only while the same text grows; a new/shorter text snaps so it never starts off-screen
+            property string prevText: ""
+            property bool growing: false
+            onTextChanged: {
+              var t = body.text
+              growing = prevText !== "" && t.length > prevText.length && t.startsWith(prevText)
+              prevText = t
+              Qt.callLater(body.updatePosition)
+            }
+            onTargetYChanged: Qt.callLater(body.updatePosition)
+            Component.onCompleted: Qt.callLater(body.updatePosition)
+            // Wait for wrapping and the text-change handler before deciding whether to slide.
+            // A Behavior can start with the previous message's growing flag during layout.
+            function updatePosition() {
+              if (growing && y !== targetY) {
+                if (slide.running && slide.to === targetY) return
+                slide.stop()
+                slide.to = targetY
+                slide.start()
+              } else {
+                slide.stop()
+                y = targetY
+              }
+            }
+            NumberAnimation { id: slide; target: body; property: "y"; duration: 140; easing.type: Easing.OutCubic }
+          }
+        }
+
+        Text {
+          id: hint
+          visible: text !== ""
+          width: parent.width
+          text: root.bubbleHint
+          color: card.textColor
+          font: body.font
+          wrapMode: Text.Wrap
+        }
       }
     }
 

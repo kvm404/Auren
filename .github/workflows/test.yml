@@ -28,3 +28,4 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
+      - run: python3 tests/test_mascot_bubble.py
