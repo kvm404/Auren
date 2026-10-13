@@ -151,7 +151,7 @@ $(say "Add to ~/.config/hypr/bindings.lua (unbind anything already on these keys
 o.bind("SUPER + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
 o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
 
-$(say "Add to ~/.config/hypr/hyprland.lua (so dragging the mascot follows the pointer):")
+$(say "Optional: add to ~/.config/hypr/hyprland.lua to skip mascot layer animations:")
 hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })
 
 EOF
