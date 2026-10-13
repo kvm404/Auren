@@ -412,14 +412,32 @@ ShellRoot {
             font.pixelSize: 13
             font.italic: root.bubbleMuted
             wrapMode: Text.Wrap
-            y: viewport.height - contentHeight
+            readonly property real targetY: viewport.height - contentHeight
             // slide only while the same text grows; a new/shorter text snaps so it never starts off-screen
             property string prevText: ""
             property bool growing: false
-            onTextChanged: { var t = body.text; growing = t.length > prevText.length && t.startsWith(prevText); prevText = t }
-            Behavior on y {
-              enabled: body.growing
-              NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+            onTextChanged: {
+              var t = body.text
+              growing = prevText !== "" && t.length > prevText.length && t.startsWith(prevText)
+              prevText = t
+              Qt.callLater(body.updatePosition)
+            }
+            onTargetYChanged: Qt.callLater(body.updatePosition)
+            Component.onCompleted: Qt.callLater(body.updatePosition)
+            // Wait for wrapping and the text-change handler before deciding whether to slide.
+            // A Behavior can start with the previous message's growing flag during layout.
+            function updatePosition() {
+              if (growing && y !== targetY) {
+                if (slide.running && slide.to === targetY) return
+                slide.stop()
+                slide.to = targetY
+                slide.start()
+              } else {
+                slide.stop()
+                y = targetY
+              }
+            }
+            NumberAnimation { id: slide; target: body; property: "y"; duration: 140; easing.type: Easing.OutCubic }
           }
         }
 

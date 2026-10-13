@@ -93,6 +93,8 @@ systemctl --user restart auren-mascot
 - **Activity phrases:** `src/auren/live.py` turns tool calls into short phrases.
 - While the mascot is on screen with its bubble on, its bubble is the only place for listening, thinking, stopped, replies and errors. Otherwise the daemon shows the same news itself (`src/auren/notice.py`): short statuses on Omarchy's OSD, each with its own icon, and replies and errors as notifications. What Auren does (clicks, drags, typing, opening an app...) also shows on the OSD while the bubble is up.
 - Bubble colours follow the current Omarchy theme (`~/.local/state/omarchy/current/theme/colors.toml`).
+- Long bubble text keeps the newest lines visible within a five-line limit. Control hints stay pinned
+  below the text. Appended lines slide up; replacement messages appear immediately.
 
 ## Measured (2026-10-10)
 
