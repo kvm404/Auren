@@ -38,6 +38,8 @@ ShellRoot {
     watchChanges: true
     onFileChanged: reload()
     printErrors: false
+    onLoaded: { root.prefsReady = true; Qt.callLater(root.restorePosition) }
+    onLoadFailed: { root.prefsReady = true; Qt.callLater(root.restorePosition) }
     JsonAdapter {
       id: prefs
       property real idleOpacity: 0.45     // how faded it gets when nothing is happening
@@ -149,6 +151,7 @@ ShellRoot {
   readonly property real u: Math.round(6 * Math.max(0.6, Math.min(2.2, place.size)) * 2) / 2
   property real posX: 0
   property real posY: 0
+  property bool prefsReady: false
   property bool placeReady: false
   property bool componentReady: false
   property bool positionReady: false
@@ -166,11 +169,12 @@ ShellRoot {
     place.y = Math.round(posY)
   }
   function restorePosition() {
-    if (positionReady || !componentReady || !placeReady || !mascotLoader.item || viewportWidth <= 0 || viewportHeight <= 0) return
+    if (positionReady || !componentReady || !prefsReady || !placeReady || !mascotLoader.item || viewportWidth <= 0 || viewportHeight <= 0) return
     posX = isFinite(place.x) && place.x >= 0 ? place.x : viewportWidth - mascot.implicitWidth - 40
     posY = isFinite(place.y) && place.y >= 0 ? place.y : viewportHeight - mascot.implicitHeight - 40
     positionReady = true
     clampPos()
+    savePos()
   }
   function geometryChanged() {
     area.cancelDrag()
