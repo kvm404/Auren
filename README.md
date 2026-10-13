@@ -71,7 +71,7 @@ It ends with `auren doctor`, which checks everything Auren needs and says how to
 (run it again any time). Then:
 
 1. Put your key in `~/.config/auren/secrets.env` (`ASSEMBLYAI_API_KEY=…`).
-2. Add the two key bindings and the layer rule that `install.sh` prints to your Hyprland config.
+2. Add the two key bindings that `install.sh` prints to your Hyprland config. Its layer rule is optional.
 3. Restart the services: `systemctl --user restart auren auren-mascot`.
 
 The install is a copy, so the checkout can move. To update, use the panel's **Updates** page or

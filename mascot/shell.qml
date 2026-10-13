@@ -54,7 +54,9 @@ ShellRoot {
     path: root.stateDir + "/mascot.json"
     printErrors: false
     atomicWrites: true
-    onAdapterUpdated: writeAdapter()
+    onAdapterUpdated: if (root.placeReady) Qt.callLater(placeFile.writeAdapter)
+    onLoaded: { root.placeReady = true; Qt.callLater(root.restorePosition) }
+    onLoadFailed: { root.placeReady = true; Qt.callLater(root.restorePosition) }
     JsonAdapter {
       id: place
       property real x: -1
@@ -143,33 +145,45 @@ ShellRoot {
 
   // ---- the window ------------------------------------------------------------------------------
   property bool hovered: false
-  property bool dragging: false
+  readonly property bool dragging: area.dragging
   readonly property real u: Math.round(6 * Math.max(0.6, Math.min(2.2, place.size)) * 2) / 2
   property real posX: 0
   property real posY: 0
+  property bool placeReady: false
+  property bool componentReady: false
+  property bool positionReady: false
+  readonly property real viewportWidth: win.screen ? win.screen.width : 0
+  readonly property real viewportHeight: win.screen ? win.screen.height : 0
 
   function clampPos() {
-    var s = win.screen
-    if (!s) return
-    posX = Math.max(0, Math.min(s.width - mascot.implicitWidth, posX))
-    posY = Math.max(0, Math.min(s.height - mascot.implicitHeight, posY))
+    if (!positionReady) return
+    posX = Math.max(0, Math.min(Math.max(0, viewportWidth - mascot.implicitWidth), posX))
+    posY = Math.max(0, Math.min(Math.max(0, viewportHeight - mascot.implicitHeight), posY))
   }
   function savePos() {
+    if (!positionReady) return
     place.x = Math.round(posX)
     place.y = Math.round(posY)
   }
-  Component.onCompleted: placeTimer.start()
-  Timer {       // the place file loads asynchronously; position once it has (or defaults bottom-right)
-    id: placeTimer
-    interval: 150
-    onTriggered: {
-      var s = win.screen
-      root.posX = place.x >= 0 ? place.x : s.width - mascot.implicitWidth - 40
-      root.posY = place.y >= 0 ? place.y : s.height - mascot.implicitHeight - 40
-      root.clampPos()
-    }
+  function restorePosition() {
+    if (positionReady || !componentReady || !placeReady || !mascotLoader.item || viewportWidth <= 0 || viewportHeight <= 0) return
+    posX = isFinite(place.x) && place.x >= 0 ? place.x : viewportWidth - mascot.implicitWidth - 40
+    posY = isFinite(place.y) && place.y >= 0 ? place.y : viewportHeight - mascot.implicitHeight - 40
+    positionReady = true
+    clampPos()
   }
-  onUChanged: clampPos()
+  function geometryChanged() {
+    area.cancelDrag()
+    if (viewportWidth <= 0 || viewportHeight <= 0) return
+    if (!positionReady) { restorePosition(); return }
+    clampPos()
+    savePos()
+  }
+  Component.onCompleted: { componentReady = true; Qt.callLater(root.restorePosition) }
+  onViewportWidthChanged: Qt.callLater(root.geometryChanged)
+  onViewportHeightChanged: Qt.callLater(root.geometryChanged)
+  onUChanged: Qt.callLater(root.geometryChanged)
+  onKindChanged: Qt.callLater(root.geometryChanged)
 
   // ---- the character -------------------------------------------------------------------------
   readonly property string kind: ["auren", "veyra"].indexOf(prefs.mascot) >= 0 ? prefs.mascot : "auren"
@@ -190,32 +204,43 @@ ShellRoot {
     m.mouse = Qt.binding(() => root.st.mouse === true)
     m.awaiting = Qt.binding(() => root.awaiting)
     m.hovered = Qt.binding(() => root.hovered)
-    Qt.callLater(root.clampPos)
+    m.pointerX = Qt.binding(() => area.mouseX / area.width)
+    m.pointerY = Qt.binding(() => area.mouseY / area.height)
+    Qt.callLater(root.restorePosition)
+    Qt.callLater(root.geometryChanged)
+  }
+  Connections {
+    target: root.mascot
+    function onImplicitWidthChanged() { Qt.callLater(root.geometryChanged) }
+    function onImplicitHeightChanged() { Qt.callLater(root.geometryChanged) }
   }
 
   PanelWindow {
     id: win
-    visible: !place.hidden
+    visible: root.positionReady && !place.hidden
+    onVisibleChanged: if (!visible && area) area.cancelDrag()
+    onScreenChanged: Qt.callLater(root.geometryChanged)
     color: "transparent"
     WlrLayershell.namespace: "auren-mascot"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
 
-    // While dragging, the window covers the whole screen and the mascot moves inside it (smooth,
-    // no compositor round trip per mouse move). Otherwise it is just the mascot's size.
-    anchors { left: true; top: true; right: root.dragging; bottom: root.dragging }
-    margins { left: root.dragging ? 0 : root.posX; top: root.dragging ? 0 : root.posY }
-    implicitWidth: mascot.implicitWidth
-    implicitHeight: mascot.implicitHeight
-    readonly property bool full: width > mascot.implicitWidth + 2
-
-    mask: Region { item: mascot.hitbox }
+    // A fixed surface avoids layer-shell reconfiguration and ambiguous event coordinates at drag
+    // start/end. Everything outside the hitbox is click-through, except while a button is held.
+    anchors { left: true; top: true; right: true; bottom: true }
+    margins { left: 0; top: 0; right: 0; bottom: 0 }
+    mask: Region {
+      x: area.held ? 0 : Math.floor(root.posX + area.x)
+      y: area.held ? 0 : Math.floor(root.posY + area.y)
+      width: area.held ? win.width : Math.ceil(root.posX + area.x + area.width) - x
+      height: area.held ? win.height : Math.ceil(root.posY + area.y + area.height) - y
+    }
 
     Item {
       id: holder
-      x: win.full ? root.posX : 0
-      y: win.full ? root.posY : 0
+      x: root.posX
+      y: root.posY
       width: mascot.implicitWidth
       height: mascot.implicitHeight
       opacity: root.mood === "off" ? 0.4 : root.drowsy ? prefs.idleOpacity : 1
@@ -228,70 +253,27 @@ ShellRoot {
         onLoaded: root.bindMascot(item)
       }
 
-      MouseArea {
+      MascotDragArea {
         id: area
         x: mascot.hitbox.x + mascot.padX * mascot.u
         y: mascot.hitbox.y + mascot.padTop * mascot.u
         width: mascot.hitbox.width
         height: mascot.hitbox.height
-        hoverEnabled: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: root.dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-
-        property real pressX: 0
-        property real pressY: 0
-        property real startX: 0
-        property real startY: 0
-        property real lastX: 0          // the pointer's last position on screen
-        property real lastY: 0
-
-        // The pointer's position on screen. Events come in window coordinates, and while a drag starts the
-        // window is either still mascot-sized at (startX, startY) or already full screen at (0, 0): the
-        // compositor applies the switch a moment after Qt learns the new size, so Qt can't tell which one an
-        // event belongs to. Take the reading that continues smoothly from the last one.
-        function screenPos(mouse) {
-          var w = area.mapToItem(null, mouse.x, mouse.y)
-          var ax = w.x + startX, ay = w.y + startY
-          var small = Math.abs(ax - lastX) + Math.abs(ay - lastY)
-          var full = Math.abs(w.x - lastX) + Math.abs(w.y - lastY)
-          return small <= full ? Qt.point(ax, ay) : Qt.point(w.x, w.y)
-        }
-
+        coordinateSpace: win.contentItem
+        targetX: root.posX
+        targetY: root.posY
+        maximumX: root.viewportWidth - mascot.implicitWidth
+        maximumY: root.viewportHeight - mascot.implicitHeight
         onEntered: root.hovered = true
         onExited: root.hovered = false
-        onPositionChanged: (mouse) => {
-          mascot.pointerX = mouse.x / width
-          mascot.pointerY = mouse.y / height
-          if (!pressed) return
-          var wp = area.mapToItem(null, mouse.x, mouse.y)
-          if (!root.dragging && Math.abs(wp.x - pressX) + Math.abs(wp.y - pressY) > 6) {
-            root.dragging = true
-          }
-          if (root.dragging) {
-            var p = screenPos(mouse)
-            lastX = p.x; lastY = p.y
-            root.posX = p.x - pressX
-            root.posY = p.y - pressY
-            root.clampPos()
-          }
-        }
-        onPressed: (mouse) => {
-          startX = root.posX; startY = root.posY
-          var w = area.mapToItem(null, mouse.x, mouse.y)     // the window is mascot-sized: window + its place
-          pressX = w.x; pressY = w.y                          // where in the mascot it was grabbed
-          lastX = startX + w.x; lastY = startY + w.y
-        }
-        onReleased: (mouse) => {
-          if (root.dragging) {
-            root.dragging = false
-            root.savePos()
-          } else if (mouse.button === Qt.LeftButton) {
-            root.clicked()
-          } else if (mouse.button === Qt.RightButton) {
-            mascot.poke()
-          }
+        onMoved: (x, y) => { root.posX = x; root.posY = y }
+        onDropped: root.savePos()
+        onTapped: (button) => {
+          if (button === Qt.LeftButton) root.clicked()
+          else if (button === Qt.RightButton) mascot.poke()
         }
         onWheel: (wheel) => {
+          if (held || wheel.angleDelta.y === 0) return
           var f = wheel.angleDelta.y > 0 ? 1.1 : 1 / 1.1
           place.size = Math.max(0.6, Math.min(2.2, place.size * f))
         }
@@ -353,7 +335,7 @@ ShellRoot {
 
   PanelWindow {
     id: bubbleWin
-    visible: !place.hidden && root.bubbleText !== "" && win.screen !== null
+    visible: win.visible && root.bubbleText !== "" && win.screen !== null
     screen: win.screen
     color: "transparent"
     WlrLayershell.namespace: "auren-mascot-bubble"
@@ -422,7 +404,9 @@ ShellRoot {
     function poke(): string { mascot.poke(); return "poked" }
     function size(value: real): string { place.size = Math.max(0.6, Math.min(2.2, value)); return String(place.size) }
     function reset(): string {
+      area.cancelDrag()
       place.size = 1
+      if (!win.screen) return "no screen"
       root.posX = win.screen.width - mascot.implicitWidth - 40
       root.posY = win.screen.height - mascot.implicitHeight - 40
       root.savePos()
