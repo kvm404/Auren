@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -92,8 +93,6 @@ COMMON = frozenset("A AN AND ARE AS AT BE BUT BY DO FOR GO HE I IF IN IS IT ME M
 # How speech-to-text may write the name (its vocabulary has "Auren", but not every time).
 _NAME = r"(?:auren|oren|orin|oran|auran|aurin|awren|orren|aaron|or[ -](?:in|an|en))"
 _FILLER = r"(?:hey|hi|ok|okay|oh|um+|uh+|so|yo|and)"
-_ADDRESSED = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)", re.I)     # "Auren's voice..." is about it
-_LEADING = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)\W*", re.I)
 _MENTION = re.compile(rf"\b{_NAME}\b|auren", re.I)
 # A transcript starting with another name it hears as its own ("Hey Lauren"), or talking about it ("Auren's
 # voice"), wasn't a call, however clear it sounded.
@@ -101,14 +100,24 @@ _OTHER = r"(?:lauren|laurin|lauryn|loren|lorraine|warren|darren|karen|sharon|flo
 LOOKALIKE = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}(?:{_OTHER}\b|{_NAME}['’]s\b)", re.I)
 
 
-def addressed(text: str) -> bool:
-    """Does the transcript start with the name ("Auren, ...", "Hey Auren ...", "Um, Oren")?"""
-    return bool(_ADDRESSED.match(text))
+@functools.lru_cache(maxsize=8)
+def _calls(also: tuple[str, ...]) -> tuple[re.Pattern, re.Pattern]:
+    """The patterns for a call by name, with this user's own spellings (how the speech service writes the
+    name for them: "Orange", from Learn my voice) as well."""
+    name = _NAME if not also else "(?:" + "|".join([_NAME, *(r"[ -]".join(map(re.escape, a.split())) for a in also)]) + ")"
+    return (re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{name}\b(?!['’]s)", re.I),
+            re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{name}\b(?!['’]s)\W*", re.I))
 
 
-def strip_wake(text: str) -> str:
+def addressed(text: str, also: Iterable[str] = ()) -> bool:
+    """Does the transcript start with the name ("Auren, ...", "Hey Auren ...", "Um, Oren")? `also`: how the
+    speech service writes it for this user."""
+    return bool(_calls(tuple(also))[0].match(text))
+
+
+def strip_wake(text: str, also: Iterable[str] = ()) -> str:
     """The request without the name in front: "Auren, open Firefox" -> "open Firefox"."""
-    rest = _LEADING.sub("", text, count=1).strip()
+    rest = _calls(tuple(also))[1].sub("", text, count=1).strip()
     return rest[:1].upper() + rest[1:] if rest != text.strip() else rest
 
 
@@ -232,7 +241,8 @@ class Spotter:
     """The local model, listening for the name: feed it 16 kHz float samples. Each feed returns what
     happened: ("name", "OR IN", seconds_ago, clear) when the name was heard (seconds_ago: where it
     started, counted back from the end of what was fed; clear: where a phrase starts, see find_name),
-    ("said", "OR IN", seconds_ago) when a phrase ended (Learn my voice listens to those).
+    ("said", "OR IN", seconds_ago) when a phrase ended (Learn my voice listens to those), ("start", "WHAT",
+    seconds_ago) when a phrase's first word came (speech: the speech service can check it for the name).
     `after_name`: how many words it heard after the last name, in the same phrase (0: a pause came)."""
 
     def __init__(self, sensitivity: str = "medium", mine: Iterable[str] = (), folder: Path | None = None):
@@ -256,6 +266,7 @@ class Spotter:
         self.stream = self.rec.create_stream()
         self.fed = 0.0                              # seconds of audio in this stream
         self._reported = 0                          # words of this phrase already reported as the name
+        self._started = False                       # this phrase's first word was reported
         self._in_hit = False                        # this phrase had the name: count the words after it
         self._text, self._still = "", 0             # the phrase so far, and model steps it hasn't changed for
 
@@ -283,11 +294,14 @@ class Spotter:
                 events.append(("name", " ".join(w.text for w in words[i:j]), max(0.0, self.fed - words[i].at), clear))
             if self._in_hit:
                 self.after_name = len(words) - self._reported
+            if not self._started and words:         # after the name, if it's in the same step: the name wins
+                self._started = True
+                events.append(("start", words[0].text, max(0.0, self.fed - words[0].at)))
         if ended:
             if r.text.strip():
                 events.append(("said", r.text.strip(), max(0.0, self.fed - r.start_time)))
             self.rec.reset(self.stream)
-            self._reported, self._in_hit, self._text, self._still = 0, False, "", 0
+            self._reported, self._in_hit, self._text, self._still, self._started = 0, False, "", 0, False
         return events
 
 
@@ -310,6 +324,7 @@ class Learner:
         self.note = ""                       # a word of advice for the next try
         self.learned: list[str] = []          # every spelling to keep, when done
         self.added = 0                        # ...of them new
+        self.by_service: list[str] = []      # how the speech service wrote each "Auren" (when it's asked too)
 
     def heard(self, text: str) -> None:
         """A phrase the local model heard (it ended at a pause)."""
@@ -335,6 +350,20 @@ class Learner:
             self.learned = [f.lower() for f in [*self.mine, *new] if f" {f} " not in other][-12:]
             self.added = sum(f.lower() in self.learned for f in new)
             self.step, self.note = "done", ""
+
+    def heard_by_service(self, text: str) -> None:
+        """What the speech service wrote for a name sample ("Orange.")."""
+        words = [w for w in re.findall(r"[a-z']+", text.lower()) if w.upper() not in FILLERS]
+        if self.step == "name" and 0 < len(words) <= 3:
+            self.by_service.append(" ".join(words))
+
+    def service_forms(self, before: Iterable[str] = ()) -> list[str]:
+        """How the speech service writes the name for this user, to keep (handsfree.service_heard_as): what it
+        wrote at least twice, unless it already reads as the name ("Auren"), or is a common word on its own."""
+        counts = collections.Counter(self.by_service)
+        new = [f for f, n in counts.items() if n >= 2 and not addressed(f)
+               and (" " in f or (f.upper() not in COMMON and len(f) >= 3))]
+        return list(dict.fromkeys([*before, *new]))[-6:]
 
     def state(self) -> dict:
         """For state.json: the bubble shows `prompt`, the panel the rest."""
@@ -378,6 +407,22 @@ def mic_busy() -> bool:
             continue                                  # level meters (pavucontrol and friends)
         return True
     return False
+
+
+def playing() -> bool:
+    """Is another app playing sound through the laptop's speakers (where the mic hears it)? Headphones and
+    Bluetooth don't count, nor does Auren's own pw-cat."""
+    try:
+        ins = json.loads(subprocess.run(["pactl", "-f", "json", "list", "sink-inputs"], capture_output=True,
+                                        text=True, timeout=3).stdout or "[]")
+        sinks = json.loads(subprocess.run(["pactl", "-f", "json", "list", "sinks"], capture_output=True,
+                                          text=True, timeout=3).stdout or "[]") if ins else []
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    private = {s.get("index") for s in sinks if str(s.get("name", "")).startswith("bluez")
+               or "headphone" in str(s.get("active_port", "")).lower()}
+    return any(not i.get("corked") and i.get("sink") not in private
+               and i.get("properties", {}).get("application.process.binary") != "pw-cat" for i in ins)
 
 
 # --- earcon ---------------------------------------------------------------------------------------------
@@ -427,15 +472,18 @@ def _reap(pid: int, wait: float = 1.0) -> None:
 class HandsFree:
     """The open mic and the spotter. Every chunk goes to `on_audio` (the daemon passes it on to a listen in
     progress); on the event loop, the spotter's hits go to `on_wake(word, at, clear)` (`at`: the chunk the
-    name starts in, for `preroll`; `clear`: see find_name), each phrase it heard to `on_said(text, at)`, and
+    name starts in, for `preroll`; `clear`: see find_name), each phrase it heard to `on_said(text, at)`, the
+    start of each one to `on_speech(at)` (from a little before its first word, for `preroll`), and
     `on_change` is called when it pauses or resumes (another app took the mic, or gave it back). Nothing
     is called once it's stopped."""
 
     def __init__(self, on_wake: Callable[[str, int, bool], None], on_audio: Callable[[bytes], None] | None = None,
                  on_change: Callable[[], None] | None = None, sensitivity: str = "medium",
                  pause_when_busy: bool = True, spotter: Spotter | None = None, source: list[str] | None = None,
-                 on_said: Callable[[str, int], None] | None = None, mine: Iterable[str] = ()):
+                 on_said: Callable[[str, int], None] | None = None, mine: Iterable[str] = (),
+                 on_speech: Callable[[int], None] | None = None):
         self.on_wake, self.on_audio, self.on_change, self.on_said = on_wake, on_audio, on_change, on_said
+        self.on_speech = on_speech
         self.sensitivity, self.pause_when_busy, self.mine = sensitivity, pause_when_busy, tuple(mine)
         self.spotter = spotter
         self.source = source or []                 # extra pw-record args, for tests
@@ -526,6 +574,9 @@ class HandsFree:
                 if kind == "name":
                     self._loop.call_soon_threadsafe(self._call, self.on_wake, text, n - int((ago + LEAD) // STEP),
                                                     *clear)
+                elif kind == "start":
+                    if self.on_speech:
+                        self._loop.call_soon_threadsafe(self._call, self.on_speech, n - int((ago + LEAD) // STEP))
                 elif self.on_said:
                     self._loop.call_soon_threadsafe(self._call, self.on_said, text, n - int(ago // STEP))
 

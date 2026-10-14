@@ -236,6 +236,7 @@ class _Session:
         self.finals, self.hands, self.check, self.clear = list(finals), hands, check, clear
         self.turn, self.speaking, self.cancelled, self.closed = asyncio.Event(), False, False, False
         self.error, self.held_seconds = None, 0.1
+        self.partial, self.opened_at, self.counted, self.learning = "", 0.0, False, False
 
     async def cancel(self):
         self.cancelled = True
@@ -947,11 +948,11 @@ def _spotter(script, mine=()):
     return sp
 
 
-def _run(sp, n):
+def _run(sp, n, starts=False):
     out = []
     for _ in range(n):
         sp.rec.step()
-        out += [e[:2] for e in sp.feed(np.zeros(800, np.float32))]
+        out += [e[:2] for e in sp.feed(np.zeros(800, np.float32)) if starts or e[0] != "start"]
     return out
 
 
@@ -969,6 +970,11 @@ def test_words_after_the_name_are_counted_until_the_pause():
     assert _run(sp, 3) == [("name", "OR IN"), ("said", "OR IN OPEN FIREFOX")] and sp.after_name == 2
     _run(sp, 1)
     assert sp.after_name == 2                                 # a later phrase without the name: unchanged
+
+
+def test_each_phrase_says_when_it_starts_once():
+    sp = _spotter([("WE", 1, False), ("WE SHOULD", 1, False), ("WE SHOULD GO", 1, True), ("OR IN", 1, False)])
+    assert _run(sp, 4, starts=True) == [("start", "WE"), ("said", "WE SHOULD GO"), ("start", "OR")]
 
 
 def test_a_gap_in_the_audio_starts_the_model_over(monkeypatch):
@@ -993,3 +999,137 @@ def test_events_after_stop_are_dropped():
     hf._running = False
     hf._call(hf.on_wake, "ORIN", 2, True)
     assert calls == [("ORIN", 1, True)]
+
+
+# --- the speech service checks for the name too (hear_with = service) ------------------------------------
+
+
+def _service(monkeypatch, tmp_path, d):
+    monkeypatch.setattr(daemon, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(wake, "playing", lambda: False)
+    monkeypatch.setattr(wake, "chime", lambda: None)
+    monkeypatch.setattr(daemon.notice, "show", lambda *a, **k: None)
+    d.settings["handsfree.hear_with"] = "service"
+    pressed = []
+
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
+        pressed.append((hands_free, list(preroll), check))
+
+    monkeypatch.setattr(daemon.Daemon, "press", press)
+    return pressed
+
+
+def test_speech_goes_to_the_service_only_when_asked_and_allowed(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    pressed = _service(monkeypatch, tmp_path, d)
+
+    async def speech():
+        d._speech(7)
+        await asyncio.sleep(0.01)
+
+    d.settings["handsfree.hear_with"] = "laptop"
+    asyncio.run(speech())
+    assert pressed == []                                      # the default: only this laptop listens
+    d.settings["handsfree.hear_with"] = "service"
+    asyncio.run(speech())
+    assert pressed == [("probe", [b"auren"], True)]          # from just before the phrase, checked for the name
+    pressed.clear()
+    d.state = "thinking"                                      # busy: the local model's name stops it, as before
+    asyncio.run(speech())
+    d.state = "idle"
+    monkeypatch.setattr(wake, "playing", lambda: True)        # a video on the speakers: not sent
+    asyncio.run(speech())
+    monkeypatch.setattr(wake, "playing", lambda: False)
+    d._service = {"day": daemon.time.strftime("%Y-%m-%d"), "seconds": 30 * 60}   # today's minutes are used
+    asyncio.run(speech())
+    assert pressed == []
+
+
+def test_speech_that_isnt_a_call_shows_nothing_and_is_counted(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    _service(monkeypatch, tmp_path, d)
+    s = _Session(["We should order pizza tonight."], hands="probe", check=True)
+    s.opened_at = daemon.time.perf_counter() - 2
+    released, start = _ended(d, s, monkeypatch)
+    d.state = "idle"                                          # a quiet check never shows "listening"
+
+    async def run():
+        task = await start()
+        s.turn.set()
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(run())
+    assert released == [] and s.cancelled and d.listening is None and d.state == "idle" and d.detail == ""
+    used = json.loads((tmp_path / "service-use.json").read_text())
+    assert 1.9 < used["seconds"] < 3
+
+
+def test_speech_that_starts_with_the_name_becomes_a_listen(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    _service(monkeypatch, tmp_path, d)
+    d.settings["handsfree.service_heard_as"] = ["orange"]     # how the service writes this user's "Auren"
+    s = _Session(["Orange, what time is it?"], hands="probe", check=True)
+    released, start = _ended(d, s, monkeypatch)
+    d.state = "idle"
+
+    async def run():
+        task = await start()
+        s.turn.set()
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(run())
+    assert s.hands == "wake" and d.state == "listening" and released == ["Orange, what time is it?"]
+    assert d._for_me(_Session(), "Orange, what time is it?") == "What time is it?"
+
+
+def test_the_local_name_during_a_quiet_check_shows_it(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    _service(monkeypatch, tmp_path, d)
+    d.listening = s = _Session(hands="probe", check=True)
+    d._wake("OR IN", 3, True)
+    assert s.hands == "wake" and s.clear and d.state == "listening"
+
+
+def test_the_key_during_a_quiet_check_starts_its_own_listen(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    monkeypatch.setattr(daemon, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(daemon.notice, "show", lambda *a, **k: None)
+    made = []
+
+    class Listening(_Session):
+        def __init__(self, vocab, external=False, **kw):
+            super().__init__()
+            made.append(external)
+
+        async def start(self):
+            pass
+
+    monkeypatch.setattr(daemon, "Listening", Listening)
+    d.vocab = []
+    d.listening = probe = _Session(hands="probe", check=True)
+    assert asyncio.run(d.press()) == "listening"
+    assert probe.cancelled and made == [False] and d.listening is not probe
+
+
+def test_learn_my_voice_learns_how_the_service_writes_the_name(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    _service(monkeypatch, tmp_path, d)
+    saved = _learning(monkeypatch, d)
+
+    async def run():
+        d._handsfree_command(["learn"])
+        for local in ("HORRID", "ARID", "ORDIN", "AEON"):
+            s = _Session(["Orange."], hands="probe", check=True)
+            s.learning = True
+            released, start = _ended(d, s, monkeypatch)
+            d.state = "idle"
+            task = await start()
+            s.turn.set()
+            await asyncio.wait_for(task, 1)
+            assert released == [] and s.cancelled
+            d._said(local)
+        d._said("WHAT IS THE WEATHER TODAY")
+
+    asyncio.run(run())
+    assert d.settings["handsfree.service_heard_as"] == ["orange"]
+    assert {"handsfree.service_heard_as": ["orange"]} in saved

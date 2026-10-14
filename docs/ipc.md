@@ -37,7 +37,7 @@ Always present:
 | `voices` | Voices available |
 | `tts` | `{speed, steps, volume, pause}` |
 | `handsfree` | Hands-free ([handsfree.md](handsfree.md)): `off`, `starting`, `on`, `paused` (another app records) or `error` |
-| `handsfreeOptions` | `{sensitivity, followUp, learned}` (`learned`: how many spellings Learn my voice saved) |
+| `handsfreeOptions` | `{sensitivity, followUp, learned, hearWith, serviceMinutes, serviceLeft}` (`learned`: how many spellings Learn my voice saved; `hearWith`: `laptop` or `service`; `serviceLeft`: minutes of speech-service checks left today) |
 | `handsfreeLearn` | `null`, or Learn my voice under way: `{step: name\|other\|done, count, of, prompt, learned}` (the bubble shows `prompt`) |
 
 Sometimes present:
@@ -88,6 +88,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.config/auren/vocab.txt` | user | Extra words for speech recognition, one per line, most important first (`auren vocab`, the panel's Vocabulary page) |
 | `~/.local/state/auren/mascot.json` | mascot | Its place and size |
 | `~/.local/state/auren/history.jsonl` | daemon | Every exchange (read by the bar plugin) |
+| `~/.local/state/auren/service-use.json` | daemon | Seconds of speech-service checks today that weren't for Auren (`hear_with = service`) |
 | `~/.local/state/auren/daemon.log` | daemon | Log |
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |

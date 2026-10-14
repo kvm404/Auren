@@ -26,6 +26,10 @@ Date: 2026-10-14 · Status: accepted (revised twice the same day, after the user
   it?", "Or in" or nothing. If the local model heard nothing after the name, a short first turn (three
   words or fewer) is taken for the name; otherwise the text is sent as it is. (AssemblyAI's word times
   can't place the name: it spread a misheard "What is it?" over 2.6 s of a 0.6 s word.)
+- **The speech service too (optional, `hear_with = service`):** each phrase the local model hears start
+  also goes to AssemblyAI, quietly, up to its first sentence end; it counts if it starts with the name.
+  At most `service_minutes` (30) a day of speech that wasn't a call, not while other apps play through
+  the speakers. Off by default: it sends room speech, and costs.
 - **End of a request:** AssemblyAI's own turn detection, `min_turn_silence` 500 ms and
   `max_turn_silence` = `handsfree.end_silence` (1.2 s by default). Push-to-talk keeps 10 000/10 000.
 
@@ -57,6 +61,15 @@ hotwords (contextual biasing) and resetting the encoder at each pause didn't hel
 | openWakeWord | no: a model per word, trained from synthetic speech | small | free, training takes hours |
 | Porcupine | yes, from their console | small | access key, licence limits |
 | Streaming to AssemblyAI all the time | yes | none | ~$0.45 an hour: ~$11 a day |
+
+A second recording (2026-10-15, 60 s, laptop mic, a noisier room: voice to noise 13 dB against 27 dB the
+first time) made even the larger model fail: "HORRID", "AUDIUM", "ARID", "AEON" for the name, "HOW WOULD HE
+AGENTS" for "How many agents are running?". 1.8 of 10 on average; 5.8 with spellings learned from the same
+audio. A high-pass filter (150 or 300 Hz) gained 1 to 2 dB and nothing in words. AssemblyAI's batch model
+wrote every name as "Orange"; its streaming model, with "Auren" as a key term, as "Auren". Fed in real
+time through the speech-service check, all 10 were calls, and the plain questions weren't (42 of the 63
+seconds were sent: the recording is nearly all speech). Hence the option, rather than a still larger local
+model (the next, NeMo's streaming fast-conformer, is 457 MB).
 
 ## Measured (2026-10-14)
 

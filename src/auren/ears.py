@@ -81,6 +81,8 @@ class Listening:
         self.hands: str | None = None        # set by the daemon: "wake" or "follow-up" for a hands-free listen
         self.check = False                   # set by the daemon: the transcript must start with the name
         self.clear = False                   # ...or the name was heard clearly, where a phrase starts (Daemon._for_me)
+        self.learning = False                # set by the daemon: a quiet check that's a Learn my voice sample
+        self.counted = False                 # ...whose seconds were counted (hear_with = service)
         self.mic: asyncio.subprocess.Process | None = None
         self.ws = None
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()

@@ -32,12 +32,33 @@ Hands-free), or `auren-ctl handsfree learn`. The mascot's bubble says what to do
 2. "Now say something without my name": anything, so it can drop spellings that are ordinary words for you.
 3. "Done": what it heard is saved in `handsfree.heard_as` and used at once. **Forget** clears it.
 
-Run it again after changing microphones, or if it starts missing you. Super+A stops it.
+Run it again after changing microphones, or if it starts missing you. Super+A stops it. With the speech
+service on (below), it also learns how the service writes your "Auren" (`handsfree.service_heard_as`),
+if that isn't "Auren".
+
+## When the laptop doesn't hear you well: the speech service too
+
+The model on the laptop is small. For some voices, or in a noisy room, it misses the name more often than
+not. **Heard by: + Speech service** on the panel (`auren-ctl handsfree hear-with service`) adds a second
+listener: each time the local model hears you *start* saying something, AssemblyAI hears it too, from just
+before your first word. If that starts with the name, it carries on like any call (the chime comes when
+the sentence ends, or as soon as the local model hears the name); if not, it's dropped after that first
+sentence, and nothing shows. On a noisy recording of one user where the local model caught 2 names in 10,
+this caught all 10 (decision 0004).
+
+- **What's sent:** what you (and anyone near the laptop) start saying, each phrase up to its first pause;
+  never silence. Nothing is logged or kept from phrases that weren't for Auren.
+- **Cost:** the speech service bills per second. At most `service_minutes` a day (30 by default) of
+  speech that wasn't for Auren are sent; after that only the laptop listens until midnight (the panel
+  says so). Not while another app plays sound through the laptop's speakers (a video would be sent all
+  day), nor while another app records (`pause_when_mic_busy`).
+- The local model still works as before, and still stops Auren mid-answer by itself.
 
 ## Privacy and cost
 
 - The microphone stays open while hands-free is on, but only the small speech model on this laptop hears it.
   Audio goes to the speech service (AssemblyAI) only after the name: from just before it until you pause.
+  With **+ Speech service** (above), the start of everything said near the laptop goes too.
 - While another app records from a microphone (a dictation app, a call), the spotter pauses
   (`pause_when_mic_busy`), so talking about Auren there doesn't wake it. The panel says "Paused".
 - The local model uses about 7% of one core and 150 MB of memory. A false start costs a few seconds of
@@ -50,6 +71,9 @@ Run it again after changing microphones, or if it starts missing you. Super+A st
 | `enabled` | `false` | Hands-free on or off (the panel's switch, `auren-ctl handsfree on\|off\|toggle`) |
 | `sensitivity` | `medium` | `low` (one-word spellings only, like "orin"), `medium` (also two-word ones at the start of a phrase, like "or in"), `high` (looser ones too). Panel, or `auren-ctl handsfree sensitivity high` |
 | `heard_as` | `[]` | How the local model hears *you* say the name (Learn my voice fills it in), e.g. `["or in", "morn"]` |
+| `hear_with` | `laptop` | `laptop` (only the model on this laptop) or `service` (the speech service checks what you start saying too, above). Panel, or `auren-ctl handsfree hear-with service` |
+| `service_minutes` | `30` | With `service`: at most this many minutes a day of speech that wasn't for Auren go to the speech service (5 to 600) |
+| `service_heard_as` | `[]` | How the speech service writes the name for you, if not "Auren" (Learn my voice fills it in), e.g. `["orange"]` |
 | `follow_up` | `questions` | Listen again after a reply without the name: `off`, `questions` (Auren asked something), `always`. Panel, or `auren-ctl handsfree follow-up always` |
 | `end_silence` | `1.2` | Seconds of silence that end a request (0.6 to 4). A finished sentence ends after 0.5 s |
 | `chime` | `true` | The two-note chime when it hears its name |
@@ -96,8 +120,17 @@ transcript check, so they cost a chime but no answer.
    After a gap in the audio (paused, or the model fell behind) the local model starts over.
 5. **After the reply:** with `follow_up`, a listen with no name starts by itself and ends quietly if
    nothing is said in 5 s.
+6. **With `hear_with = service`:** the spotter also reports where each phrase starts (its first word,
+   `on_speech`). From idle, `Daemon._speech` starts a quiet listen (`hands = "probe"`) with the audio from
+   just before it: no state change, no chime, no level. Its first sentence goes through `_for_me`; a call
+   turns it into a normal listen (`Daemon._shown`), anything else is dropped (no words in 4 s, or no
+   sentence end in 12 s: dropped too). The name from the local model meanwhile shows it at once; the key
+   drops it and starts its own. Seconds of dropped ones count against `service_minutes`
+   (`~/.local/state/auren/service-use.json`). During Learn my voice, the name samples' sentences go to
+   the learner instead.
 
-`state.json` has `handsfree` (`off`, `starting`, `on`, `paused`, `error`) and `handsfreeOptions`; a
+`state.json` has `handsfree` (`off`, `starting`, `on`, `paused`, `error`) and `handsfreeOptions` (with
+`hearWith`, `serviceMinutes` and `serviceLeft`, minutes left today); a
 listen started by the name has `wake: true` (`followUp: true` after a reply), which the mascot and the
 panel use for their hints.
 

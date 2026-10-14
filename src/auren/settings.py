@@ -42,6 +42,7 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")       # Brain.EFFORTS
 CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")   # Brain.CODEX_EFFORTS
 SENSITIVITIES = ("low", "medium", "high")                 # wake.SENSITIVITY
 FOLLOW_UPS = ("off", "questions", "always")
+HEAR_WITH = ("laptop", "service")
 
 
 def _boolean(v: Any) -> bool:
@@ -156,6 +157,13 @@ KEYS = [
         "How readily it hears its name: low (fewer false starts), medium or high (hears it more often, and other words too)"),
     Key("handsfree.heard_as", "handsfree.heard_as", [], _spellings,
         "How the wake-word model hears you say the name (Learn my voice on the bar panel fills it in)"),
+    Key("handsfree.hear_with", "handsfree.hear_with", "laptop", _choice(*HEAR_WITH),
+        "Who listens for the name: laptop (only the model on this laptop: free, private) or service (the speech service "
+        "checks each thing you start saying too: catches the name far more often; sends your speech, not silence, to AssemblyAI)"),
+    Key("handsfree.service_minutes", "handsfree.service_minutes", 30, _number(5, 600, whole=True),
+        "With hear_with = service: at most this many minutes a day of speech that wasn't for Auren go to the speech service"),
+    Key("handsfree.service_heard_as", "handsfree.service_heard_as", [], _spellings,
+        "How the speech service writes the name when you say it (Learn my voice fills it in, with hear_with = service)"),
     Key("handsfree.follow_up", "handsfree.follow_up", "questions", _choice(*FOLLOW_UPS),
         "Listen again after a reply, without the name: off, questions (when Auren asked you something) or always"),
     Key("handsfree.end_silence", "handsfree.end_silence", 1.2, _number(0.6, 4.0),

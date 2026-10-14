@@ -73,13 +73,18 @@ Panel {
     { value: "medium", label: "Medium", tip: "The default" },
     { value: "high", label: "High", tip: "Hears the name more often, and other words for it too" }
   ]
+  readonly property var hearWith: [
+    { value: "laptop", label: "This laptop", tip: "Only the model on this laptop listens: free and private" },
+    { value: "service", label: "+ Speech service", tip: "AssemblyAI checks what you start saying too: hears the name far more often. Sends your speech (not silence): at most " + (root.handsfreeOptions.serviceMinutes || 30) + " minutes a day of it that isn't for Auren" }
+  ]
+  readonly property bool serviceOn: handsfreeOptions.hearWith === "service"
   readonly property var followUps: [
     { value: "off", label: "Off", tip: "Say the name every time" },
     { value: "questions", label: "Questions", tip: "When Auren asks you something, just answer" },
     { value: "always", label: "Always", tip: "After every reply, keep talking for a few seconds without the name" }
   ]
   // the quick actions' row on the Home page: after the hands-free switch, and its choices when it's on
-  readonly property int quickRow: handsfreeOn ? 5 : 2
+  readonly property int quickRow: handsfreeOn ? 6 : 2
   // Learn my voice: the bubble (and the Hands-free row) say what to do; state.json has its progress
   readonly property var learn: daemonAlive ? (st.handsfreeLearn || null) : null
   readonly property bool learning: learn !== null && learn.step !== "done"
@@ -567,6 +572,7 @@ Panel {
       { n: 1, act: function() { root.toggleHandsfree() } }
     ].concat(root.handsfreeOn ? [
       { n: 3, act: function(c) { root.setHandsfree("sensitivity", root.sensitivities[c].value) } },
+      { n: 2, act: function(c) { root.setHandsfree("hear-with", root.hearWith[c].value) } },
       { n: 3, act: function(c) { root.setHandsfree("follow-up", root.followUps[c].value) } },
       { n: root.learnActions.length, act: function(c) { root.runAction(root.learnActions, c) } }] : []
     ).concat([
@@ -873,6 +879,8 @@ Panel {
               label: "Hands-free"
               description: !root.daemonAlive ? "Auren is off"
                          : root.learn ? root.learn.prompt
+                         : root.handsfree === "on" && root.serviceOn && root.handsfreeOptions.serviceLeft <= 0 ? "Say “Auren” to talk (today's speech service minutes are used: this laptop only)"
+                         : root.handsfree === "on" && root.serviceOn ? "Say “Auren” to talk (this laptop and the speech service)"
                          : root.handsfree === "on" ? "Say “Auren” to talk (heard on this laptop only)"
                          : root.handsfree === "paused" ? "Paused: another app is using the mic"
                          : root.handsfree === "starting" ? "Getting the wake word ready…"
@@ -899,13 +907,24 @@ Panel {
             Choice {
               width: parent.width
               visible: root.handsfreeOn
+              title: "HEARD BY"
+              options: root.hearWith
+              value: root.handsfreeOptions.hearWith || "laptop"
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(3) ? root.cursorCol : -1
+              onPicked: function(v) { root.setHandsfree("hear-with", v) }
+              onHoveredIndex: function(i) { root.hover(3, i) }
+            }
+            Choice {
+              width: parent.width
+              visible: root.handsfreeOn
               title: "ANSWER WITHOUT THE NAME"
               options: root.followUps
               value: root.handsfreeOptions.followUp
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(3) ? root.cursorCol : -1
+              cursorIndex: root.has(4) ? root.cursorCol : -1
               onPicked: function(v) { root.setHandsfree("follow-up", v) }
-              onHoveredIndex: function(i) { root.hover(3, i) }
+              onHoveredIndex: function(i) { root.hover(4, i) }
             }
             Choice {
               width: parent.width
@@ -914,9 +933,9 @@ Panel {
               options: root.asOptions(root.learnActions)
               value: ""
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(4) ? root.cursorCol : -1
+              cursorIndex: root.has(5) ? root.cursorCol : -1
               onPicked: function(v, i) { root.runAction(root.learnActions, i) }
-              onHoveredIndex: function(i) { root.hover(4, i) }
+              onHoveredIndex: function(i) { root.hover(5, i) }
             }
 
             Choice {
