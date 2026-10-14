@@ -80,6 +80,7 @@ class Listening:
         self.turn_silence = turn_silence     # (min, max) ms of silence that end a turn; None: only the key does
         self.hands: str | None = None        # set by the daemon: "wake" or "follow-up" for a hands-free listen
         self.check = False                   # set by the daemon: the transcript must start with the name
+        self.clear = False                   # ...or the name was heard clearly, where a phrase starts (Daemon._for_me)
         self.mic: asyncio.subprocess.Process | None = None
         self.ws = None
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()

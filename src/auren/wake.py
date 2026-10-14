@@ -1,22 +1,25 @@
 """Hands-free: say "Auren" instead of pressing Super+A (decision 0004).
 
-While hands-free is on, the microphone stays open (one pw-record, named "auren-mic") and a small keyword
-spotter runs on this laptop: sherpa-onnx with a 3.3M-parameter zipformer, about 2% of one core. Nothing
-goes to the speech service until it hears the name. Then the daemon listens as after Super+A, with the
-audio from a moment before the name, and the turn ends when you pause instead of on a second press.
+While hands-free is on, the microphone stays open (one pw-record, named "auren-mic") and a small streaming
+speech-to-text model runs on this laptop: sherpa-onnx with a 20M-parameter zipformer, about 3% of one
+core. Nothing goes to the speech service until its words have the name in them (`find_name`). Then the
+daemon listens as after Super+A, with the audio from just before the name, and the turn ends when you
+pause instead of on a second press.
 
     hf = HandsFree(on_wake, on_audio, on_change)
     await hf.start()        # mic open, listening for the name
     hf.stop()
 
-The spotter alone is easily fooled by names that sound alike ("Lauren", "Warren"), so the daemon checks
-the transcript too (`addressed`): what was said must start with the name. Other checks live here as well:
-`strip_wake` takes the name off the front of a request, `mentions` tells the daemon when its own voice is
-saying the name (the speakers reach the mic), and `mic_busy` pauses the spotter while another app records
-(a dictation app, a call), since what you say there isn't meant for Auren.
+The local model writes the name the way it hears it: "ORIN", "OR IN", "ORAN"..., and each voice has its
+own. `Learner` ("Learn my voice") keeps how it hears *you* (handsfree.heard_as). It's also fooled by
+words that sound alike, so the daemon checks the speech service's transcript too (`addressed`): what was
+said must start with the name. Other checks live here as well: `strip_wake` takes the name off the front
+of a request, `mentions` tells the daemon when its own voice is saying the name (the speakers reach the
+mic), and `mic_busy` pauses the spotter while another app records (a dictation app, a call), since what
+you say there isn't meant for Auren.
 
-The model (~6 MB of a 17 MB download) is fetched by `auren wake-model` into
-~/.local/share/auren/models/kws-gigaspeech, checked against a pinned SHA-256.
+The model (44 MB) is fetched by `auren wake-model` into ~/.local/share/auren/models/asr-en-20m, each file
+checked against a pinned SHA-256.
 """
 
 from __future__ import annotations
@@ -27,52 +30,70 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import queue
 import re
 import shutil
 import signal
 import subprocess
-import tarfile
 import tempfile
 import threading
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from .config import MODELS_DIR, RUNTIME_DIR
+from .config import MODELS_DIR
 
 log = logging.getLogger("auren.wake")
 
 RATE, CHUNK = 16000, 1600            # bytes per read: 50 ms of 16-bit mono, the same format as the ears
-PREROLL = 1.5                        # seconds of audio before the name, sent with it for the transcript check
+STEP = CHUNK / 2 / RATE              # seconds per chunk
+RING = 3.0                           # seconds of audio kept, for the pre-roll
+LEAD = 0.7                           # pre-roll starts this long before the name's first word piece (they come late)
+STABLE = 0.3                         # a phrase's last word counts once it stopped changing this long
 MIC_NAME = "auren-mic"               # our pw-record's node name: mic_busy() doesn't count it
 BUSY_EVERY = 2.0                     # seconds between checks for other apps recording
 
-MODEL = "kws-gigaspeech"
-MODEL_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/"
-             "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2")
-MODEL_SHA256 = "f170013b4716e41b62b9bfd809687c207cef798ef9bc6534d524e17af9b6561a"
-_STEM = "epoch-12-avg-2-chunk-16-left-64.int8.onnx"
-MODEL_FILES = {"tokens.txt": "tokens.txt", f"encoder-{_STEM}": "encoder.onnx", f"decoder-{_STEM}": "decoder.onnx",
-               f"joiner-{_STEM}": "joiner.onnx"}
+MODEL = "asr-en-20m"
+OLD_MODELS = ("kws-gigaspeech",)     # the keyword spotter used before: removed once this one is in
+MODEL_URL = ("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/"
+             "d42f2d9f7ca24806fb667456a18a9f1b60f70d16/")
+_STEM = "epoch-99-avg-1.int8.onnx"
+# file in the model's repo: (saved as, SHA-256)
+MODEL_FILES = {
+    "tokens.txt": ("tokens.txt", "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb"),
+    f"encoder-{_STEM}": ("encoder.onnx", "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3"),
+    f"decoder-{_STEM}": ("decoder.onnx", "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c"),
+    f"joiner-{_STEM}": ("joiner.onnx", "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e"),
+}
 
-# Spellings of how "Auren" can sound, in the model's word pieces (its bpe.model). Measured on Supertonic
-# voices and the user's own recordings (decision 0004): OREN and ORAN catch most; ORAN also fires on
-# "Lauren" and "Warren", which the transcript check turns away.
-KEYWORDS = ["▁A URE N @AUREN", "▁OR EN @OREN", "▁OR IN @ORIN", "▁OR AN @ORAN", "▁ UR AN @URAN", "▁A W RE N @AWREN"]
-# name: (threshold, boost). Lower thresholds hear the name more often, and other words for it too.
-SENSITIVITY = {"low": (0.3, 1.0), "medium": (0.2, 1.5), "high": (0.12, 2.0)}
+# How the local model writes the name (upper case; measured on the user's voice and Supertonic's, decision
+# 0004). One word: anywhere, so it can stop Auren mid-sentence. Two: only where a phrase starts ("or in
+# the..." rarely does). Loose ones only on high.
+NAME_WORDS = frozenset("AUREN AURIN AURAN ORIN OREN ORAN URAN UREN URIN ORREN ORRIN ORRAN OREAN OWREN AWREN".split())
+NAME_PAIRS = frozenset({"OR IN", "OR AN", "OR EN", "ORE IN", "ORE AN", "ORE EN", "RE IN", "AU REN", "AUR IN",
+                        "UR IN", "UR AN"})
+NAME_LOOSE = frozenset({"ORN", "ARIN", "AREN", "ERIN", "ARE IN", "ARE AN", "R IN", "HORIN"})
+FILLERS = frozenset("HEY HI HELLO OK OKAY O K OH UM UH SO YO".split())
+PAUSE = 0.5                          # a gap this long between word pieces starts a new phrase
+SENSITIVITY = ("low", "medium", "high")
+# Too common to stand for the name on their own (Learn my voice won't keep them).
+COMMON = frozenset("A AN AND ARE AS AT BE BUT BY DO FOR GO HE I IF IN IS IT ME MY NO NOT OF OK ON OR OUR SO THE "
+                   "THIS TO UP US WE YES YOU HEY HI OH UM UH YEAH WHAT".split())
 
 # How speech-to-text may write the name (its vocabulary has "Auren", but not every time).
-_NAME = r"(?:auren|oren|orin|oran|auran|aurin|awren|orren|aaron)"
+_NAME = r"(?:auren|oren|orin|oran|auran|aurin|awren|orren|aaron|or[ -](?:in|an|en))"
 _FILLER = r"(?:hey|hi|ok|okay|oh|um+|uh+|so|yo|and)"
 _ADDRESSED = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)", re.I)     # "Auren's voice..." is about it
 _LEADING = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)\W*", re.I)
 _MENTION = re.compile(rf"\b{_NAME}\b|auren", re.I)
+# Other names it hears as its own; a transcript starting with one wasn't a call, however clear it sounded.
+LOOKALIKE = re.compile(r"^\W*(?:lauren|laurin|lauryn|loren|lorraine|warren|darren|karen|sharon|florence)\b", re.I)
 
 
 def addressed(text: str) -> bool:
@@ -88,10 +109,63 @@ def strip_wake(text: str) -> str:
 
 def mentions(text: str) -> bool:
     """Does this sentence say the name (or something the spotter takes for it)?"""
-    return bool(text and (_MENTION.search(text) or re.search(r"lauren|warren", text, re.I)))
+    return bool(text and (_MENTION.search(text) or re.search(r"lauren|warren|\bor in\b", text, re.I)))
 
 
-# --- the model ---------------------------------------------------------------------------------------
+# --- finding the name in what the local model heard ---------------------------------------------------
+
+
+@dataclass
+class Word:
+    text: str          # upper case, as the model writes it ("'RE" keeps its apostrophe)
+    at: float          # seconds into the stream of its first word piece
+    last: float        # ... and of its last
+
+
+def words_of(tokens: Iterable[str], times: Iterable[float], start: float = 0.0) -> list[Word]:
+    """The model's word pieces (" OR", "IN") put together into words, with their times."""
+    out: list[Word] = []
+    for tok, t in zip(tokens, times, strict=False):
+        if tok.startswith(" ") or not out:
+            out.append(Word(tok.strip(), start + t, start + t))
+        else:
+            out[-1].text += tok
+            out[-1].last = start + t
+    return [w for w in out if w.text]
+
+
+def spelling(text: str) -> str:
+    """A phrase as the matcher compares it: upper case, letters and spaces ("'RE IN" -> "RE IN")."""
+    return " ".join(re.sub(r"[^A-Z]", "", w) for w in text.upper().split() if re.sub(r"[^A-Z]", "", w))
+
+
+def find_name(words: list[Word], sensitivity: str = "medium", mine: Iterable[str] = (), done: bool = False,
+              after: int = 0) -> tuple[int, int, bool] | None:
+    """Where the name is in a phrase the local model heard: word indexes [i, j), and whether a phrase starts
+    there (a pause, or "hey", before it: a clear call, not a word that sounds like it in passing). `mine`: how it
+    hears this user (Learn my voice). `done`: the phrase is over; until then its last word may still grow
+    ("MORN" -> "MORNING"), so a name can't end it. Only words from `after` on count (the ones before were
+    already reported)."""
+    text = [spelling(w.text) for w in words]
+    at_start = set(NAME_WORDS) | {spelling(m) for m in mine if m.strip()}
+    if sensitivity != "low":
+        at_start |= NAME_PAIRS
+    if sensitivity == "high":
+        at_start |= NAME_LOOSE
+    longest = max((len(f.split()) for f in at_start), default=1)
+    starts = {0} | {i for i in range(1, len(words)) if words[i].at - words[i - 1].last >= PAUSE}
+    heads = set()                                  # where a phrase starts, after "hey", "ok"...
+    for i in starts:
+        while i < len(text) and text[i] in FILLERS:
+            i += 1
+        heads.add(i)
+    for i in range(after, len(words)):
+        forms = at_start if i in heads else NAME_WORDS
+        word = text[i][3:] if text[i].startswith("HEY") and text[i][3:] in forms else text[i]   # "HEYORN"
+        for n in range(min(longest, len(words) - i), 0, -1):
+            if " ".join([word, *text[i + 1:i + n]]) in forms and (i + n < len(words) or done):
+                return i, i + n, i in heads
+    return None
 
 
 class WakeModelMissing(RuntimeError):
@@ -100,68 +174,145 @@ class WakeModelMissing(RuntimeError):
 
 def model_dir() -> Path | None:
     d = MODELS_DIR / MODEL
-    return d if all((d / name).is_file() for name in MODEL_FILES.values()) else None
+    return d if all((d / name).is_file() for name, _ in MODEL_FILES.values()) else None
 
 
 def download_model(log: Callable[[str], None] = print) -> Path:
-    """Fetch the spotter's model into MODELS_DIR (if it isn't there yet) and return its folder."""
+    """Fetch the local speech model into MODELS_DIR (if it isn't there yet) and return its folder."""
     if found := model_dir():
         return found
     target = MODELS_DIR / MODEL
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    log("downloading the wake-word model (17 MB)")
+    log("downloading the wake-word model (44 MB)")
     with tempfile.TemporaryDirectory(dir=MODELS_DIR) as tmp:
-        archive = Path(tmp) / "model.tar.bz2"
-        try:
-            with urllib.request.urlopen(MODEL_URL, timeout=60) as r, archive.open("wb") as f:
-                shutil.copyfileobj(r, f)
-        except OSError as e:
-            raise WakeModelMissing(f"couldn't download the wake-word model: {e}") from None
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != MODEL_SHA256:
-            raise WakeModelMissing(f"the wake-word model download doesn't match its checksum ({digest[:12]}…)")
         out = Path(tmp) / MODEL
         out.mkdir()
-        with tarfile.open(archive) as t:
-            members = {Path(m.name).name: m for m in t.getmembers() if m.isfile()}
-            for src, name in MODEL_FILES.items():
-                if src not in members:
-                    raise WakeModelMissing(f"the wake-word model has no {src}")
-                with t.extractfile(members[src]) as f, (out / name).open("wb") as dst:
-                    shutil.copyfileobj(f, dst)
+        for src, (name, sha) in MODEL_FILES.items():
+            try:
+                with urllib.request.urlopen(MODEL_URL + src, timeout=60) as r, (out / name).open("wb") as f:
+                    shutil.copyfileobj(r, f)
+            except OSError as e:
+                raise WakeModelMissing(f"couldn't download the wake-word model: {e}") from None
+            digest = hashlib.sha256((out / name).read_bytes()).hexdigest()
+            if digest != sha:
+                raise WakeModelMissing(f"the wake-word model's {name} doesn't match its checksum ({digest[:12]}…)")
         shutil.rmtree(target, ignore_errors=True)
         out.rename(target)
+    for old in OLD_MODELS:
+        shutil.rmtree(MODELS_DIR / old, ignore_errors=True)
     return target
 
 
 class Spotter:
-    """The keyword spotter: feed it 16 kHz float samples, it says when it heard the name."""
+    """The local model, listening for the name: feed it 16 kHz float samples. Each feed returns what
+    happened: ("name", "OR IN", seconds_ago, clear) when the name was heard (seconds_ago: where it
+    started, counted back from the end of what was fed; clear: where a phrase starts, see find_name),
+    ("said", "OR IN") when a phrase ended (Learn my voice listens to those)."""
 
-    def __init__(self, sensitivity: str = "medium", folder: Path | None = None):
+    def __init__(self, sensitivity: str = "medium", mine: Iterable[str] = (), folder: Path | None = None):
         import sherpa_onnx
 
         folder = folder or model_dir()
         if folder is None:
             raise WakeModelMissing("the wake-word model isn't downloaded: run `auren wake-model`")
-        threshold, boost = SENSITIVITY.get(sensitivity, SENSITIVITY["medium"])
-        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        words = RUNTIME_DIR / "wake-keywords.txt"
-        words.write_text("\n".join(KEYWORDS) + "\n")
-        self.kws = sherpa_onnx.KeywordSpotter(
+        self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=str(folder / "tokens.txt"), encoder=str(folder / "encoder.onnx"),
             decoder=str(folder / "decoder.onnx"), joiner=str(folder / "joiner.onnx"), num_threads=1,
-            keywords_file=str(words), keywords_score=boost, keywords_threshold=threshold, provider="cpu")
-        self.stream = self.kws.create_stream()
+            sample_rate=RATE, decoding_method="greedy_search", provider="cpu", enable_endpoint_detection=True,
+            rule1_min_trailing_silence=1.0, rule2_min_trailing_silence=0.6, rule3_min_utterance_length=15)
+        self.stream = self.rec.create_stream()
+        self.sensitivity, self.mine = sensitivity, tuple(mine)
+        self.fed = 0.0                              # seconds of audio so far
+        self._reported = 0                          # words of this phrase already reported as the name
+        self._text, self._still = "", 0.0           # the phrase so far, and how long it hasn't changed
 
-    def feed(self, samples: np.ndarray) -> str | None:
+    def feed(self, samples: np.ndarray) -> list[tuple[str, str, float] | tuple[str, str]]:
         self.stream.accept_waveform(RATE, samples)
-        heard = None
-        while self.kws.is_ready(self.stream):
-            self.kws.decode_stream(self.stream)
-            if word := self.kws.get_result(self.stream):
-                heard = word
-                self.kws.reset_stream(self.stream)
-        return heard
+        dur = len(samples) / RATE
+        self.fed += dur
+        while self.rec.is_ready(self.stream):
+            self.rec.decode_stream(self.stream)
+        r = self.rec.get_result_all(self.stream)
+        ended = self.rec.is_endpoint(self.stream)
+        if r.text != self._text:
+            self._text, self._still = r.text, 0.0
+        else:
+            self._still += dur
+        events: list = []
+        if r.text:
+            words = words_of(r.tokens, r.timestamps, r.start_time)
+            hit = find_name(words, self.sensitivity, self.mine, done=ended or self._still >= STABLE,
+                            after=self._reported)
+            if hit:
+                i, j, clear = hit
+                self._reported = j
+                events.append(("name", " ".join(w.text for w in words[i:j]), max(0.0, self.fed - words[i].at), clear))
+        if ended:
+            if r.text.strip():
+                events.append(("said", r.text.strip()))
+            self.rec.reset(self.stream)
+            self._reported, self._text, self._still = 0, "", 0.0
+        return events
+
+
+# --- Learn my voice --------------------------------------------------------------------------------------
+
+
+class Learner:
+    """Learn my voice: the name said a few times, then something without it. How the local model wrote
+    the name each time becomes the user's own spellings (handsfree.heard_as), minus anything it also
+    heard in the other sentence."""
+
+    TIMES = 4
+
+    def __init__(self, sensitivity: str = "medium"):
+        self.sensitivity = sensitivity
+        self.samples: list[str] = []         # what each "Auren" came out as
+        self.caught = 0                      # ...how many of those it already took for the name
+        self.step = "name"                   # name, other, done
+        self.note = ""                       # a word of advice for the next try
+        self.learned: list[str] = []
+
+    def heard(self, text: str) -> None:
+        """A phrase the local model heard (it ended at a pause)."""
+        words = [w for w in spelling(text).split() if w not in FILLERS]
+        if self.step == "name":
+            if not words:
+                return
+            if len(words) > 3:
+                self.note = "Just the name, on its own"
+                return
+            form = " ".join(words)
+            self.samples.append(form)
+            self.caught += find_name([Word(w, 0, 0) for w in words], self.sensitivity, done=True) is not None
+            self.note = ""
+            if len(self.samples) >= self.TIMES:
+                self.step = "other"
+        elif self.step == "other":
+            if len(words) < 2:
+                self.note = "A few words, without my name"
+                return
+            other = f" {' '.join(words)} "
+            keep = []
+            for form in dict.fromkeys(self.samples):
+                if f" {form} " in other or (" " not in form and (form in COMMON or len(form) < 3)):
+                    continue
+                keep.append(form.lower())
+            self.learned, self.step, self.note = keep, "done", ""
+
+    def state(self) -> dict:
+        """For state.json: the bubble shows `prompt`, the panel the rest."""
+        n, of = len(self.samples), self.TIMES
+        if self.step == "name":
+            prompt = (f"{self.note} ({n + 1} of {of})" if self.note else
+                      f"Say “Auren”, the way you'd call me ({n + 1} of {of})" if n == 0 else
+                      f"Got it. Again ({n + 1} of {of})")
+        elif self.step == "other":
+            prompt = self.note or "Now say something without my name, like “what's the weather today”"
+        else:
+            prompt = (f"Done: I know how you say my name now. Before, I caught {self.caught} of {of}"
+                      if self.learned else "Done: I already hear you fine")
+        return {"step": self.step, "count": n, "of": of, "prompt": prompt, "learned": self.learned}
 
 
 def samples(chunk: bytes) -> np.ndarray:
@@ -239,20 +390,24 @@ def _reap(pid: int, wait: float = 1.0) -> None:
 
 class HandsFree:
     """The open mic and the spotter. Every chunk goes to `on_audio` (the daemon passes it on to a listen in
-    progress); the spotter's hits go to `on_wake(word)` on the event loop; `on_change` when it pauses or
-    resumes (another app took the mic, or gave it back)."""
+    progress); on the event loop, the spotter's hits go to `on_wake(word, at, clear)` (`at`: the chunk the
+    name starts in, for `preroll`; `clear`: see find_name), each phrase it heard to `on_said(text)`, and
+    `on_change` is called when it
+    pauses or resumes (another app took the mic, or gave it back)."""
 
-    def __init__(self, on_wake: Callable[[str], None], on_audio: Callable[[bytes], None] | None = None,
+    def __init__(self, on_wake: Callable[[str, int, bool], None], on_audio: Callable[[bytes], None] | None = None,
                  on_change: Callable[[], None] | None = None, sensitivity: str = "medium",
-                 pause_when_busy: bool = True, spotter: Spotter | None = None, source: list[str] | None = None):
-        self.on_wake, self.on_audio, self.on_change = on_wake, on_audio, on_change
-        self.sensitivity, self.pause_when_busy = sensitivity, pause_when_busy
+                 pause_when_busy: bool = True, spotter: Spotter | None = None, source: list[str] | None = None,
+                 on_said: Callable[[str], None] | None = None, mine: Iterable[str] = ()):
+        self.on_wake, self.on_audio, self.on_change, self.on_said = on_wake, on_audio, on_change, on_said
+        self.sensitivity, self.pause_when_busy, self.mine = sensitivity, pause_when_busy, tuple(mine)
         self.spotter = spotter
         self.source = source or []                 # extra pw-record args, for tests
         self.paused = False
         self.mic: asyncio.subprocess.Process | None = None
-        self._ring: collections.deque[bytes] = collections.deque(maxlen=int(PREROLL * RATE * 2 / CHUNK) + 1)
-        self._work: queue.Queue[bytes | None] = queue.Queue(maxsize=50)
+        self._ring: collections.deque[tuple[int, bytes]] = collections.deque(maxlen=math.ceil(RING / STEP))
+        self._count = 0                            # chunks read so far: the ring's and the spotter's clock
+        self._work: queue.Queue[tuple[int, bytes] | None] = queue.Queue(maxsize=50)
         self._tasks: list[asyncio.Task] = []
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -265,7 +420,7 @@ class HandsFree:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         if self.spotter is None:
-            self.spotter = await asyncio.to_thread(Spotter, self.sensitivity)
+            self.spotter = await asyncio.to_thread(Spotter, self.sensitivity, self.mine)
         self._running = True
         self._thread = threading.Thread(target=self._spot, name="auren-wake", daemon=True)
         self._thread.start()
@@ -294,24 +449,32 @@ class HandsFree:
                 if self._running:
                     await self._open_mic()
                 continue
-            self._ring.append(chunk)
+            self._count += 1
+            self._ring.append((self._count, chunk))
             if self.on_audio:
                 self.on_audio(chunk)
             if not self.paused:
                 try:
-                    self._work.put_nowait(chunk)
+                    self._work.put_nowait((self._count, chunk))
                 except queue.Full:                         # the spotter fell behind: skip, don't pile up
                     pass
 
     def _spot(self) -> None:
-        while (chunk := self._work.get()) is not None:
+        while (item := self._work.get()) is not None:
+            n, chunk = item
             try:
-                word = self.spotter.feed(samples(chunk))
+                events = self.spotter.feed(samples(chunk))
             except Exception as e:  # noqa: BLE001 - one bad chunk mustn't end hands-free
                 log.warning("wake word: %s", e)
                 continue
-            if word and self._running and self._loop:
-                self._loop.call_soon_threadsafe(self.on_wake, word)
+            if not (self._running and self._loop):
+                continue
+            for kind, text, *more in events:
+                if kind == "name":
+                    ago, clear = more
+                    self._loop.call_soon_threadsafe(self.on_wake, text, n - int((ago + LEAD) // STEP), clear)
+                elif self.on_said:
+                    self._loop.call_soon_threadsafe(self.on_said, text)
 
     async def _watch_mic(self) -> None:
         while self._running:
@@ -323,9 +486,15 @@ class HandsFree:
                     self.on_change()
             await asyncio.sleep(BUSY_EVERY)
 
-    def preroll(self) -> list[bytes]:
-        """The last PREROLL seconds of audio (with the name in it, just heard)."""
-        return list(self._ring)
+    def preroll(self, at: int | None = None) -> list[bytes]:
+        """The audio from chunk `at` on (where the name started, from on_wake), up to RING seconds."""
+        return [chunk for n, chunk in self._ring if at is None or n >= at]
+
+    def learn(self, mine: Iterable[str]) -> None:
+        """How the local model hears this user's name (from Learn my voice), from now on."""
+        self.mine = tuple(mine)
+        if self.spotter:
+            self.spotter.mine = self.mine
 
     def stop(self) -> None:
         self._running = False
@@ -351,16 +520,19 @@ class HandsFree:
             self._work.put_nowait(None)
 
 
-def test(seconds: float = 60, sensitivity: str = "medium") -> int:
-    """`auren wake-test`: say the name a few times and see what the spotter hears (it runs alongside the
-    daemon; nothing is sent anywhere)."""
+def test(seconds: float = 60, sensitivity: str = "medium", mine: Iterable[str] = ()) -> int:
+    """`auren wake-test`: say the name a few times and see what the local model hears (it runs alongside
+    the daemon; nothing is sent anywhere)."""
     async def run():
         start = time.monotonic()
 
-        def heard(word: str) -> None:
-            print(f"  {time.monotonic() - start:5.1f}s  heard {word.lower()}", flush=True)
+        def heard(word: str, at: int, clear: bool) -> None:
+            print(f"  {time.monotonic() - start:5.1f}s  the name ({word.lower()})", flush=True)
 
-        hf = HandsFree(heard, sensitivity=sensitivity, pause_when_busy=False)
+        def said(text: str) -> None:
+            print(f"  {time.monotonic() - start:5.1f}s  heard: {text.lower()}", flush=True)
+
+        hf = HandsFree(heard, sensitivity=sensitivity, pause_when_busy=False, on_said=said, mine=mine)
         await hf.start()
         print(f"Listening for “Auren” for {seconds:.0f} s (sensitivity {sensitivity}). Say it, and other things too.")
         try:

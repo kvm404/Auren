@@ -3,7 +3,6 @@ import hashlib
 import io
 import json
 import subprocess
-import tarfile
 
 import pytest
 
@@ -42,37 +41,118 @@ def test_the_chime_is_short_and_quiet():
     assert 0.1 < len(s) / 44100 < 0.3 and abs(s).max() <= 0.25
 
 
-def _archive(files: dict[str, bytes]) -> bytes:
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:bz2") as t:
-        for name, data in files.items():
-            info = tarfile.TarInfo("sherpa-onnx-kws/" + name)
-            info.size = len(data)
-            t.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+def _serve(monkeypatch, files: dict[str, bytes]):
+    def urlopen(url, timeout):
+        name = url.rsplit("/", 1)[1]
+        if name not in files:
+            raise OSError(f"404 {name}")
+        return io.BytesIO(files[name])
+    monkeypatch.setattr(wake.urllib.request, "urlopen", urlopen)
 
 
-def _serve(monkeypatch, data: bytes):
-    monkeypatch.setattr(wake.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(data))
+def _model(monkeypatch, files: dict[str, bytes]):
+    """Serve these model files, with checksums pinned to them."""
+    monkeypatch.setattr(wake, "MODEL_FILES", {src: (name, hashlib.sha256(files[src]).hexdigest())
+                                              for src, (name, _) in wake.MODEL_FILES.items()})
+    _serve(monkeypatch, files)
 
 
-def test_model_download_keeps_only_the_files_it_needs(tmp_path, monkeypatch):
-    data = _archive({**{src: src.encode() for src in wake.MODEL_FILES}, "bpe.model": b"x", "encoder-big.onnx": b"y"})
+def test_model_download_saves_each_file_and_removes_the_old_model(tmp_path, monkeypatch):
     monkeypatch.setattr(wake, "MODELS_DIR", tmp_path)
-    monkeypatch.setattr(wake, "MODEL_SHA256", hashlib.sha256(data).hexdigest())
-    _serve(monkeypatch, data)
+    (tmp_path / "kws-gigaspeech").mkdir()
+    _model(monkeypatch, {src: src.encode() for src in wake.MODEL_FILES})
     folder = wake.download_model(log=lambda m: None)
-    assert sorted(p.name for p in folder.iterdir()) == sorted(wake.MODEL_FILES.values())
-    assert wake.model_dir() == folder
+    assert sorted(p.name for p in folder.iterdir()) == sorted(name for name, _ in wake.MODEL_FILES.values())
+    assert wake.model_dir() == folder and sorted(p.name for p in tmp_path.iterdir()) == [wake.MODEL]
     assert (folder / "encoder.onnx").read_bytes().startswith(b"encoder-")
 
 
 def test_a_model_that_doesnt_match_its_checksum_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(wake, "MODELS_DIR", tmp_path)
-    _serve(monkeypatch, _archive({"tokens.txt": b"x"}))
+    _serve(monkeypatch, {src: b"tampered" for src in wake.MODEL_FILES})
     with pytest.raises(wake.WakeModelMissing, match="checksum"):
         wake.download_model(log=lambda m: None)
     assert wake.model_dir() is None and list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_download_leaves_nothing_behind(tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "MODELS_DIR", tmp_path)
+    _model(monkeypatch, {src: b"x" for src in wake.MODEL_FILES})
+    _serve(monkeypatch, {"tokens.txt": b"x"})                  # the rest are missing
+    with pytest.raises(wake.WakeModelMissing, match="download"):
+        wake.download_model(log=lambda m: None)
+    assert list(tmp_path.iterdir()) == []
+
+
+# --- finding the name in the local model's words -----------------------------------------------------
+
+
+def _words(text: str, gaps: dict[int, float] | None = None) -> list[wake.Word]:
+    """Words 0.3 s apart; gaps: extra seconds of silence before word i."""
+    out, t = [], 0.0
+    for i, w in enumerate(text.split()):
+        t += 0.3 + (gaps or {}).get(i, 0)
+        out.append(wake.Word(w, t, t + 0.1))
+    return out
+
+
+def test_words_are_put_together_from_word_pieces():
+    words = wake.words_of(["'", "RE", " IN", " OR", "IN"], [0.1, 0.2, 0.5, 1.0, 1.2], start=5.0)
+    assert [(w.text, w.at, w.last) for w in words] == [("'RE", 5.1, 5.2), ("IN", 5.5, 5.5), ("ORIN", 6.0, 6.2)]
+    assert wake.spelling("'RE  in") == "RE IN"
+
+
+@pytest.mark.parametrize("text, sensitivity, found", [
+    ("ORIN OPEN FIREFOX", "low", (0, 1, True)),
+    ("OR IN WHAT TIME IS IT", "medium", (0, 2, True)),
+    ("OR IN WHAT TIME IS IT", "low", None),           # two words only from medium on
+    ("HEY ORAN FIREFOX", "medium", (1, 2, True)),
+    ("O K OR IN PLAY MUSIC", "medium", (2, 4, True)),
+    ("'RE IN WHAT TIME IS IT", "medium", (0, 2, True)),
+    ("HEYORN OPEN FIREFOX", "high", (0, 1, True)),
+    ("HEYORN OPEN FIREFOX", "medium", None),
+    ("ARE IN STOP", "high", (0, 2, True)),
+    ("ARE IN STOP", "medium", None),
+    ("SHOULD WE GO NOW OR IN THE MORNING", "high", None),   # "or in" inside a sentence isn't the name
+    ("I THINK ORIN SAID IT", "medium", (2, 3, False)),   # one-word spellings anywhere: they can stop Auren mid-reply
+])
+def test_find_name(text, sensitivity, found):
+    assert wake.find_name(_words(text), sensitivity) == found
+
+
+def test_two_word_spellings_count_after_a_pause_too():
+    assert wake.find_name(_words("THAT IS IT OR IN OPEN IT"), "medium") is None
+    assert wake.find_name(_words("THAT IS IT OR IN OPEN IT", gaps={3: 0.6}), "medium") == (3, 5, True)
+
+
+def test_a_name_at_the_end_waits_until_the_word_is_finished():
+    assert wake.find_name(_words("OR IN"), "medium") is None              # might still become "OR INSIDE"
+    assert wake.find_name(_words("OR IN"), "medium", done=True) == (0, 2, True)
+    assert wake.find_name(_words("OR IN OPEN"), "medium", after=2) is None  # already reported
+
+
+def test_learned_spellings_count_where_a_phrase_starts():
+    assert wake.find_name(_words("MORN OPEN FIREFOX"), "low") is None
+    assert wake.find_name(_words("MORN OPEN FIREFOX"), "low", mine=["morn"]) == (0, 1, True)
+    assert wake.find_name(_words("GOOD MORN TO YOU"), "low", mine=["morn"]) is None
+
+
+# --- Learn my voice --------------------------------------------------------------------------------------
+
+
+def test_learner_keeps_how_the_name_sounds_minus_common_words():
+    learner = wake.Learner("medium")
+    assert "1 of 4" in learner.state()["prompt"]
+    learner.heard("OR IN")
+    learner.heard("I WAS SAYING SOMETHING ELSE ENTIRELY")   # too long: not counted
+    assert learner.state()["prompt"].startswith("Just the name") and learner.samples == ["OR IN"]
+    for text in ("MORN", "OR", "HEY ORIN"):
+        learner.heard(text)
+    assert learner.step == "other" and learner.samples == ["OR IN", "MORN", "OR", "ORIN"]
+    assert learner.caught == 2                                # OR IN and ORIN were heard before
+    learner.heard("GOOD MORN TO YOU ALL")                     # "morn" is in a normal sentence: dropped
+    assert learner.step == "done" and learner.learned == ["or in", "orin"]
+    assert "2 of 4" in learner.state()["prompt"]
 
 
 def _pactl(monkeypatch, outputs, sources=()):
@@ -95,36 +175,41 @@ def test_mic_busy_counts_other_apps_but_not_auren_or_monitors(monkeypatch):
 
 
 class _Spotter:
-    def __init__(self, hits):
-        self.hits = list(hits)
+    def __init__(self, events):
+        self.events = list(events)
 
     def feed(self, samples):
-        return self.hits.pop(0) if self.hits else None
+        return self.events.pop(0) if self.events else []
 
 
 def test_hands_free_passes_audio_on_and_reports_the_name(tmp_path, monkeypatch):
     """A fake pw-record: three chunks, the second has the name in it."""
     async def fake_mic(self):
         self.mic = await asyncio.create_subprocess_exec(
-            "python3", "-c", "import sys,time\nfor i in range(3): sys.stdout.buffer.write(bytes([i])*3200); "
+            "python3", "-c", "import sys,time\nfor i in range(5): sys.stdout.buffer.write(bytes([i])*1600); "
             "sys.stdout.flush(); time.sleep(0.05)\ntime.sleep(5)", stdout=asyncio.subprocess.PIPE)
 
     monkeypatch.setattr(wake.HandsFree, "_open_mic", fake_mic)
 
     async def run():
-        heard, audio = [], []
-        hf = wake.HandsFree(heard.append, on_audio=audio.append, pause_when_busy=False,
-                            spotter=_Spotter([None, "AUREN", None]))
+        heard, said, audio = [], [], []
+        # the name, said 0.06 s before the end of chunk 4: the pre-roll starts LEAD before that
+        hf = wake.HandsFree(lambda w, at, clear: heard.append((w, at, clear)), on_audio=audio.append,
+                            pause_when_busy=False, on_said=said.append,
+                            spotter=_Spotter([[], [], [], [("name", "ORIN", 0.06, True)], [("said", "ORIN")]]))
         await hf.start()
         for _ in range(40):
-            if heard and len(b"".join(audio)) >= 9600:
+            if said and len(b"".join(audio)) >= 5 * wake.CHUNK:
                 break
             await asyncio.sleep(0.05)
         hf.stop()
-        return heard, audio, hf.preroll()
+        return heard, said, audio, hf
 
-    heard, audio, preroll = asyncio.run(run())
-    assert heard == ["AUREN"] and len(b"".join(audio)) == 9600 and b"".join(preroll) == b"".join(audio)
+    heard, said, audio, hf = asyncio.run(run())
+    first = 4 - int((0.06 + wake.LEAD) // wake.STEP)
+    assert heard == [("ORIN", first, True)] and said == ["ORIN"] and len(b"".join(audio)) == 5 * wake.CHUNK
+    assert b"".join(hf.preroll()) == b"".join(audio)
+    assert hf.preroll(3) == audio[2:]                          # from the chunk the name starts in
 
 
 # --- the daemon ---------------------------------------------------------------------------------------
@@ -134,8 +219,8 @@ class _Session:
     """A Listening that's already been answered."""
     external = True
 
-    def __init__(self, finals=(), hands="wake", check=False):
-        self.finals, self.hands, self.check = list(finals), hands, check
+    def __init__(self, finals=(), hands="wake", check=False, clear=False):
+        self.finals, self.hands, self.check, self.clear = list(finals), hands, check, clear
         self.turn, self.speaking, self.cancelled, self.closed = asyncio.Event(), False, False, False
         self.error, self.held_seconds = None, 0.1
 
@@ -150,8 +235,11 @@ class _HF:
     paused = False
     status = "on"
 
-    def preroll(self):
-        return [b"before", b"auren"]
+    def preroll(self, at=None):
+        return [b"before", b"auren"] if at is None else [b"auren"]
+
+    def learn(self, mine):
+        self.mine = list(mine)
 
 
 def _daemon(monkeypatch, state="idle"):
@@ -169,7 +257,7 @@ def test_the_name_from_idle_listens_with_the_audio_before_it(monkeypatch):
     d = _daemon(monkeypatch)
     pressed = []
 
-    async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
         pressed.append((hands_free, list(preroll), check))
 
     monkeypatch.setattr(daemon.Daemon, "press", press)
@@ -205,7 +293,7 @@ def test_the_name_in_a_later_sentence_still_interrupts(monkeypatch):
     d = _daemon(monkeypatch, "speaking")
     pressed = []
 
-    async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
         pressed.append((hands_free, list(preroll), check))
 
     monkeypatch.setattr(daemon.Daemon, "press", press)
@@ -229,7 +317,7 @@ def test_the_name_while_working_stops_it_and_listens(tmp_path, monkeypatch):
         def interrupt(self):
             calls.append("interrupt")
 
-    async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
         calls.append((d.tools.cancelled(daemon.SESSION), hands_free, list(preroll), check))
 
     d.brain = Brain()
@@ -279,7 +367,41 @@ def test_a_pause_after_the_request_sends_it(monkeypatch):
         await asyncio.wait_for(task, 1)
 
     asyncio.run(run())
-    assert released == ["Auren. Open Firefox."]
+    assert released == ["Open Firefox."]                      # the name's turn is set aside
+
+
+@pytest.mark.parametrize("first, then, released_", [
+    ("All right.", "Open Firefox.", ["Open Firefox."]),       # a clear call, misheard: taken for the name
+    ("All right, open Firefox please.", None, ["All right, open Firefox please."]),   # long: goes as it is
+    ("Lauren went to the store.", None, []),                  # another name: not a call
+])
+def test_a_clear_call_doesnt_need_the_name_written(monkeypatch, first, then, released_):
+    d = _daemon(monkeypatch)
+    s = _Session(check=True, clear=True)
+    released, start = _ended(d, s, monkeypatch)
+
+    async def run():
+        task = await start()
+        s.finals.append(first)
+        s.turn.set()
+        await asyncio.sleep(0.05)
+        if then:
+            assert not released and d.listening is s
+            s.finals.append(then)
+            s.turn.set()
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(run())
+    assert released == released_ and (released_ or d.detail == "not for me")
+
+
+def test_for_me():
+    clear, unclear = _Session(clear=True), _Session()
+    assert daemon.Daemon._for_me(unclear, "Auren, open it.") == "Open it."
+    assert daemon.Daemon._for_me(unclear, "All right.") is None
+    assert daemon.Daemon._for_me(clear, "All right.") == ""
+    assert daemon.Daemon._for_me(clear, "Or in what time is it") == "What time is it"
+    assert daemon.Daemon._for_me(clear, "Warren called.") is None
 
 
 def test_a_transcript_without_the_name_in_front_is_dropped(monkeypatch):
@@ -441,7 +563,7 @@ def test_a_question_is_answered_without_the_name(tmp_path, monkeypatch):
         self.state = "idle"
         return True
 
-    async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
         pressed.append(hands_free)
 
     monkeypatch.setattr(daemon.Daemon, "say", say)
@@ -615,3 +737,86 @@ def test_a_listen_started_during_a_cancel_is_left_alone(monkeypatch):
     d.listening = Old()
     asyncio.run(d.cancel())
     assert d.listening is new and d.state == "listening"
+
+
+def test_the_name_s_audio_starts_where_the_spotter_heard_it(monkeypatch):
+    d = _daemon(monkeypatch)
+    pressed = []
+
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False, clear=False):
+        pressed.append(list(preroll))
+
+    monkeypatch.setattr(daemon.Daemon, "press", press)
+
+    async def run():
+        d._wake("ORIN", 7)
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    assert pressed == [[b"auren"]]
+
+
+def _learning(monkeypatch, d):
+    saved = []
+    monkeypatch.setattr(daemon.Daemon, "_save", lambda self, c: saved.append(c) or self.settings.update(c))
+    monkeypatch.setattr(wake, "chime", lambda: None)
+    monkeypatch.setattr(daemon.notice, "show", lambda *a, **k: None)
+    return saved
+
+
+def test_learn_my_voice_saves_how_the_name_sounds(monkeypatch):
+    d = _daemon(monkeypatch)
+    saved = _learning(monkeypatch, d)
+    monkeypatch.setattr(daemon.Daemon, "press", lambda *a, **k: pytest.fail("the name started a listen"))
+
+    async def run():
+        assert d._handsfree_command(["learn"]) == "handsfree learn"
+        for text in ("MORN", "OR IN", "MORN", "MORNE"):
+            d._said(text)
+            d._wake("OR IN", 1)                     # while learning, the name doesn't start a listen
+        assert d._learner.step == "other"
+        d._said("WHAT IS THE WEATHER TODAY")
+        assert d._learner.step == "done"
+        state = d._learner.state()
+        await asyncio.sleep(0)
+        return state
+
+    state = asyncio.run(run())
+    assert saved == [{"handsfree.heard_as": ["morn", "or in", "morne"]}]
+    assert d.handsfree.mine == ["morn", "or in", "morne"] and "1 of 4" in state["prompt"]
+
+
+def test_learn_my_voice_turns_hands_free_on_first(monkeypatch):
+    d = _daemon(monkeypatch)
+    d.settings["handsfree"], d.handsfree = False, None
+    started = []
+    monkeypatch.setattr(daemon.Daemon, "_save", lambda self, c: self.settings.update(c))
+    monkeypatch.setattr(daemon.Daemon, "_start_handsfree", lambda self: started.append(True))
+    assert d._handsfree_command(["learn"]) == "handsfree learn: starting"
+    assert d._learn_pending and started and d.settings["handsfree"] is True
+    assert d._handsfree_command(["learn", "stop"]) == "handsfree learn stopped" and not d._learn_pending
+
+
+def test_learn_my_voice_waits_for_idle_and_the_key_ends_it(monkeypatch):
+    d = _daemon(monkeypatch, "speaking")
+    _learning(monkeypatch, d)
+    assert d._handsfree_command(["learn"]).startswith("busy")
+    d.state = "idle"
+
+    async def run():
+        d._handsfree_command(["learn"])
+        d._said("ORIN")
+        assert d._learner.samples == ["ORIN"]
+        d.listening = _Session()                    # stands in for an open listen: press() stops before it
+        await d.press()
+
+    asyncio.run(run())
+    assert d._learner is None
+
+
+def test_forget_voice_clears_the_learned_spellings(monkeypatch):
+    d = _daemon(monkeypatch)
+    d.settings["handsfree.heard_as"] = ["morn"]
+    _learning(monkeypatch, d)
+    assert d._handsfree_command(["forget-voice"]) == "handsfree forget-voice"
+    assert d.settings["handsfree.heard_as"] == [] and d.handsfree.mine == []

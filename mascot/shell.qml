@@ -306,6 +306,8 @@ ShellRoot {
   readonly property string bubbleText: {
     if (!prefs.bubble || dragging) return ""
     var d = st.detail || ""
+    var learn = st.handsfreeLearn            // Learn my voice: what to say next
+    if (learn && learn.prompt) return learn.prompt + (learn.step !== "done" ? "\nPress Super+A to stop learning" : "")
     var stop = handsfree ? "\nSay Auren or Super+A to stop" : "\nPress Super+A to stop"
     switch (mood) {
       case "listening":
@@ -328,7 +330,8 @@ ShellRoot {
   }
   // the control hints that bubbleText appends; shown pinned under the scrolling text
   readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Press Super+A to answer yes or no",
-                                      "Pause when you're done", "Say Auren or Super+A to stop", "Say Auren, then yes or no"]
+                                      "Pause when you're done", "Say Auren or Super+A to stop", "Say Auren, then yes or no",
+                                      "Press Super+A to stop learning"]
   readonly property string bubbleHint: {
     for (var i = 0; i < bubbleHints.length; i++)
       if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]

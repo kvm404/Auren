@@ -16,7 +16,6 @@ Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. 
 | `state.json` | daemon | Current state, below (written whole, then renamed) |
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
 | `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
-| `wake-keywords.txt` | daemon | The wake word's spellings, for the keyword spotter (hands-free) |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
@@ -38,7 +37,8 @@ Always present:
 | `voices` | Voices available |
 | `tts` | `{speed, steps, volume, pause}` |
 | `handsfree` | Hands-free ([handsfree.md](handsfree.md)): `off`, `starting`, `on`, `paused` (another app records) or `error` |
-| `handsfreeOptions` | `{sensitivity, followUp}` |
+| `handsfreeOptions` | `{sensitivity, followUp, learned}` (`learned`: how many spellings Learn my voice saved) |
+| `handsfreeLearn` | `null`, or Learn my voice under way: `{step: name\|other\|done, count, of, prompt, learned}` (the bubble shows `prompt`) |
 
 Sometimes present:
 
@@ -72,6 +72,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `status` | JSON: state, brain, mode, effort, voice, handsfree |
 | `handsfree on\|off\|toggle` | Say "Auren" instead of pressing the key |
 | `handsfree sensitivity low\|medium\|high` / `handsfree follow-up off\|questions\|always` | Hands-free options |
+| `handsfree learn [stop]` / `handsfree forget-voice` | Learn my voice: how it hears you say the name (turns hands-free on first) |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
 | `quit` | Stop the daemon |
 
@@ -92,7 +93,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
-| `~/.local/share/auren/models/kws-gigaspeech/` | `auren wake-model` | The wake-word model (hands-free) |
+| `~/.local/share/auren/models/asr-en-20m/` | `auren wake-model` | The wake-word model: a small speech-to-text model (hands-free) |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
 | `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, remote, source, mode |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |

@@ -90,7 +90,7 @@ releases will replace that. `git pull && ./install.sh` still works too. To work 
 | Super+A | Start talking; press again to send. While Auren thinks or works: stop it |
 | Super+Shift+A | The same, in a fresh conversation (or say "start fresh") |
 | Click the mascot | Talk (same as Super+A); while it thinks, works or speaks, stop it |
-| "Auren, …" | With hands-free on (panel Home page, `auren-ctl handsfree on`, optional Super+Alt+A): talk without a key; a pause sends; the name also stops it. `auren wake-test` to try it on your voice |
+| "Auren, …" | With hands-free on (panel Home page, `auren-ctl handsfree on`, optional Super+Alt+A): talk without a key; a pause sends; the name also stops it. If it misses you, "Learn my voice" on the panel (`auren-ctl handsfree learn`) |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open the panel (Home, Mascot, Voice, Brain, Updates); right-click for a fresh conversation. A dot on it: an update is out |
 | `auren doctor` | What works on this machine and how to fix what doesn't |

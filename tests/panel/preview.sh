@@ -41,9 +41,11 @@ theme="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
 bash -c 'exec -a auren-preview sleep 600' & keeper=$!
 trap 'kill $keeper 2>/dev/null; rm -rf "$tmp"' EXIT
 now=$(date +%s)
-# PREVIEW_HANDSFREE=on (or paused) shows the hands-free switch on.
-printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1},"handsfree":"%s","handsfreeOptions":{"sensitivity":"medium","followUp":"questions"}}' \
-  "$now" "$keeper" "${PREVIEW_HANDSFREE:-off}" >"$tmp/run/auren/state.json"
+# PREVIEW_HANDSFREE=on (or paused) shows the hands-free switch on; PREVIEW_LEARN=1, Learn my voice under way.
+learn=null
+[[ -n "${PREVIEW_LEARN:-}" ]] && learn='{"step":"name","count":1,"of":4,"prompt":"Got it. Again (2 of 4)","learned":[]}'
+printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1},"handsfree":"%s","handsfreeOptions":{"sensitivity":"medium","followUp":"questions","learned":0},"handsfreeLearn":%s}' \
+  "$now" "$keeper" "${PREVIEW_HANDSFREE:-off}" "$learn" >"$tmp/run/auren/state.json"
 # A stand-in for `auren vocab`, with a few words of the user's own.
 mkdir -p "$tmp/data/auren/venv/bin"
 cat >"$tmp/data/auren/venv/bin/auren" <<'SH'

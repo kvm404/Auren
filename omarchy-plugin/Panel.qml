@@ -79,7 +79,11 @@ Panel {
     { value: "always", label: "Always", tip: "After every reply, keep talking for a few seconds without the name" }
   ]
   // the quick actions' row on the Home page: after the hands-free switch, and its choices when it's on
-  readonly property int quickRow: handsfreeOn ? 4 : 2
+  readonly property int quickRow: handsfreeOn ? 5 : 2
+  // Learn my voice: the bubble (and the Hands-free row) say what to do; state.json has its progress
+  readonly property var learn: daemonAlive ? (st.handsfreeLearn || null) : null
+  readonly property bool learning: learn !== null && learn.step !== "done"
+  readonly property int learned: handsfreeOptions.learned || 0
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
   readonly property string voiceName: st.voiceName || "F2"
@@ -483,6 +487,15 @@ Panel {
     { label: "Fresh", icon: "󰑓", tip: "Start a fresh conversation", enabled: root.daemonAlive, run: root.startFresh },
     { label: "Stop", icon: "󰓛", tip: "Stop listening, thinking or talking", enabled: root.daemonAlive, run: root.stopTalking }
   ]
+  readonly property var learnActions: [
+    { label: root.learning ? "Stop" : (root.learned ? "Learn again" : "Learn my voice"), icon: "󰍬",
+      tip: root.learning ? "Stop learning" : "Say “Auren” a few times, so it knows how you say it",
+      enabled: root.daemonAlive, on: root.learning,
+      run: function() { root.ctlRun(root.learning ? ["handsfree", "learn", "stop"] : ["handsfree", "learn"]) } },
+    { label: "Forget", icon: "󰆴", tip: "Forget how you say it (back to the built-in spellings)",
+      enabled: root.daemonAlive && root.learned > 0 && !root.learning,
+      run: function() { root.ctlRun(["handsfree", "forget-voice"]) } }
+  ]
   readonly property var mascotActions: [
     { label: "Reset place", icon: "󰦛", tip: "Back to the bottom-right corner, normal size", enabled: root.mascotActive, run: function() { root.mascotIpc(["reset"]) } },
     { label: "Poke", icon: "󰏩", tip: "Say hi", enabled: root.mascotActive, run: function() { root.mascotIpc(["poke"]) } }
@@ -554,7 +567,8 @@ Panel {
       { n: 1, act: function() { root.toggleHandsfree() } }
     ].concat(root.handsfreeOn ? [
       { n: 3, act: function(c) { root.setHandsfree("sensitivity", root.sensitivities[c].value) } },
-      { n: 3, act: function(c) { root.setHandsfree("follow-up", root.followUps[c].value) } }] : []
+      { n: 3, act: function(c) { root.setHandsfree("follow-up", root.followUps[c].value) } },
+      { n: root.learnActions.length, act: function(c) { root.runAction(root.learnActions, c) } }] : []
     ).concat([
       { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }])
   }
@@ -858,6 +872,7 @@ Panel {
               width: parent.width
               label: "Hands-free"
               description: !root.daemonAlive ? "Auren is off"
+                         : root.learn ? root.learn.prompt
                          : root.handsfree === "on" ? "Say “Auren” to talk (heard on this laptop only)"
                          : root.handsfree === "paused" ? "Paused: another app is using the mic"
                          : root.handsfree === "starting" ? "Getting the wake word ready…"
@@ -891,6 +906,17 @@ Panel {
               cursorIndex: root.has(3) ? root.cursorCol : -1
               onPicked: function(v) { root.setHandsfree("follow-up", v) }
               onHoveredIndex: function(i) { root.hover(3, i) }
+            }
+            Choice {
+              width: parent.width
+              visible: root.handsfreeOn
+              title: root.learning ? "YOUR VOICE · LEARNING" : root.learned ? "YOUR VOICE · LEARNED" : "YOUR VOICE"
+              options: root.asOptions(root.learnActions)
+              value: ""
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(4) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.learnActions, i) }
+              onHoveredIndex: function(i) { root.hover(4, i) }
             }
 
             Choice {

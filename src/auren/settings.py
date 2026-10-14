@@ -106,6 +106,14 @@ def _folders(v: Any) -> list[str]:
     return [x.strip() for x in items]
 
 
+def _spellings(v: Any) -> list[str]:
+    items = [v] if isinstance(v, str) else v
+    if not isinstance(items, list) or not all(isinstance(x, str) and re.fullmatch(r"[A-Za-z' ]{1,30}", x.strip())
+                                              for x in items):
+        raise ValueError('a list of spellings like ["or in", "orin"]')
+    return [" ".join(x.lower().split()) for x in items][:12]
+
+
 def _paths_by_name(v: Any) -> dict[str, str]:
     if not isinstance(v, dict) or not all(isinstance(k, str) and isinstance(x, str) for k, x in v.items()):
         raise ValueError('a table like { chrome = "/tmp/open-browser-use-chrome" }')
@@ -146,6 +154,8 @@ KEYS = [
         "Hands-free: say \"Auren\" instead of pressing Super+A. The mic stays open, but only this laptop hears it until you say the name"),
     Key("handsfree.sensitivity", "handsfree.sensitivity", "medium", _choice(*SENSITIVITIES),
         "How readily it hears its name: low (fewer false starts), medium or high (hears it more often, and other words too)"),
+    Key("handsfree.heard_as", "handsfree.heard_as", [], _spellings,
+        "How the wake-word model hears you say the name (Learn my voice on the bar panel fills it in)"),
     Key("handsfree.follow_up", "handsfree.follow_up", "questions", _choice(*FOLLOW_UPS),
         "Listen again after a reply, without the name: off, questions (when Auren asked you something) or always"),
     Key("handsfree.end_silence", "handsfree.end_silence", 1.2, _number(0.6, 4.0),

@@ -107,7 +107,8 @@ def main() -> None:
     if a.cmd == "wake-test":
         from .settings import load
         from .wake import test
-        return test(a.seconds, a.sensitivity or load()["handsfree.sensitivity"])
+        s = load()
+        return test(a.seconds, a.sensitivity or s["handsfree.sensitivity"], s["handsfree.heard_as"])
     # This process runs its own tool runtime and session: confirmations and turns are its own.
     from .config import RUNTIME_DIR
     from .tools import Runtime

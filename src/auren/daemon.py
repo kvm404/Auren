@@ -15,6 +15,7 @@
     auren-ctl reload                  # re-read config.toml and the vocabulary (auren config and auren vocab send this)
     auren-ctl handsfree on|off|toggle # say "Auren" instead of pressing the key (docs/handsfree.md)
     auren-ctl handsfree sensitivity low|medium|high | follow-up off|questions|always
+    auren-ctl handsfree learn [stop] | forget-voice  # Learn my voice: how it hears you say the name
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
 state (idle, listening, thinking, working, speaking, error) is written to
@@ -56,6 +57,8 @@ MAX_LISTEN = 120         # seconds; listening stops by itself (the speech servic
 NO_SPEECH = 8.0          # hands-free: seconds after the name with nothing said, then back to waiting for it
 FOLLOW_UP = 5.0          # hands-free: seconds to start answering after a reply, without the name
 ECHO_TAIL = 1.0          # hands-free: seconds a spoken sentence with the name in it still blocks the name
+LEARN_WAIT = 20.0        # Learn my voice: seconds without hearing anything before it gives up
+LEARN_SHOW = 6.0         # ...and how long its last words stay in the bubble
 MIN_TURN_SILENCE = 500   # ms: hands-free, a finished sentence ends the turn after this much silence
 # Said on its own, these start a fresh conversation instead of going to the brain.
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
@@ -70,7 +73,7 @@ HANDSFREE_ON = re.compile(r"^\W*(?:(?:turn on|start|enable)\W+hands[- ]?free(?:\
                           re.I)
 # Fields every state.json has; _refresh_state() keeps the others (transcript, awaiting...).
 BASE_FIELDS = ("state", "detail", "since", "pid", "brain", "mode", "effort", "voice", "voiceName", "voices", "tts",
-               "handsfree", "handsfreeOptions")
+               "handsfree", "handsfreeOptions", "handsfreeLearn")
 
 
 class Daemon:
@@ -79,6 +82,9 @@ class Daemon:
     _hf_task: asyncio.Task | None = None         # it's starting (the first time, its model downloads)
     _waking = False                              # the name was just heard: a listen is starting
     _spoke_until = 0.0                           # when Auren's voice last stopped (for the echo guard)
+    _learner: wake.Learner | None = None         # Learn my voice, while it runs (and a moment after)
+    _learn_pending = False                       # ...asked for while hands-free was still starting
+    _learn_timer: asyncio.TimerHandle | None = None
 
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
@@ -110,7 +116,9 @@ class Daemon:
                                    "voices": self.voice.names if self.voice else [],
                                    "tts": tuning(self.settings), "handsfree": self._hf_status(),
                                    "handsfreeOptions": {"sensitivity": self.settings.get("handsfree.sensitivity", "medium"),
-                                                        "followUp": self.settings.get("handsfree.follow_up", "questions")},
+                                                        "followUp": self.settings.get("handsfree.follow_up", "questions"),
+                                                        "learned": len(self.settings.get("handsfree.heard_as", []))},
+                                   "handsfreeLearn": self._learner.state() if self._learner else None,
                                    **extra}))
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
@@ -285,6 +293,8 @@ class Daemon:
                                                                              "handsfree.pause_when_mic_busy")):
             self._stop_handsfree()               # started again with the new settings
             self._start_handsfree()
+        elif self.handsfree and new["handsfree.heard_as"] != old.get("handsfree.heard_as"):
+            self.handsfree.learn(new["handsfree.heard_as"])
         self._refresh_state()
         return "Auren picked it up"
 
@@ -313,7 +323,16 @@ class Daemon:
         return "error" if self._hf_problem else "starting"
 
     def _handsfree_command(self, words: list[str]) -> str:
-        """handsfree on|off|toggle | sensitivity low|medium|high | follow-up off|questions|always"""
+        """handsfree on|off|toggle | sensitivity low|medium|high | follow-up off|questions|always
+        | learn [stop] | forget-voice"""
+        if words[:1] == ["learn"]:
+            return self._learn_command(words[1:])
+        if words == ["forget-voice"]:
+            self._save({"handsfree.heard_as": []})
+            if self.handsfree:
+                self.handsfree.learn([])
+            self._refresh_state()
+            return "handsfree forget-voice"
         names = {"sensitivity": "handsfree.sensitivity", "follow-up": "handsfree.follow_up"}
         if len(words) == 2 and words[0] in names:
             key = names[words[0]]
@@ -331,7 +350,8 @@ class Daemon:
         want = {"on": True, "off": False, "toggle": not self.settings.get("handsfree")}.get(words[0]) \
             if len(words) == 1 else None
         if want is None:
-            return "usage: handsfree on|off|toggle | sensitivity low|medium|high | follow-up off|questions|always"
+            return ("usage: handsfree on|off|toggle | sensitivity low|medium|high | follow-up off|questions|always"
+                    " | learn [stop] | forget-voice")
         self._save({"handsfree": want})
         if want:
             self._start_handsfree()
@@ -355,7 +375,8 @@ class Daemon:
                 notice.show("Getting the wake word ready…", "auren", 4000)
                 await asyncio.to_thread(wake.download_model, log.info)
             hf = wake.HandsFree(self._wake, on_audio=self._route, on_change=self._refresh_state,
-                                sensitivity=s["handsfree.sensitivity"], pause_when_busy=s["handsfree.pause_when_mic_busy"])
+                                sensitivity=s["handsfree.sensitivity"], pause_when_busy=s["handsfree.pause_when_mic_busy"],
+                                on_said=self._said, mine=s["handsfree.heard_as"])
             await hf.start()
         except asyncio.CancelledError:
             if hf:
@@ -371,6 +392,9 @@ class Daemon:
             return
         self.handsfree = hf
         log.info("hands-free on (sensitivity %s)", s["handsfree.sensitivity"])
+        if self._learn_pending:
+            self._learn_pending = False
+            self._learn_command([])
         self._refresh_state()
 
     def _stop_handsfree(self) -> None:
@@ -378,6 +402,9 @@ class Daemon:
             self._hf_task.cancel()
         self._hf_task = None
         hf, self.handsfree = self.handsfree, None
+        self._learn_pending = False
+        if self._learner and self._learner.step != "done":
+            self._end_learning()
         if hf:
             hf.stop()
             log.info("hands-free off")
@@ -401,10 +428,13 @@ class Daemon:
                 return True
         return False
 
-    def _wake(self, word: str) -> None:
-        """The spotter heard the name (on the loop)."""
+    def _wake(self, word: str, at: int | None = None, clear: bool = False) -> None:
+        """The spotter heard the name (on the loop), starting in mic chunk `at`; `clear`: where a phrase
+        starts (wake.find_name)."""
         if not self.handsfree or self.handsfree.paused:
             return                         # turned off or paused since: a late hit from the spotter's thread
+        if self._learner and self._learner.step != "done":
+            return                         # Learn my voice: the name is what it's listening to
         if self.listening or self._waking or self.state in ("starting", "off"):
             return                         # already listening: the name inside a request doesn't start over
         if self._saying_the_name():
@@ -412,24 +442,96 @@ class Daemon:
             return
         log.info("heard the wake word (%s) while %s", word.lower(), self.state)
         self._waking = True
-        asyncio.create_task(self._woken())
+        asyncio.create_task(self._woken(at, clear))
 
-    async def _woken(self) -> None:
+    async def _woken(self, at: int | None = None, clear: bool = False) -> None:
         try:
             if not self.handsfree or self.listening:       # turned off, or a key press, since the hit
                 return
             # The audio before the name goes too, so the transcript can be checked for it; except while
             # Auren speaks: that audio is its own voice, and the name only stops it (no check).
-            preroll = [] if self.state == "speaking" else self.handsfree.preroll()
+            preroll = [] if self.state == "speaking" else self.handsfree.preroll(at)
             working = self.state in ("thinking", "working")
             if working:
                 self.tools.cancel(SESSION)           # sticks now; the brain is stopped once the listen is up
-            await self.press(hands_free="wake", preroll=preroll, check=bool(preroll))
+            await self.press(hands_free="wake", preroll=preroll, check=bool(preroll), clear=clear)
             if working:
                 await asyncio.to_thread(self.brain.interrupt)
                 notice.show("Stopped", "stopped")
         finally:
             self._waking = False
+
+    # --- Learn my voice ---------------------------------------------------------------------------
+
+    def _learn_command(self, words: list[str]) -> str:
+        """handsfree learn: say the name a few times (the bubble says what to do) | learn stop"""
+        if words == ["stop"]:
+            if not (self._learner or self._learn_pending):
+                return "not learning"
+            self._learn_pending = False
+            self._end_learning()
+            return "handsfree learn stopped"
+        if words:
+            return "usage: handsfree learn [stop]"
+        if self.state not in ("idle", "error"):
+            return "busy: try again when Auren is idle"
+        if not self.handsfree:                      # it needs the mic: turn hands-free on, then learn
+            self._learn_pending = True
+            if not self.settings.get("handsfree"):
+                self._handsfree_command(["on"])
+            return "handsfree learn: starting"
+        self._learner = wake.Learner(self.settings.get("handsfree.sensitivity", "medium"))
+        log.info("learning the user's voice")
+        self._learn_wait()
+        self._refresh_state()
+        return "handsfree learn"
+
+    def _learn_wait(self) -> None:
+        if self._learn_timer:
+            self._learn_timer.cancel()
+        self._learn_timer = asyncio.get_running_loop().call_later(LEARN_WAIT, self._learn_gave_up)
+
+    def _learn_gave_up(self) -> None:
+        if self._learner and self._learner.step != "done":
+            log.info("learn my voice: nothing heard")
+            self._end_learning()
+            notice.show("Didn't hear you: try Learn my voice again", "unheard", 4000)
+
+    def _end_learning(self) -> None:
+        if self._learn_timer:
+            self._learn_timer.cancel()
+        self._learn_timer = None
+        self._learner = None
+        self._refresh_state()
+
+    def _said(self, text: str) -> None:
+        """A phrase the local model heard (on the loop): Learn my voice listens to them."""
+        learner = self._learner
+        if not learner or learner.step == "done" or self.state not in ("idle", "error"):
+            return
+        before = (learner.step, len(learner.samples))
+        learner.heard(text)
+        if (learner.step, len(learner.samples)) == before and not learner.note:
+            return                                  # nothing it could use
+        log.info("learn my voice: %s -> %s", text, learner.state()["prompt"])
+        if learner.step == "done":
+            if self._learn_timer:
+                self._learn_timer.cancel()
+            if learner.learned:
+                mine = list(dict.fromkeys([*self.settings.get("handsfree.heard_as", []), *learner.learned]))[-12:]
+                self._save({"handsfree.heard_as": mine})
+                if self.handsfree:
+                    self.handsfree.learn(mine)
+                log.info("learned how the user says the name: %s", ", ".join(mine))
+            if self.settings.get("handsfree.chime", True):
+                wake.chime()
+            self._learn_timer = asyncio.get_running_loop().call_later(
+                LEARN_SHOW, lambda: self._learner is learner and self._end_learning())
+        else:
+            if len(learner.samples) > before[1] and self.settings.get("handsfree.chime", True):
+                wake.chime()                        # heard that one
+            self._learn_wait()
+        self._refresh_state()
 
     def _wants_follow_up(self, reply: str) -> bool:
         if not self.handsfree or self.handsfree.paused:
@@ -457,11 +559,17 @@ class Daemon:
             if ended:
                 session.turn.clear()
                 if session.check and text:
-                    if not wake.addressed(text):           # "Lauren said..." woke the spotter, not the user
+                    request = self._for_me(session, text)
+                    if request is None:                    # "Lauren said..." woke the spotter, not the user
                         log.info("not for me: %s", text)
                         await self._drop(session, "not for me")
                         return
                     session.check = False
+                    if not request:                        # the name alone, however it was written
+                        session.finals.clear()
+                        deadline = time.monotonic() + wait
+                        continue
+                    text = request
                 if wake.strip_wake(text):
                     await self.release()
                     return
@@ -470,6 +578,18 @@ class Daemon:
                 log.info("hands-free: nothing said")
                 await self._drop(session, "heard nothing" if session.hands == "wake" else "")
                 return
+
+    @staticmethod
+    def _for_me(session: Listening, text: str) -> str | None:
+        """The first words of a listen the name started: the request with the name taken off ("" if it's
+        only the name so far), or None if it wasn't meant for Auren. The speech service doesn't always
+        write the name ("All right." for some voices): when the local model heard it clearly, where a
+        phrase starts, a short first turn is taken for the name and a longer one goes as it is."""
+        if wake.addressed(text):
+            return wake.strip_wake(text)
+        if not session.clear or wake.LOOKALIKE.match(text):
+            return None
+        return "" if len(text.split()) <= 3 else text
 
     async def _drop(self, session: Listening, detail: str) -> None:
         """End a listen without sending anything."""
@@ -483,9 +603,12 @@ class Daemon:
     # --- listening ------------------------------------------------------------------------------
 
     async def press(self, fresh: bool = False, hands_free: str | None = None, preroll: list[bytes] = (),
-                    check: bool = False) -> str:
+                    check: bool = False, clear: bool = False) -> str:
         """Start listening. hands_free: "wake" (the name was heard) or "follow-up" (after a reply): a pause
-        ends it instead of the key. check: the transcript must start with the name (see wake.addressed)."""
+        ends it instead of the key. check: the transcript must start with the name (see _for_me); clear:
+        the name was heard where a phrase starts."""
+        if self._learner:                # the key (or the name, after learning) ends Learn my voice
+            self._end_learning()
         if self.listening:
             return "already listening"
         if self.voice:
@@ -502,7 +625,7 @@ class Daemon:
                                    on_level=self.level.set, external=bool(hands_free and self.handsfree),
                                    turn_silence=silence)
         session = self.listening
-        session.hands, session.check = hands_free, check
+        session.hands, session.check, session.clear = hands_free, check, clear
         for chunk in preroll:
             session.push(chunk)
         try:
@@ -565,11 +688,12 @@ class Daemon:
         text = await session.finish()
         heard_in = time.perf_counter() - t
         if session.hands and text:              # "Auren, yes" after a question is fine too
-            if session.check and not wake.addressed(text):
+            request = self._for_me(session, text) if session.check else wake.strip_wake(text)
+            if request is None:
                 log.info("not for me: %s", text)
                 self.idle("not for me")
                 return "not for me"
-            text = wake.strip_wake(text)
+            text = request
         if session.error and not text:
             self.set_state("error", session.error)
             notice.notify("Auren couldn't hear you", session.error, "error")

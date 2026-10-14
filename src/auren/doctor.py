@@ -129,7 +129,7 @@ def checks() -> list[Check]:
                              "not downloaded" + (": hands-free will fetch it when it starts" if handsfree
                                                  else " (only hands-free needs it)"), "auren wake-model"))
     except ImportError as e:
-        out.append(Check(g, "wake-word model", WARN if handsfree else OK, f"keyword spotter missing ({e})", "./install.sh"))
+        out.append(Check(g, "wake-word model", WARN if handsfree else OK, f"missing ({e})", "./install.sh"))
     if handsfree:
         out.append(_command(g, "pactl", "pausing hands-free while another app records", svc, required=False,
                             fix="install pipewire-pulse, or: auren config set handsfree.pause_when_mic_busy false"))
