@@ -2,33 +2,21 @@
 # Deepgram uses the first 100; Whisper reads ~224 tokens of them.
 herdr
 Codex
-Claude Code
 Claude
 OpenCode
 Antigravity
-Supertonic
-Groq
-STT
-TTS
-MCP
-Hyprland
+Grok
 Omarchy
-Quickshell
-Wayland
-PipeWire
+Hyprland
 systemctl
-systemd
-journalctl
-Ghostty
-Alacritty
-Brave
-Firefox
-Spotify
-GitHub
-pull request
-README
-uv sync
+subagent
+window
+tab
+browser
+Quickshell
+Auren
+Veyra
 npm
 bun
-subagents
-Auren
+PR
+plugin
