@@ -40,6 +40,8 @@ log = logging.getLogger("auren.settings")
 MODES = ("auto", "claude", "codex")                       # Brain.MODES
 EFFORTS = ("low", "medium", "high", "xhigh", "max")       # Brain.EFFORTS
 CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")   # Brain.CODEX_EFFORTS
+SENSITIVITIES = ("low", "medium", "high")                 # wake.SENSITIVITY
+FOLLOW_UPS = ("off", "questions", "always")
 
 
 def _boolean(v: Any) -> bool:
@@ -140,6 +142,17 @@ KEYS = [
     Key("brain.codex_model", "brain.codex_model", "gpt-6.1-sol", _model, "Codex's model (codex exec -m)"),
     Key("brain.codex_effort", "brain.codex_effort", "low", _choice(*CODEX_EFFORTS),
         "Codex's reasoning effort: minimal, low, medium, high or xhigh"),
+    Key("handsfree.enabled", "handsfree", False, _boolean,
+        "Hands-free: say \"Auren\" instead of pressing Super+A. The mic stays open, but only this laptop hears it until you say the name"),
+    Key("handsfree.sensitivity", "handsfree.sensitivity", "medium", _choice(*SENSITIVITIES),
+        "How readily it hears its name: low (fewer false starts), medium or high (hears it more often, and other words too)"),
+    Key("handsfree.follow_up", "handsfree.follow_up", "questions", _choice(*FOLLOW_UPS),
+        "Listen again after a reply, without the name: off, questions (when Auren asked you something) or always"),
+    Key("handsfree.end_silence", "handsfree.end_silence", 1.2, _number(0.6, 4.0),
+        "Seconds of silence that end what you say: 0.6 to 4 (a finished sentence ends sooner)"),
+    Key("handsfree.chime", "handsfree.chime", True, _boolean, "A short chime when Auren hears its name"),
+    Key("handsfree.pause_when_mic_busy", "handsfree.pause_when_mic_busy", True, _boolean,
+        "Stop listening for the name while another app records (dictation, a call)"),
     Key("integrations.herdr", "integrations.herdr", "auto", _switch,
         "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
     Key("integrations.browser", "integrations.browser", "auto", _switch,

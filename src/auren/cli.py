@@ -4,6 +4,8 @@
   auren doctor                # what works on this machine, and how to fix what doesn't
   auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
   auren voice-model           # download the voice model (install.sh runs this)
+  auren wake-model            # download the wake-word model for hands-free (install.sh runs this)
+  auren wake-test             # say "Auren" and see whether hands-free hears it (nothing is sent anywhere)
   auren update                # check for a newer version, and install it if you say so
   auren chat                  # type requests, see tool calls and the reply
   auren ask "open whatsapp"   # one request
@@ -55,6 +57,10 @@ def main() -> None:
     sub.add_parser("doctor")
     sub.add_parser("config").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("voice-model")
+    sub.add_parser("wake-model")
+    wt = sub.add_parser("wake-test")
+    wt.add_argument("--sensitivity", choices=("low", "medium", "high"), help="default: handsfree.sensitivity")
+    wt.add_argument("--seconds", type=float, default=60)
     sub.add_parser("vocab").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("update").add_argument("args", nargs=argparse.REMAINDER)
     dmn = sub.add_parser("daemon")
@@ -90,6 +96,18 @@ def main() -> None:
             print(f"{RED}{e}{END}")
             return 1
         return 0
+    if a.cmd == "wake-model":
+        from .wake import WakeModelMissing, download_model
+        try:
+            print("wake-word model:", download_model())
+        except WakeModelMissing as e:
+            print(f"{RED}{e}{END}")
+            return 1
+        return 0
+    if a.cmd == "wake-test":
+        from .settings import load
+        from .wake import test
+        return test(a.seconds, a.sensitivity or load()["handsfree.sensitivity"])
     # This process runs its own tool runtime and session: confirmations and turns are its own.
     from .config import RUNTIME_DIR
     from .tools import Runtime

@@ -1,10 +1,11 @@
 # Daemon: talking to Auren
 
-**Press Super+A, speak, press Super+A again** (Super+Shift+A starts a fresh conversation the same way). Auren listens with the ears, thinks with the brain (and its tools), and answers with the voice.
+**Press Super+A, speak, press Super+A again** (Super+Shift+A starts a fresh conversation the same way), or with hands-free on, **say "Auren"** and pause when you're done ([handsfree.md](handsfree.md)). Auren listens with the ears, thinks with the brain (and its tools), and answers with the voice.
 
 | Part | What | Code |
 |---|---|---|
 | Keys | In `~/.config/hypr/bindings.lua`: Super+A runs `auren-ctl talk` (start listening; again: stop and send), Super+Shift+A runs `auren-ctl talk-fresh` (the same, but the brain restarts with an empty conversation while you speak; it replaced the user's ChatGPT desktop binding). The user chose press-to-start/press-to-stop over holding (2026-10-10). Listening stops by itself after 2 minutes (`MAX_LISTEN`), since the speech service bills per second | `auren-ctl` (`src/auren/ctl.py`) |
+| Hands-free | Optional: the mic stays open and a keyword spotter on the laptop (sherpa-onnx, ~2% of a core) listens for "Auren"; then the same ears, with the audio from just before the name, and a pause ends the request. Saying the name stops Auren while it thinks, works or speaks. `auren-ctl handsfree on\|off\|toggle`, the panel's Home page | `src/auren/wake.py`, `Daemon._wake()`, [handsfree.md](handsfree.md) |
 | Ears | AssemblyAI streaming, Universal-3.5 Pro, push-to-talk settings from decision 0002. The connection is open only while the key is held. The text is returned as soon as the final turn arrives after release (~0.3 s) | `src/auren/ears.py` |
 | Vocabulary | 100 terms: core names (herdr, Voisu, Codex, Claude Code, Omarchy…), then Chrome bookmark names (MLP, Tools in Data Science…), web apps, recent projects, apps | `ears.vocabulary()`, `src/auren/data/vocab.txt` |
 | Your own words | `auren vocab add <word>` / `remove <word>` / `list` (also the bar panel's Vocabulary page) keep them in `~/.config/auren/vocab.txt`, ahead of the built-in list. A word the built-in list or yours already has is refused (case and spacing ignored), and so is one past the limit: 100 less the number of built-in words (`vocab.capacity()`, so it follows the built-in list), shown in the panel as "N of M". The daemon is told to `reload`, so a new word is used from the next press, with no restart | `src/auren/vocab.py`, `Daemon._reload()` |
@@ -51,6 +52,7 @@ auren-ctl cancel                    # stop listening, thinking, working or speak
 auren-ctl forget                    # fresh conversation (same as saying "start fresh")
 auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
 auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
+auren-ctl handsfree on              # say "Auren" instead of pressing the key
 ```
 
 ## Measured (2026-10-10)
@@ -63,4 +65,4 @@ auren-ctl effort high               # Claude thinks harder (and slower); starts 
 ## Not yet
 
 - Telling the user when a background job (a Codex agent in herdr) finishes.
-- A wake word; dictation mode.
+- Dictation mode.

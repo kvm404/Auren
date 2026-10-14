@@ -8,7 +8,8 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 
 <img src="docs/images/bar-panel.png" alt="Auren's panel in the Omarchy bar" width="340" align="right">
 
-- **Talk:** Super+A to start, Super+A again to send. Super+Shift+A starts a fresh conversation.
+- **Talk:** Super+A to start, Super+A again to send. Super+Shift+A starts a fresh conversation. Or turn
+  on **hands-free** and just say "Auren, …" ([docs/handsfree.md](docs/handsfree.md)).
   Pressing while Auren speaks interrupts it.
 - **Ears:** AssemblyAI streaming speech-to-text, biased toward your own vocabulary (app names,
   projects, tools).
@@ -89,6 +90,7 @@ releases will replace that. `git pull && ./install.sh` still works too. To work 
 | Super+A | Start talking; press again to send. While Auren thinks or works: stop it |
 | Super+Shift+A | The same, in a fresh conversation (or say "start fresh") |
 | Click the mascot | Talk (same as Super+A); while it thinks, works or speaks, stop it |
+| "Auren, …" | With hands-free on (panel Home page, `auren-ctl handsfree on`, optional Super+Alt+A): talk without a key; a pause sends; the name also stops it. `auren wake-test` to try it on your voice |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open the panel (Home, Mascot, Voice, Brain, Updates); right-click for a fresh conversation. A dot on it: an update is out |
 | `auren doctor` | What works on this machine and how to fix what doesn't |

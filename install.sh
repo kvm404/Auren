@@ -87,6 +87,7 @@ fi
 # ---- voice model -------------------------------------------------------------------------------
 say "Voice model"
 "$share/venv/bin/auren" voice-model || warn "no voice model: Auren will answer in text until 'auren voice-model' works"
+"$share/venv/bin/auren" wake-model || warn "no wake-word model: hands-free will fetch it when you turn it on"
 
 # ---- systemd user services ---------------------------------------------------------------------
 say "Services: auren, auren-mascot"
@@ -150,6 +151,9 @@ cat <<EOF
 $(say "Add to ~/.config/hypr/bindings.lua (unbind anything already on these keys first):")
 o.bind("SUPER + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
 o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
+
+$(say "Optional: a key for hands-free (say \"Auren\" instead of pressing Super+A):")
+o.bind("SUPER + ALT + A", "Auren: hands-free on or off", "$share/bin/auren-ctl handsfree toggle")
 
 $(say "Optional: add to ~/.config/hypr/hyprland.lua to skip mascot layer animations:")
 hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })

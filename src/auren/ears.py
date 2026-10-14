@@ -9,6 +9,10 @@ Settings that matter (all measured in experiments/stt):
 - min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
 - keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
 - audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
+
+Hands-free (wake.py) is the same turn with two differences: the audio comes from its open mic
+(`external`, pushed with `push()`) instead of a pw-record of its own, and a pause ends the turn
+(`turn_silence`): each final turn sets `turn`, and the daemon decides whether it was the whole request.
 """
 
 from __future__ import annotations
@@ -67,9 +71,14 @@ class Listening:
     """One push-to-talk turn."""
 
     def __init__(self, vocab: list[str], on_partial: Callable[[str], None] | None = None, source: list[str] | None = None,
-                 on_level: Callable[[float], None] | None = None):
+                 on_level: Callable[[float], None] | None = None, external: bool = False,
+                 turn_silence: tuple[int, int] | None = None):
         self.vocab, self.on_partial, self.on_level = vocab, on_partial, on_level
         self.source = source or []           # extra pw-record args (e.g. --target) for testing
+        self.external = external             # audio comes through push() (the hands-free mic), not our own pw-record
+        self.turn_silence = turn_silence     # (min, max) ms of silence that end a turn; None: only the key does
+        self.hands: str | None = None        # set by the daemon: "wake" or "follow-up" for a hands-free listen
+        self.check = False                   # set by the daemon: the transcript must start with the name
         self.mic: asyncio.subprocess.Process | None = None
         self.ws = None
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -80,6 +89,8 @@ class Listening:
         self._tasks: list[asyncio.Task] = []
         self._done = asyncio.Event()
         self._final = asyncio.Event()     # a final turn arrived after the key was released
+        self.turn = asyncio.Event()       # a final turn arrived (set each time; the daemon clears it)
+        self.speaking = False             # partial text since the last final turn: words still coming
         self.error: str | None = None
 
     async def start(self) -> None:
@@ -88,23 +99,31 @@ class Listening:
             raise RuntimeError("no AssemblyAI key (ASSEMBLYAI_API_KEY in ~/.config/auren/secrets.env)")
         self.opened_at = time.perf_counter()
         # The mic starts first so nothing said while the socket connects is lost.
-        self.mic = await asyncio.create_subprocess_exec(
-            "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        self._tasks.append(asyncio.create_task(self._read_mic()))
+        if not self.external:
+            self.mic = await asyncio.create_subprocess_exec(
+                "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            self._tasks.append(asyncio.create_task(self._read_mic()))
+        low, high = self.turn_silence or (10000, 10000)
         params = {"sample_rate": RATE, "encoding": "pcm_s16le", "speech_model": "universal-3-5-pro",
-                  "min_turn_silence": 10000, "max_turn_silence": 10000}
+                  "min_turn_silence": low, "max_turn_silence": high}
         if self.vocab:
             params["keyterms_prompt"] = json.dumps(self.vocab[:100])
         self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(params)}", key)))
 
     async def _read_mic(self) -> None:
         while chunk := await self.mic.stdout.read(CHUNK):
-            await self.queue.put(chunk)
-            if self.on_level and len(chunk) >= 2:
-                samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
-                self.on_level(loudness(samples))
+            self.push(chunk)
         await self.queue.put(None)
+
+    def push(self, chunk: bytes) -> None:
+        """Audio for this turn (16 kHz s16 mono): from our own mic, or the hands-free one."""
+        if self.external and self.released_at:      # our own mic's tail still goes in after the release
+            return
+        self.queue.put_nowait(chunk)
+        if self.on_level and len(chunk) >= 2:
+            samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
+            self.on_level(loudness(samples))
 
     async def _stream(self, url: str, key: str) -> None:
         try:
@@ -132,11 +151,14 @@ class Listening:
                         text = msg.get("transcript", "")
                         if msg.get("end_of_turn"):
                             self.finals.append(text.strip())
+                            self.speaking = False
+                            self.turn.set()
                             if self.released_at:
                                 self._final.set()
-                        elif text and self.on_partial:
-                            self.partial = text
-                            self.on_partial(text)
+                        elif text:
+                            self.partial, self.speaking = text, True
+                            if self.on_partial:
+                                self.on_partial(text)
                     elif msg.get("type") == "Termination":
                         break
                     elif msg.get("type") == "Error" or "error" in msg:
@@ -152,6 +174,11 @@ class Listening:
         self.released_at = time.perf_counter()
         if self.mic and self.mic.returncode is None:
             self.mic.send_signal(signal.SIGINT)
+        if self.external:
+            self.queue.put_nowait(None)
+        if self.turn_silence and self.finals and not self.speaking:
+            await self.cancel()              # a pause ended the turn and nothing came after: it's all here
+            return " ".join(f for f in self.finals if f).strip()
         # Return as soon as the final turn is in; don't wait for the connection to close.
         waits = [asyncio.create_task(self._final.wait()), asyncio.create_task(self._done.wait())]
         done, pending = await asyncio.wait(waits, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)

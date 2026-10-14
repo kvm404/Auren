@@ -116,6 +116,24 @@ def checks() -> list[Check]:
     except ImportError as e:
         out.append(Check(g, "voice model", WARN, f"voice library missing ({e})", "./install.sh"))
 
+    from .settings import load as load_settings
+    from .wake import model_dir as wake_model
+    handsfree = load_settings().get("handsfree")
+    try:
+        import sherpa_onnx  # noqa: F401
+        folder = wake_model()
+        if folder:
+            out.append(Check(g, "wake-word model", OK, str(folder) + ("" if handsfree else " (hands-free is off)")))
+        else:
+            out.append(Check(g, "wake-word model", WARN if handsfree else OK,
+                             "not downloaded" + (": hands-free will fetch it when it starts" if handsfree
+                                                 else " (only hands-free needs it)"), "auren wake-model"))
+    except ImportError as e:
+        out.append(Check(g, "wake-word model", WARN if handsfree else OK, f"keyword spotter missing ({e})", "./install.sh"))
+    if handsfree:
+        out.append(_command(g, "pactl", "pausing hands-free while another app records", svc, required=False,
+                            fix="install pipewire-pulse, or: auren config set handsfree.pause_when_mic_busy false"))
+
     # --- brain -------------------------------------------------------------------------------------
     g = "Brain"
     claude = _command(g, "claude", "Claude Code, the main brain", svc, required=False,

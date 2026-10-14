@@ -64,6 +64,22 @@ Panel {
   readonly property string mood: !daemonAlive ? "off" : (st.state || "idle")
   readonly property bool awaiting: mood === "idle" && st.awaiting === true && (st.until || 0) > Date.now() / 1000
   readonly property bool voiceOn: st.voice !== false
+  // Hands-free (say "Auren" instead of Super+A): off, starting, on, paused (another app has the mic) or error.
+  readonly property string handsfree: daemonAlive ? (st.handsfree || "off") : "off"
+  readonly property bool handsfreeOn: handsfree !== "off"
+  readonly property var handsfreeOptions: st.handsfreeOptions || ({ sensitivity: "medium", followUp: "questions" })
+  readonly property var sensitivities: [
+    { value: "low", label: "Low", tip: "Fewer false starts; say the name clearly" },
+    { value: "medium", label: "Medium", tip: "The default" },
+    { value: "high", label: "High", tip: "Hears the name more often, and other words for it too" }
+  ]
+  readonly property var followUps: [
+    { value: "off", label: "Off", tip: "Say the name every time" },
+    { value: "questions", label: "Questions", tip: "When Auren asks you something, just answer" },
+    { value: "always", label: "Always", tip: "After every reply, keep talking for a few seconds without the name" }
+  ]
+  // the quick actions' row on the Home page: after the hands-free switch, and its choices when it's on
+  readonly property int quickRow: handsfreeOn ? 4 : 2
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
   readonly property string voiceName: st.voiceName || "F2"
@@ -360,6 +376,8 @@ Panel {
   }
   function toggleAuren() { systemctl(root.daemonActive || root.daemonAlive ? "stop" : "start", "auren") }
   function toggleVoice() { ctlRun(["voice", root.voiceOn ? "off" : "on"]) }
+  function toggleHandsfree() { ctlRun(["handsfree", root.handsfreeOn ? "off" : "on"]) }
+  function setHandsfree(what, value) { ctlRun(["handsfree", what, value]) }
   function toggleMascot() { systemctl(root.mascotActive ? "stop" : "start", "auren-mascot") }
   function setBrain(mode) { ctlRun(["brain", mode]) }
   function setEffort(level) { if (level !== root.effort) ctlRun(["effort", level]) }
@@ -415,7 +433,7 @@ Panel {
     if (root.awaiting) return "Waiting for your yes or no"
     switch (root.mood) {
       case "starting": return "Waking up…"
-      case "listening": return "Listening…"
+      case "listening": return st.wake ? "Listening (pause to send)…" : "Listening…"
       case "thinking": return "Thinking…"
       case "working": return st.detail || "Working…"
       case "speaking": return "Speaking"
@@ -424,8 +442,9 @@ Panel {
     return "Ready"
   }
   readonly property string hintText: !root.daemonAlive ? (root.daemonActive ? "Starting up" : "Click " + root.mascot.name + " or Turn on to start")
-                                   : root.mood === "listening" ? "Press Super+A again to send"
-                                   : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
+                                   : root.mood === "listening" ? (st.wake ? "Pause when you're done" : "Press Super+A again to send")
+                                   : root.mood === "thinking" || root.mood === "working" ? (root.handsfree === "on" ? "Say “Auren” or Super+A to stop" : "Super+A to stop")
+                                   : root.handsfree === "on" ? "Say “Auren” to talk · Super+A works too"
                                    : "Super+A to talk · Shift+Super+A for a fresh start"
   readonly property string brainText: brainMode === "codex" ? "Codex (GPT-6.1 Sol)"
                                     : (brainMode === "claude" ? "Claude Haiku only" : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
@@ -532,7 +551,12 @@ Panel {
       { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
     return [
       { n: 1, act: function() { root.talk() } },
-      { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }]
+      { n: 1, act: function() { root.toggleHandsfree() } }
+    ].concat(root.handsfreeOn ? [
+      { n: 3, act: function(c) { root.setHandsfree("sensitivity", root.sensitivities[c].value) } },
+      { n: 3, act: function(c) { root.setHandsfree("follow-up", root.followUps[c].value) } }] : []
+    ).concat([
+      { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }])
   }
   readonly property var rows: pageRows.concat([{ n: footerActions.length, act: function(c) { root.runAction(root.footerActions, c) } }])
   readonly property int footerRow: rows.length - 1
@@ -830,15 +854,54 @@ Panel {
               }
             }
 
+            Toggle {
+              width: parent.width
+              label: "Hands-free"
+              description: !root.daemonAlive ? "Auren is off"
+                         : root.handsfree === "on" ? "Say “Auren” to talk (heard on this laptop only)"
+                         : root.handsfree === "paused" ? "Paused: another app is using the mic"
+                         : root.handsfree === "starting" ? "Getting the wake word ready…"
+                         : root.handsfree === "error" ? "Didn't start: see the log"
+                         : "Off: press Super+A to talk"
+              checked: root.handsfreeOn
+              enabled: root.daemonAlive
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(1)
+              onClicked: root.toggleHandsfree()
+              onHovered: function(h) { if (h) root.hover(1) }
+            }
+            Choice {
+              width: parent.width
+              visible: root.handsfreeOn
+              title: "HEARS ITS NAME"
+              options: root.sensitivities
+              value: root.handsfreeOptions.sensitivity
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(2) ? root.cursorCol : -1
+              onPicked: function(v) { root.setHandsfree("sensitivity", v) }
+              onHoveredIndex: function(i) { root.hover(2, i) }
+            }
+            Choice {
+              width: parent.width
+              visible: root.handsfreeOn
+              title: "ANSWER WITHOUT THE NAME"
+              options: root.followUps
+              value: root.handsfreeOptions.followUp
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(3) ? root.cursorCol : -1
+              onPicked: function(v) { root.setHandsfree("follow-up", v) }
+              onHoveredIndex: function(i) { root.hover(3, i) }
+            }
+
             Choice {
               width: parent.width
               title: "QUICK ACTIONS"
               options: root.asOptions(root.quickActions)
               value: ""
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(1) ? root.cursorCol : -1
+              cursorIndex: root.has(root.quickRow) ? root.cursorCol : -1
               onPicked: function(v, i) { root.runAction(root.quickActions, i) }
-              onHoveredIndex: function(i) { root.hover(1, i) }
+              onHoveredIndex: function(i) { root.hover(root.quickRow, i) }
             }
 
             Column {      // the last exchange

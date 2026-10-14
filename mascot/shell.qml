@@ -141,6 +141,7 @@ ShellRoot {
   onDraggingChanged: quietSince = Date.now() / 1000
   readonly property bool active: mood !== "idle" && mood !== "off"
   readonly property bool awaiting: mood === "idle" && st.awaiting === true && (st.until || 0) > now
+  readonly property bool handsfree: st.handsfree === "on"      // the name works instead of the key
   readonly property bool quiet: !active && !awaiting && !hovered && !dragging
   readonly property bool drowsy: quiet && now - quietSince > prefs.fadeAfter
   readonly property bool asleep: (quiet && now - quietSince > prefs.sleepAfter) || mood === "off"
@@ -305,23 +306,29 @@ ShellRoot {
   readonly property string bubbleText: {
     if (!prefs.bubble || dragging) return ""
     var d = st.detail || ""
+    var stop = handsfree ? "\nSay Auren or Super+A to stop" : "\nPress Super+A to stop"
     switch (mood) {
-      case "listening": return d || (st.fresh ? "Fresh start · listening…" : "Listening…") + "\nPress again to send"
-      case "thinking": return (st.transcript || d || "Thinking…") + "\nPress Super+A to stop"
-      case "working": return (d || "Working…") + "\nPress Super+A to stop"
+      case "listening":
+        if (st.wake) return (d || (st.followUp ? "Go on, I'm listening…" : "Listening…")) + "\nPause when you're done"
+        return d || (st.fresh ? "Fresh start · listening…" : "Listening…") + "\nPress again to send"
+      case "thinking": return (st.transcript || d || "Thinking…") + stop
+      case "working": return (d || "Working…") + stop
       case "speaking": return d
       case "error": return d ? "Oops: " + d : "Something went wrong"
       case "starting": return "Waking up…"
     }
-    if (awaiting) return (st.question || "Waiting for your answer") + "\nPress Super+A to answer yes or no"
+    if (awaiting) return (st.question || "Waiting for your answer")
+                         + (handsfree ? "\nSay Auren, then yes or no" : "\nPress Super+A to answer yes or no")
     if (mood === "idle" && d === "heard nothing" && now - (st.since || 0) < 3) return "Didn't catch that"
     if (mood === "idle" && d === "cancelled" && now - (st.since || 0) < 2.5) return "Stopped"
     if (mood === "idle" && now < captionUntil) return lastCaption
-    if (hovered && hoverHint.shown) return mood === "off" ? "Auren is off: click to start" : "Click to talk · drag · scroll to resize"
+    if (hovered && hoverHint.shown) return mood === "off" ? "Auren is off: click to start"
+                                         : (handsfree ? "Say “Auren” or click to talk" : "Click to talk") + " · drag · scroll to resize"
     return ""
   }
   // the control hints that bubbleText appends; shown pinned under the scrolling text
-  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Press Super+A to answer yes or no"]
+  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Press Super+A to answer yes or no",
+                                      "Pause when you're done", "Say Auren or Super+A to stop", "Say Auren, then yes or no"]
   readonly property string bubbleHint: {
     for (var i = 0; i < bubbleHints.length; i++)
       if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]
