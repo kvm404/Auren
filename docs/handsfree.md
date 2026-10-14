@@ -40,7 +40,7 @@ Run it again after changing microphones, or if it starts missing you. Super+A st
   Audio goes to the speech service (AssemblyAI) only after the name: from just before it until you pause.
 - While another app records from a microphone (a dictation app, a call), the spotter pauses
   (`pause_when_mic_busy`), so talking about Auren there doesn't wake it. The panel says "Paused".
-- The local model uses about 4% of one core and 100 MB of memory. A false start costs a few seconds of
+- The local model uses about 7% of one core and 150 MB of memory. A false start costs a few seconds of
   speech service time (it bills per second).
 
 ## Settings (`[handsfree]` in `~/.config/auren/config.toml`)
@@ -73,11 +73,11 @@ transcript check, so they cost a chime but no answer.
 `src/auren/wake.py`, decision [0004](decisions/0004-wake-word.md).
 
 1. **Open mic:** one `pw-record` named `auren-mic` (16 kHz mono), reopened if the device goes away.
-2. **Spotter:** a small streaming speech-to-text model (sherpa-onnx, a 20M-parameter zipformer) in its
+2. **Spotter:** a small streaming speech-to-text model (sherpa-onnx, a ~70M-parameter streaming zipformer) in its
    own thread, fed 50 ms chunks. `wake.find_name` looks for the name in its words: one-word spellings
    anywhere, two-word ones where a phrase starts (after a pause, or "hey"/"ok"), and the user's own from
    Learn my voice. A name at the end of a phrase counts once a model step (~0.3 s) left it unchanged, so "morn"
-   isn't taken before it becomes "morning". The model is in `~/.local/share/auren/models/asr-en-20m/`
+   isn't taken before it becomes "morning". The model is in `~/.local/share/auren/models/asr-en-70m/`
    (`auren wake-model`; install.sh fetches it, and turning hands-free on fetches it if it's missing).
 3. **The name heard:** the daemon (`Daemon._wake`) ignores it while listening, while paused, or while
    Auren's own voice is saying a sentence with the name in it (and for 1 s after it). Otherwise it starts

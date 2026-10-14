@@ -93,7 +93,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
-| `~/.local/share/auren/models/asr-en-20m/` | `auren wake-model` | The wake-word model: a small speech-to-text model (hands-free) |
+| `~/.local/share/auren/models/asr-en-70m/` | `auren wake-model` | The wake-word model: a small speech-to-text model (hands-free) |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
 | `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, remote, source, mode |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |

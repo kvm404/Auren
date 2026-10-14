@@ -112,6 +112,7 @@ def test_words_are_put_together_from_word_pieces():
     ("'RE IN WHAT TIME IS IT", "medium", (0, 2, True)),
     ("HEYORN OPEN FIREFOX", "high", (0, 1, True)),
     ("HEYORN OPEN FIREFOX", "medium", None),
+    ("HELLOORIN WHAT TIME IS IT", "low", (0, 1, True)),  # the model joined the greeting to the name
     ("ARE IN STOP", "high", (0, 2, True)),
     ("ARE IN STOP", "medium", None),
     ("SHOULD WE GO NOW OR IN THE MORNING", "high", None),   # "or in" inside a sentence isn't the name
@@ -154,6 +155,17 @@ def test_learner_keeps_how_the_name_sounds_minus_common_words():
     learner.heard("GOOD MORN TO YOU ALL")                     # "morn" is in a normal sentence: dropped
     assert learner.step == "done" and learner.learned == ["or in", "orin"]
     assert "2 of 4" in learner.state()["prompt"]
+
+
+def test_learner_keeps_only_what_could_be_the_name():
+    # How a weaker model once wrote one user's "Auren": words that aren't the name at all must not stay.
+    assert [f for f in ("MODERED", "ART", "MARRIED", "PARDON", "AUTUMN", "MORE IN", "ORDIN", "AU RED")
+            if wake.namelike(f)] == ["MORE IN", "ORDIN", "AU RED"]
+    learner = wake.Learner("medium")
+    for text in ("ART", "MARRIED", "ORDIN", "PARDON"):
+        learner.heard(text)
+    learner.heard("WHAT'S THE WEATHER TODAY")
+    assert learner.learned == ["ordin"]
 
 
 def _pactl(monkeypatch, outputs, sources=()):

@@ -1,8 +1,8 @@
 """Hands-free: say "Auren" instead of pressing Super+A (decision 0004).
 
 While hands-free is on, the microphone stays open (one pw-record, named "auren-mic") and a small streaming
-speech-to-text model runs on this laptop: sherpa-onnx with a 20M-parameter zipformer, about 3% of one
-core. Nothing goes to the speech service until its words have the name in them (`find_name`). Then the
+speech-to-text model runs on this laptop: sherpa-onnx with a ~70M-parameter streaming zipformer, about 8%
+of one core. Nothing goes to the speech service until its words have the name in them (`find_name`). Then the
 daemon listens as after Super+A, with the audio from just before the name, and the turn ends when you
 pause instead of on a second press.
 
@@ -18,7 +18,7 @@ of a request, `mentions` tells the daemon when its own voice is saying the name 
 mic), and `mic_busy` pauses the spotter while another app records (a dictation app, a call), since what
 you say there isn't meant for Auren.
 
-The model (44 MB) is fetched by `auren wake-model` into ~/.local/share/auren/models/asr-en-20m, each file
+The model (73 MB) is fetched by `auren wake-model` into ~/.local/share/auren/models/asr-en-70m, each file
 checked against a pinned SHA-256.
 """
 
@@ -55,22 +55,24 @@ RATE, CHUNK = 16000, 1600            # bytes per read: 50 ms of 16-bit mono, the
 STEP = CHUNK / 2 / RATE              # seconds per chunk
 RING = 3.0                           # seconds of audio kept, for the pre-roll
 LEAD = 0.7                           # pre-roll starts this long before the name's first word piece (they come late)
+BLANK_PENALTY = 1.0                  # makes the model write something for a word it's unsure of, not nothing
 STABLE_STEPS = 1                     # a phrase's last word counts once a model step (~0.3 s) left it as it was
 MIC_NAME = "auren-mic"               # our pw-record's node name: mic_busy() doesn't count it
 BUSY_EVERY = 2.0                     # seconds between checks for other apps recording
 
-MODEL = "asr-en-20m"
-OLD_MODELS = ("kws-gigaspeech",)     # the keyword spotter used before: removed once this one is in
-MODEL_URL = ("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/"
-             "d42f2d9f7ca24806fb667456a18a9f1b60f70d16/")
-_STEM = "epoch-99-avg-1.int8.onnx"
+MODEL = "asr-en-70m"
+OLD_MODELS = ("kws-gigaspeech", "asr-en-20m")   # used before: removed once this one is in
+MODEL_URL = ("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/"
+             "672fbf1b30579d6585301139bb363f42a0ad4a24/")
+_STEM = "epoch-99-avg-1-chunk-16-left-128.int8.onnx"
 # file in the model's repo: (saved as, SHA-256)
 MODEL_FILES = {
     "tokens.txt": ("tokens.txt", "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb"),
-    f"encoder-{_STEM}": ("encoder.onnx", "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3"),
-    f"decoder-{_STEM}": ("decoder.onnx", "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c"),
-    f"joiner-{_STEM}": ("joiner.onnx", "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e"),
+    f"encoder-{_STEM}": ("encoder.onnx", "563fde436d16cf7607cf408cd6b30909819d03162652ef389c2450ced3f45ac1"),
+    f"decoder-{_STEM}": ("decoder.onnx", "98da299f471e38bb4e1a8df579b8cc9122d6039576a77e357b3c60f17dd83b02"),
+    f"joiner-{_STEM}": ("joiner.onnx", "d944208d660d67c8d72cd2acaeac971fa5ceb8c80e76c1968148846fedd6e297"),
 }
+MODEL_SIZE = "73 MB"
 
 # How the local model writes the name (upper case; measured on the user's voice and Supertonic's, decision
 # 0004). One word: anywhere, so it can stop Auren mid-sentence. Two: only where a phrase starts ("or in
@@ -80,6 +82,7 @@ NAME_PAIRS = frozenset({"OR IN", "OR AN", "OR EN", "ORE IN", "ORE AN", "ORE EN",
                         "UR IN", "UR AN"})
 NAME_LOOSE = frozenset({"ORN", "ARIN", "AREN", "ERIN", "ARE IN", "ARE AN", "R IN", "HORIN"})
 FILLERS = frozenset("HEY HI HELLO OK OKAY O K OH UM UH SO YO".split())
+GLUED = ("HELLO", "OKAY", "HEY", "HI", "OK")   # ...that the model may write joined to the name: "HELLOORIN"
 PAUSE = 0.5                          # a gap this long between word pieces starts a new phrase
 SENSITIVITY = ("low", "medium", "high")
 # Too common to stand for the name on their own (Learn my voice won't keep them).
@@ -141,6 +144,25 @@ def spelling(text: str) -> str:
     return " ".join(re.sub(r"[^A-Z]", "", w) for w in text.upper().split() if re.sub(r"[^A-Z]", "", w))
 
 
+def _distance(a: str, b: str) -> int:
+    """Letters to change, add or drop to turn one into the other."""
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]
+
+
+def namelike(form: str) -> bool:
+    """Could this be how the model wrote the name ("MORE IN", "ORDIN"), not a word that happened to come out
+    ("ART", "MARRIED", "PARDON")? Learn my voice keeps only these: within two letters of a known spelling."""
+    if " " not in form and (form in COMMON or len(form) < 4):
+        return False
+    letters = form.replace(" ", "")
+    return any(_distance(letters, known.replace(" ", "")) <= 2 for known in NAME_WORDS | NAME_PAIRS | NAME_LOOSE)
+
+
 def find_name(words: list[Word], sensitivity: str = "medium", mine: Iterable[str] = (), done: bool = False,
               after: int = 0) -> tuple[int, int, bool] | None:
     """Where the name is in a phrase the local model heard: word indexes [i, j), and whether a phrase starts
@@ -163,7 +185,8 @@ def find_name(words: list[Word], sensitivity: str = "medium", mine: Iterable[str
         heads.add(i)
     for i in range(after, len(words)):
         forms = at_start if i in heads else NAME_WORDS
-        word = text[i][3:] if text[i].startswith("HEY") and text[i][3:] in forms else text[i]   # "HEYORN"
+        word = next((text[i][len(f):] for f in GLUED if text[i].startswith(f) and text[i][len(f):] in forms),
+                    text[i])                                                         # "HEYORN", "HELLOORIN"
         for n in range(min(longest, len(words) - i), 0, -1):
             if " ".join([word, *text[i + 1:i + n]]) in forms and (i + n < len(words) or done):
                 return i, i + n, i in heads
@@ -185,7 +208,7 @@ def download_model(log: Callable[[str], None] = print) -> Path:
         return found
     target = MODELS_DIR / MODEL
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    log("downloading the wake-word model (44 MB)")
+    log(f"downloading the wake-word model ({MODEL_SIZE})")
     with tempfile.TemporaryDirectory(dir=MODELS_DIR) as tmp:
         out = Path(tmp) / MODEL
         out.mkdir()
@@ -222,7 +245,8 @@ class Spotter:
             tokens=str(folder / "tokens.txt"), encoder=str(folder / "encoder.onnx"),
             decoder=str(folder / "decoder.onnx"), joiner=str(folder / "joiner.onnx"), num_threads=1,
             sample_rate=RATE, decoding_method="greedy_search", provider="cpu", enable_endpoint_detection=True,
-            rule1_min_trailing_silence=1.0, rule2_min_trailing_silence=0.6, rule3_min_utterance_length=15)
+            rule1_min_trailing_silence=1.0, rule2_min_trailing_silence=0.6, rule3_min_utterance_length=15,
+            blank_penalty=BLANK_PENALTY)
         self.sensitivity, self.mine = sensitivity, tuple(mine)
         self.after_name = 0
         self.restart()
@@ -307,8 +331,7 @@ class Learner:
                 self.note = "A few words, without my name"
                 return
             other = f" {' '.join(words)} "
-            new = [f for f in dict.fromkeys(self.samples) if f not in self.mine
-                   and (" " in f or (f not in COMMON and len(f) >= 3))]
+            new = [f for f in dict.fromkeys(self.samples) if f not in self.mine and namelike(f)]
             self.learned = [f.lower() for f in [*self.mine, *new] if f" {f} " not in other][-12:]
             self.added = sum(f.lower() in self.learned for f in new)
             self.step, self.note = "done", ""
