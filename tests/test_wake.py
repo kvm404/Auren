@@ -254,7 +254,7 @@ def _ended(d, session, monkeypatch, wait=0.3):
 
     monkeypatch.setattr(daemon.Daemon, "release", release)
     monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": setattr(self, "detail", detail))
-    d.listening = session
+    d.listening, d.state = session, "listening"
 
     async def run():
         task = asyncio.create_task(d._end_on_pause(session, wait))
@@ -523,3 +523,82 @@ def test_a_dropped_listen_ends_the_session_and_leaves_no_tasks(monkeypatch):
     s = asyncio.run(run())
     assert any("Terminate" in m for m in got if m != "audio")
     assert s._sender.done() and all(t.done() for t in s._tasks)
+
+
+def test_a_cancel_detaches_the_listen_before_waiting_on_it(monkeypatch):
+    d = _daemon(monkeypatch, "listening")
+    seen = []
+
+    class Slow(_Session):
+        async def cancel(self):
+            seen.append(d.listening)             # what _end_on_pause would see meanwhile
+            await asyncio.sleep(0.01)
+
+    d.listening = Slow(["Open Firefox."])
+    asyncio.run(d.cancel())
+    assert seen == [None] and d.listening is None
+
+
+def test_a_wake_queued_before_hands_free_went_off_does_nothing(monkeypatch):
+    d = _daemon(monkeypatch)
+    monkeypatch.setattr(daemon.Daemon, "press", lambda *a, **k: pytest.fail("pressed"))
+
+    async def run():
+        d._wake("AUREN")                         # scheduled...
+        d.handsfree = None                       # ...then turned off before it ran
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    assert not d._waking
+
+
+def test_dropping_an_old_listen_doesnt_undo_a_newer_one(monkeypatch):
+    d = _daemon(monkeypatch, "listening")
+    monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": pytest.fail("idle over a newer listen"))
+    old, new = _Session(), _Session()
+
+    async def cancel():
+        d.listening, d.state = new, "listening"  # a new listen starts while the old one closes
+
+    old.cancel = cancel
+    d.listening = old
+    asyncio.run(d._drop(old, "heard nothing"))
+    assert d.listening is new
+
+
+def test_the_echo_guard_lasts_a_moment_after_auren_stops_talking(monkeypatch):
+    d = _daemon(monkeypatch)
+    monkeypatch.setattr(daemon.Daemon, "press", lambda *a, **k: pytest.fail("pressed"))
+    now = daemon.time.monotonic()
+    d._spoken.append((now - 2, "Just say Auren."))
+    d._spoke_until = now - 0.3
+    d._wake("AUREN")
+    assert not d._waking
+    d._spoke_until = now - 5                     # long ago: the name is the user's
+    d._spoken.clear()
+    assert not d._saying_the_name()
+
+
+def test_a_service_that_closes_first_ends_the_listen(monkeypatch):
+    import websockets
+
+    async def service(ws):
+        await ws.send(json.dumps({"type": "Begin"}))
+        await ws.close()                         # no Termination, and no audio comes after it
+
+    async def run():
+        async with websockets.serve(service, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setattr(ears, "URL", f"ws://127.0.0.1:{port}")
+            monkeypatch.setattr(ears, "secret", lambda name: "key")
+            s = ears.Listening([], external=True, turn_silence=(500, 1200))
+            await s.start()
+            for _ in range(50):
+                if s.closed:
+                    break
+                await asyncio.sleep(0.02)
+            closed = s.closed
+            await s.cancel()
+            return closed
+
+    assert asyncio.run(run())

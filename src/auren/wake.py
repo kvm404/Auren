@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import hashlib
 import json
 import logging
+import os
 import queue
 import re
 import shutil
@@ -219,6 +221,22 @@ def chime() -> None:
 # --- the loop -------------------------------------------------------------------------------------------
 
 
+def _reap(pid: int, wait: float = 1.0) -> None:
+    """Wait up to `wait` seconds for a child to exit, then kill it."""
+    end = time.monotonic() + wait
+    while time.monotonic() < end:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                return
+        except ChildProcessError:
+            return
+        time.sleep(0.05)
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    with contextlib.suppress(ChildProcessError):
+        os.waitpid(pid, 0)
+
+
 class HandsFree:
     """The open mic and the spotter. Every chunk goes to `on_audio` (the daemon passes it on to a listen in
     progress); the spotter's hits go to `on_wake(word)` on the event loop; `on_change` when it pauses or
@@ -321,8 +339,10 @@ class HandsFree:
                 mic.send_signal(signal.SIGINT)
             except ProcessLookupError:
                 pass
-            if self._loop and not self._loop.is_closed():  # it should be gone in a moment; if not, kill it
+            if self._loop and self._loop.is_running():    # it should be gone in a moment; if not, kill it
                 self._loop.call_later(2, lambda: mic.returncode is None and mic.kill())
+            else:                                          # the daemon is exiting: wait here, briefly
+                _reap(mic.pid)
         try:
             self._work.put_nowait(None)
         except queue.Full:

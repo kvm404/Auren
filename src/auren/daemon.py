@@ -78,6 +78,7 @@ class Daemon:
     _hf_problem = ""                             # why hands-free didn't start
     _hf_task: asyncio.Task | None = None         # it's starting (the first time, its model downloads)
     _waking = False                              # the name was just heard: a listen is starting
+    _spoke_until = 0.0                           # when Auren's voice last stopped (for the echo guard)
 
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
@@ -390,12 +391,15 @@ class Daemon:
             self.listening.push(chunk)
 
     def _saying_the_name(self) -> bool:
-        """Is Auren's own voice saying its name (or a sound-alike) right now? The sentence being heard, and
-        the one before it for a moment after it ended (the spotter is a little behind)."""
+        """Is Auren's own voice saying its name (or a sound-alike)? The sentence being heard, and each one for
+        a moment after it ended, the last one too (the spotter is a little behind)."""
         now = time.monotonic()
         recent = list(self._spoken)
-        return any(wake.mentions(text) for i, (at, text) in enumerate(recent)
-                   if i == len(recent) - 1 or now - recent[i + 1][0] < ECHO_TAIL)
+        for i, (_, text) in enumerate(recent):
+            ended = recent[i + 1][0] if i + 1 < len(recent) else (None if self.state == "speaking" else self._spoke_until)
+            if (ended is None or now - ended < ECHO_TAIL) and wake.mentions(text):
+                return True
+        return False
 
     def _wake(self, word: str) -> None:
         """The spotter heard the name (on the loop)."""
@@ -403,7 +407,7 @@ class Daemon:
             return                         # turned off or paused since: a late hit from the spotter's thread
         if self.listening or self._waking or self.state in ("starting", "off"):
             return                         # already listening: the name inside a request doesn't start over
-        if self.state == "speaking" and self._saying_the_name():
+        if self._saying_the_name():
             log.info("wake word ignored: Auren was saying it (%s)", word)
             return
         log.info("heard the wake word (%s) while %s", word.lower(), self.state)
@@ -412,6 +416,8 @@ class Daemon:
 
     async def _woken(self) -> None:
         try:
+            if not self.handsfree or self.listening:       # turned off, or a key press, since the hit
+                return
             # The audio before the name goes too, so the transcript can be checked for it; except while
             # Auren speaks: that audio is its own voice, and the name only stops it (no check).
             preroll = [] if self.state == "speaking" else self.handsfree.preroll()
@@ -470,8 +476,9 @@ class Daemon:
         if self.listening is session:
             self.listening = None
             await session.cancel()
-            self.level.set(0)
-            self.idle(detail)
+            if self.listening is None and self.state == "listening":    # nothing newer started meanwhile
+                self.level.set(0)
+                self.idle(detail)
 
     # --- listening ------------------------------------------------------------------------------
 
@@ -576,9 +583,9 @@ class Daemon:
         return "heard: " + text
 
     async def cancel(self) -> None:
-        if self.listening:
-            await self.listening.cancel()
-            self.listening = None
+        session, self.listening = self.listening, None      # detached first: its last words can't be sent now
+        if session:
+            await session.cancel()
         self.level.set(0)
         if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)
@@ -696,6 +703,7 @@ class Daemon:
         self._spoken.clear()
         self.set_state("speaking", "", reply=text)
         finished = await asyncio.to_thread(self.voice.speak, text)
+        self._spoke_until = time.monotonic()
         if self.state == "speaking":
             self.idle("" if finished else "interrupted")
             return finished

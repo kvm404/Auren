@@ -18,6 +18,7 @@ Hands-free (wake.py) is the same turn with two differences: the audio comes from
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import signal
 import time
@@ -164,7 +165,10 @@ class Listening:
                         break
                     elif msg.get("type") == "Error" or "error" in msg:
                         self.error = str(msg)[:200]
-                await sender
+                if not sender.done():       # the service closed first: don't wait for audio that may not come
+                    sender.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sender
         except Exception as e:  # noqa: BLE001 - reported to the user, never crashes the daemon
             self.error = f"{type(e).__name__}: {e}"[:200]
         finally:
