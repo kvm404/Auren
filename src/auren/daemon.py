@@ -584,13 +584,17 @@ class Daemon:
 
     async def cancel(self) -> None:
         session, self.listening = self.listening, None      # detached first: its last words can't be sent now
+        answering = self.state in ("thinking", "working")
+        if answering:                                  # an answer in progress: stop the brain and its tools
+            self.tools.cancel(SESSION)
         if session:
             await session.cancel()
-        self.level.set(0)
-        if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
-            self.tools.cancel(SESSION)
+        if answering:
             await asyncio.to_thread(self.brain.interrupt)
             notice.show("Stopped", "stopped")
+        if self.listening:                             # a new listen started meanwhile: it owns the state now
+            return
+        self.level.set(0)
         if self.voice:
             self.voice.stop()
         self.set_state("idle", "cancelled")

@@ -602,3 +602,16 @@ def test_a_service_that_closes_first_ends_the_listen(monkeypatch):
             return closed
 
     assert asyncio.run(run())
+
+
+def test_a_listen_started_during_a_cancel_is_left_alone(monkeypatch):
+    d = _daemon(monkeypatch, "listening")
+    new = _Session()
+
+    class Old(_Session):
+        async def cancel(self):
+            d.listening, d.state = new, "listening"     # the key pressed again while the old one closes
+
+    d.listening = Old()
+    asyncio.run(d.cancel())
+    assert d.listening is new and d.state == "listening"
