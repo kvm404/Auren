@@ -76,7 +76,7 @@ transcript check, so they cost a chime but no answer.
 2. **Spotter:** a small streaming speech-to-text model (sherpa-onnx, a 20M-parameter zipformer) in its
    own thread, fed 50 ms chunks. `wake.find_name` looks for the name in its words: one-word spellings
    anywhere, two-word ones where a phrase starts (after a pause, or "hey"/"ok"), and the user's own from
-   Learn my voice. A name at the end of a phrase counts once the word stops changing (0.3 s), so "morn"
+   Learn my voice. A name at the end of a phrase counts once a model step (~0.3 s) left it unchanged, so "morn"
    isn't taken before it becomes "morning". The model is in `~/.local/share/auren/models/asr-en-20m/`
    (`auren wake-model`; install.sh fetches it, and turning hands-free on fetches it if it's missing).
 3. **The name heard:** the daemon (`Daemon._wake`) ignores it while listening, while paused, or while
@@ -90,8 +90,10 @@ transcript check, so they cost a chime but no answer.
    otherwise). `Daemon._end_on_pause` checks the first words for the name (`Daemon._for_me`), keeps
    listening if the name was all so far, and sends the rest (`wake.strip_wake`) at the pause. The speech
    service doesn't always write the name (for some voices "Auren." comes out "All right."): when the local
-   model heard it where a phrase starts, a short first turn is taken for the name anyway, and a longer one
-   goes as it is; one starting with another name ("Lauren…", `wake.LOOKALIKE`) is dropped.
+   model heard it where a phrase starts, the text counts anyway: if that model heard nothing after the
+   name, a short first turn (three words or fewer) is the name, otherwise it all goes as it is. One
+   starting with another name ("Hey Lauren…", `wake.LOOKALIKE`) or about Auren ("Auren's…") is dropped.
+   After a gap in the audio (paused, or the model fell behind) the local model starts over.
 5. **After the reply:** with `follow_up`, a listen with no name starts by itself and ends quietly if
    nothing is said in 5 s.
 

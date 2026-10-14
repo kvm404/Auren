@@ -19,9 +19,11 @@ Date: 2026-10-14 · Status: accepted (revised the same day, after the user's own
   (the model gives each word's time; 0.7 s more for its delay); AssemblyAI's transcript has to *start*
   with the name (fillers like "hey", "um" allowed). "I told Lauren…" is dropped without an answer. When
   the local model heard the name where a phrase starts, a transcript that doesn't start with it still
-  counts unless it starts with another name ("Lauren", "Warren"…): AssemblyAI wrote the user's lone
-  "Auren" as "Auren." most times, but also as "All right.", "What is it?", "Or in" or nothing. A short
-  first turn (three words or fewer) is taken for the name, and a longer one is sent as it is.
+  counts unless it starts with another name ("Lauren", "Warren"…) or is about Auren ("Auren's…"):
+  AssemblyAI wrote the user's lone "Auren" as "Auren." most times, but also as "All right.", "What is
+  it?", "Or in" or nothing. If the local model heard nothing after the name, a short first turn (three
+  words or fewer) is taken for the name; otherwise the text is sent as it is. (AssemblyAI's word times
+  can't place the name: it spread a misheard "What is it?" over 2.6 s of a 0.6 s word.)
 - **End of a request:** AssemblyAI's own turn detection, `min_turn_silence` 500 ms and
   `max_turn_silence` = `handsfree.end_silence` (1.2 s by default). Push-to-talk keeps 10 000/10 000.
 

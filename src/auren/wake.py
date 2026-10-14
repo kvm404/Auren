@@ -55,7 +55,7 @@ RATE, CHUNK = 16000, 1600            # bytes per read: 50 ms of 16-bit mono, the
 STEP = CHUNK / 2 / RATE              # seconds per chunk
 RING = 3.0                           # seconds of audio kept, for the pre-roll
 LEAD = 0.7                           # pre-roll starts this long before the name's first word piece (they come late)
-STABLE = 0.3                         # a phrase's last word counts once it stopped changing this long
+STABLE_STEPS = 1                     # a phrase's last word counts once a model step (~0.3 s) left it as it was
 MIC_NAME = "auren-mic"               # our pw-record's node name: mic_busy() doesn't count it
 BUSY_EVERY = 2.0                     # seconds between checks for other apps recording
 
@@ -92,8 +92,10 @@ _FILLER = r"(?:hey|hi|ok|okay|oh|um+|uh+|so|yo|and)"
 _ADDRESSED = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)", re.I)     # "Auren's voice..." is about it
 _LEADING = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}{_NAME}\b(?!['’]s)\W*", re.I)
 _MENTION = re.compile(rf"\b{_NAME}\b|auren", re.I)
-# Other names it hears as its own; a transcript starting with one wasn't a call, however clear it sounded.
-LOOKALIKE = re.compile(r"^\W*(?:lauren|laurin|lauryn|loren|lorraine|warren|darren|karen|sharon|florence)\b", re.I)
+# A transcript starting with another name it hears as its own ("Hey Lauren"), or talking about it ("Auren's
+# voice"), wasn't a call, however clear it sounded.
+_OTHER = r"(?:lauren|laurin|lauryn|loren|lorraine|warren|darren|karen|sharon|florence)"
+LOOKALIKE = re.compile(rf"^\W*(?:{_FILLER}\W+){{0,2}}(?:{_OTHER}\b|{_NAME}['’]s\b)", re.I)
 
 
 def addressed(text: str) -> bool:
@@ -207,7 +209,8 @@ class Spotter:
     """The local model, listening for the name: feed it 16 kHz float samples. Each feed returns what
     happened: ("name", "OR IN", seconds_ago, clear) when the name was heard (seconds_ago: where it
     started, counted back from the end of what was fed; clear: where a phrase starts, see find_name),
-    ("said", "OR IN") when a phrase ended (Learn my voice listens to those)."""
+    ("said", "OR IN", seconds_ago) when a phrase ended (Learn my voice listens to those).
+    `after_name`: how many words it heard after the last name, in the same phrase (0: a pause came)."""
 
     def __init__(self, sensitivity: str = "medium", mine: Iterable[str] = (), folder: Path | None = None):
         import sherpa_onnx
@@ -220,38 +223,47 @@ class Spotter:
             decoder=str(folder / "decoder.onnx"), joiner=str(folder / "joiner.onnx"), num_threads=1,
             sample_rate=RATE, decoding_method="greedy_search", provider="cpu", enable_endpoint_detection=True,
             rule1_min_trailing_silence=1.0, rule2_min_trailing_silence=0.6, rule3_min_utterance_length=15)
-        self.stream = self.rec.create_stream()
         self.sensitivity, self.mine = sensitivity, tuple(mine)
-        self.fed = 0.0                              # seconds of audio so far
-        self._reported = 0                          # words of this phrase already reported as the name
-        self._text, self._still = "", 0.0           # the phrase so far, and how long it hasn't changed
+        self.after_name = 0
+        self.restart()
 
-    def feed(self, samples: np.ndarray) -> list[tuple[str, str, float] | tuple[str, str]]:
+    def restart(self) -> None:
+        """Start over: after a gap in the audio (paused, or it fell behind), so a phrase isn't joined across it."""
+        self.stream = self.rec.create_stream()
+        self.fed = 0.0                              # seconds of audio in this stream
+        self._reported = 0                          # words of this phrase already reported as the name
+        self._in_hit = False                        # this phrase had the name: count the words after it
+        self._text, self._still = "", 0             # the phrase so far, and model steps it hasn't changed for
+
+    def feed(self, samples: np.ndarray) -> list[tuple]:
         self.stream.accept_waveform(RATE, samples)
-        dur = len(samples) / RATE
-        self.fed += dur
+        self.fed += len(samples) / RATE
+        steps = 0
         while self.rec.is_ready(self.stream):
             self.rec.decode_stream(self.stream)
+            steps += 1
         r = self.rec.get_result_all(self.stream)
         ended = self.rec.is_endpoint(self.stream)
         if r.text != self._text:
-            self._text, self._still = r.text, 0.0
+            self._text, self._still = r.text, 0
         else:
-            self._still += dur
+            self._still += steps                    # the model looked at more audio and the words stayed
         events: list = []
         if r.text:
             words = words_of(r.tokens, r.timestamps, r.start_time)
-            hit = find_name(words, self.sensitivity, self.mine, done=ended or self._still >= STABLE,
+            hit = find_name(words, self.sensitivity, self.mine, done=ended or self._still >= STABLE_STEPS,
                             after=self._reported)
             if hit:
                 i, j, clear = hit
-                self._reported = j
+                self._reported, self._in_hit = j, True
                 events.append(("name", " ".join(w.text for w in words[i:j]), max(0.0, self.fed - words[i].at), clear))
+            if self._in_hit:
+                self.after_name = len(words) - self._reported
         if ended:
             if r.text.strip():
-                events.append(("said", r.text.strip()))
+                events.append(("said", r.text.strip(), max(0.0, self.fed - r.start_time)))
             self.rec.reset(self.stream)
-            self._reported, self._text, self._still = 0, "", 0.0
+            self._reported, self._in_hit, self._text, self._still = 0, False, "", 0
         return events
 
 
@@ -260,18 +272,20 @@ class Spotter:
 
 class Learner:
     """Learn my voice: the name said a few times, then something without it. How the local model wrote
-    the name each time becomes the user's own spellings (handsfree.heard_as), minus anything it also
-    heard in the other sentence."""
+    the name each time joins the user's own spellings (handsfree.heard_as, `mine` so far); any of them
+    it also heard in the other sentence goes."""
 
     TIMES = 4
 
-    def __init__(self, sensitivity: str = "medium"):
+    def __init__(self, sensitivity: str = "medium", mine: Iterable[str] = ()):
         self.sensitivity = sensitivity
+        self.mine = [spelling(m) for m in mine if spelling(m)]
         self.samples: list[str] = []         # what each "Auren" came out as
         self.caught = 0                      # ...how many of those it already took for the name
         self.step = "name"                   # name, other, done
         self.note = ""                       # a word of advice for the next try
-        self.learned: list[str] = []
+        self.learned: list[str] = []          # every spelling to keep, when done
+        self.added = 0                        # ...of them new
 
     def heard(self, text: str) -> None:
         """A phrase the local model heard (it ended at a pause)."""
@@ -293,12 +307,11 @@ class Learner:
                 self.note = "A few words, without my name"
                 return
             other = f" {' '.join(words)} "
-            keep = []
-            for form in dict.fromkeys(self.samples):
-                if f" {form} " in other or (" " not in form and (form in COMMON or len(form) < 3)):
-                    continue
-                keep.append(form.lower())
-            self.learned, self.step, self.note = keep, "done", ""
+            new = [f for f in dict.fromkeys(self.samples) if f not in self.mine
+                   and (" " in f or (f not in COMMON and len(f) >= 3))]
+            self.learned = [f.lower() for f in [*self.mine, *new] if f" {f} " not in other][-12:]
+            self.added = sum(f.lower() in self.learned for f in new)
+            self.step, self.note = "done", ""
 
     def state(self) -> dict:
         """For state.json: the bubble shows `prompt`, the panel the rest."""
@@ -311,7 +324,7 @@ class Learner:
             prompt = self.note or "Now say something without my name, like “what's the weather today”"
         else:
             prompt = (f"Done: I know how you say my name now. Before, I caught {self.caught} of {of}"
-                      if self.learned else "Done: I already hear you fine")
+                      if self.added else "Done: I already hear you fine")
         return {"step": self.step, "count": n, "of": of, "prompt": prompt, "learned": self.learned}
 
 
@@ -391,14 +404,14 @@ def _reap(pid: int, wait: float = 1.0) -> None:
 class HandsFree:
     """The open mic and the spotter. Every chunk goes to `on_audio` (the daemon passes it on to a listen in
     progress); on the event loop, the spotter's hits go to `on_wake(word, at, clear)` (`at`: the chunk the
-    name starts in, for `preroll`; `clear`: see find_name), each phrase it heard to `on_said(text)`, and
-    `on_change` is called when it
-    pauses or resumes (another app took the mic, or gave it back)."""
+    name starts in, for `preroll`; `clear`: see find_name), each phrase it heard to `on_said(text, at)`, and
+    `on_change` is called when it pauses or resumes (another app took the mic, or gave it back). Nothing
+    is called once it's stopped."""
 
     def __init__(self, on_wake: Callable[[str, int, bool], None], on_audio: Callable[[bytes], None] | None = None,
                  on_change: Callable[[], None] | None = None, sensitivity: str = "medium",
                  pause_when_busy: bool = True, spotter: Spotter | None = None, source: list[str] | None = None,
-                 on_said: Callable[[str], None] | None = None, mine: Iterable[str] = ()):
+                 on_said: Callable[[str, int], None] | None = None, mine: Iterable[str] = ()):
         self.on_wake, self.on_audio, self.on_change, self.on_said = on_wake, on_audio, on_change, on_said
         self.sensitivity, self.pause_when_busy, self.mine = sensitivity, pause_when_busy, tuple(mine)
         self.spotter = spotter
@@ -407,7 +420,8 @@ class HandsFree:
         self.mic: asyncio.subprocess.Process | None = None
         self._ring: collections.deque[tuple[int, bytes]] = collections.deque(maxlen=math.ceil(RING / STEP))
         self._count = 0                            # chunks read so far: the ring's and the spotter's clock
-        self._work: queue.Queue[tuple[int, bytes] | None] = queue.Queue(maxsize=50)
+        self._gap = False                          # a chunk didn't reach the spotter: it starts over
+        self._work: queue.Queue[tuple[int, bytes, bool] | None] = queue.Queue(maxsize=50)
         self._tasks: list[asyncio.Task] = []
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -416,6 +430,16 @@ class HandsFree:
     @property
     def status(self) -> str:
         return "paused" if self.paused else "on"
+
+    @property
+    def position(self) -> int:
+        """The chunk just read (on_said's `at` counts in these)."""
+        return self._count
+
+    @property
+    def words_after_name(self) -> int:
+        """Words the local model heard after the last name, before a pause (0: the name on its own)."""
+        return self.spotter.after_name if self.spotter else 0
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -445,6 +469,7 @@ class HandsFree:
                 if not self._running:
                     return
                 log.warning("microphone closed; reopening in 1 s")
+                self._gap = True
                 await asyncio.sleep(1)
                 if self._running:
                     await self._open_mic()
@@ -453,28 +478,38 @@ class HandsFree:
             self._ring.append((self._count, chunk))
             if self.on_audio:
                 self.on_audio(chunk)
-            if not self.paused:
-                try:
-                    self._work.put_nowait((self._count, chunk))
-                except queue.Full:                         # the spotter fell behind: skip, don't pile up
-                    pass
+            if self.paused:
+                self._gap = True
+                continue
+            try:
+                self._work.put_nowait((self._count, chunk, self._gap))
+                self._gap = False
+            except queue.Full:                             # the spotter fell behind: skip, don't pile up
+                self._gap = True
 
     def _spot(self) -> None:
         while (item := self._work.get()) is not None:
-            n, chunk = item
+            n, chunk, gap = item
             try:
+                if gap:
+                    self.spotter.restart()
                 events = self.spotter.feed(samples(chunk))
             except Exception as e:  # noqa: BLE001 - one bad chunk mustn't end hands-free
                 log.warning("wake word: %s", e)
                 continue
             if not (self._running and self._loop):
                 continue
-            for kind, text, *more in events:
+            for kind, text, ago, *clear in events:
                 if kind == "name":
-                    ago, clear = more
-                    self._loop.call_soon_threadsafe(self.on_wake, text, n - int((ago + LEAD) // STEP), clear)
+                    self._loop.call_soon_threadsafe(self._call, self.on_wake, text, n - int((ago + LEAD) // STEP),
+                                                    *clear)
                 elif self.on_said:
-                    self._loop.call_soon_threadsafe(self.on_said, text)
+                    self._loop.call_soon_threadsafe(self._call, self.on_said, text, n - int(ago // STEP))
+
+    def _call(self, fn: Callable, *args) -> None:
+        """On the loop: unless it was stopped since (a new mic, or hands-free off), when the event is stale."""
+        if self._running:
+            fn(*args)
 
     async def _watch_mic(self) -> None:
         while self._running:
@@ -529,7 +564,7 @@ def test(seconds: float = 60, sensitivity: str = "medium", mine: Iterable[str] =
         def heard(word: str, at: int, clear: bool) -> None:
             print(f"  {time.monotonic() - start:5.1f}s  the name ({word.lower()})", flush=True)
 
-        def said(text: str) -> None:
+        def said(text: str, at: int) -> None:
             print(f"  {time.monotonic() - start:5.1f}s  heard: {text.lower()}", flush=True)
 
         hf = HandsFree(heard, sensitivity=sensitivity, pause_when_busy=False, on_said=said, mine=mine)

@@ -4,6 +4,7 @@ import io
 import json
 import subprocess
 
+import numpy as np
 import pytest
 
 from auren import daemon, ears, settings, wake
@@ -195,8 +196,8 @@ def test_hands_free_passes_audio_on_and_reports_the_name(tmp_path, monkeypatch):
         heard, said, audio = [], [], []
         # the name, said 0.06 s before the end of chunk 4: the pre-roll starts LEAD before that
         hf = wake.HandsFree(lambda w, at, clear: heard.append((w, at, clear)), on_audio=audio.append,
-                            pause_when_busy=False, on_said=said.append,
-                            spotter=_Spotter([[], [], [], [("name", "ORIN", 0.06, True)], [("said", "ORIN")]]))
+                            pause_when_busy=False, on_said=lambda t, at: said.append((t, at)),
+                            spotter=_Spotter([[], [], [], [("name", "ORIN", 0.06, True)], [("said", "ORIN", 0.12)]]))
         await hf.start()
         for _ in range(40):
             if said and len(b"".join(audio)) >= 5 * wake.CHUNK:
@@ -207,7 +208,7 @@ def test_hands_free_passes_audio_on_and_reports_the_name(tmp_path, monkeypatch):
 
     heard, said, audio, hf = asyncio.run(run())
     first = 4 - int((0.06 + wake.LEAD) // wake.STEP)
-    assert heard == [("ORIN", first, True)] and said == ["ORIN"] and len(b"".join(audio)) == 5 * wake.CHUNK
+    assert heard == [("ORIN", first, True)] and said == [("ORIN", 3)] and len(b"".join(audio)) == 5 * wake.CHUNK
     assert b"".join(hf.preroll()) == b"".join(audio)
     assert hf.preroll(3) == audio[2:]                          # from the chunk the name starts in
 
@@ -234,6 +235,9 @@ class _Session:
 class _HF:
     paused = False
     status = "on"
+
+    position = 0
+    words_after_name = 0
 
     def preroll(self, at=None):
         return [b"before", b"auren"] if at is None else [b"auren"]
@@ -395,13 +399,18 @@ def test_a_clear_call_doesnt_need_the_name_written(monkeypatch, first, then, rel
     assert released == released_ and (released_ or d.detail == "not for me")
 
 
-def test_for_me():
+def test_for_me(monkeypatch):
+    d = _daemon(monkeypatch)
     clear, unclear = _Session(clear=True), _Session()
-    assert daemon.Daemon._for_me(unclear, "Auren, open it.") == "Open it."
-    assert daemon.Daemon._for_me(unclear, "All right.") is None
-    assert daemon.Daemon._for_me(clear, "All right.") == ""
-    assert daemon.Daemon._for_me(clear, "Or in what time is it") == "What time is it"
-    assert daemon.Daemon._for_me(clear, "Warren called.") is None
+    assert d._for_me(unclear, "Auren, open it.") == "Open it."
+    assert d._for_me(unclear, "All right.") is None
+    assert d._for_me(clear, "All right.") == ""                # the local model heard the name alone
+    assert d._for_me(clear, "Or in what time is it") == "What time is it"
+    for other in ("Warren called.", "Hey Lauren, open Firefox.", "Auren's voice is very nice."):
+        assert d._for_me(clear, other) is None
+    d.handsfree.words_after_name = 2                           # ...or with words after it, in one breath
+    assert d._for_me(clear, "Open Firefox.") == "Open Firefox."
+    assert d._for_me(clear, "Orange stop.") == "Orange stop."
 
 
 def test_a_transcript_without_the_name_in_front_is_dropped(monkeypatch):
@@ -820,3 +829,155 @@ def test_forget_voice_clears_the_learned_spellings(monkeypatch):
     _learning(monkeypatch, d)
     assert d._handsfree_command(["forget-voice"]) == "handsfree forget-voice"
     assert d.settings["handsfree.heard_as"] == [] and d.handsfree.mine == []
+
+
+def test_learning_again_can_drop_a_spelling_learned_before():
+    learner = wake.Learner("medium", mine=["morn", "or in"])
+    for text in ("MORN", "MORN", "ORIN", "MORN"):
+        learner.heard(text)
+    learner.heard("GOOD MORN TO YOU")
+    assert learner.learned == ["or in", "orin"] and learner.added == 1
+
+
+def test_phrases_from_before_learning_and_other_work_dont_count(monkeypatch):
+    d = _daemon(monkeypatch)
+    _learning(monkeypatch, d)
+    d.handsfree.position = 100
+
+    async def run():
+        d._handsfree_command(["learn"])
+        d._said("ORIN", 90)                          # began before Learn my voice
+        assert d._learner.samples == []
+        d._said("ORIN", 101)
+        assert d._learner.samples == ["ORIN"]
+
+    asyncio.run(run())
+
+
+def test_other_work_ends_learning(tmp_path, monkeypatch):
+    d = _daemon(monkeypatch)
+    _learning(monkeypatch, d)
+    monkeypatch.undo()                               # the real set_state, writing to a temp state file
+    monkeypatch.setattr(daemon, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(daemon, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(daemon.notice, "show", lambda *a, **k: None)
+    d.brain = type("B", (), {"using_backup": False, "mode": "auto", "primary": type("P", (), {"effort": "low"})()})()
+    d.speak_enabled, d._hf_problem = False, ""
+
+    async def run():
+        d._handsfree_command(["learn"])
+        assert json.loads((tmp_path / "state.json").read_text())["handsfreeLearn"]["step"] == "name"
+        d.set_state("thinking", "a typed request")
+        return json.loads((tmp_path / "state.json").read_text())["handsfreeLearn"]
+
+    assert asyncio.run(run()) is None and d._learner is None
+
+
+def test_the_key_only_stops_learning(monkeypatch):
+    d = _daemon(monkeypatch)
+    _learning(monkeypatch, d)
+
+    async def run():
+        d._handsfree_command(["learn"])
+        return await d.press()
+
+    assert asyncio.run(run()) == "stopped learning" and d.listening is None and d._learner is None
+
+
+def test_learn_retries_a_failed_start(monkeypatch):
+    d = _daemon(monkeypatch)
+    d.handsfree, started = None, []
+    monkeypatch.setattr(daemon.Daemon, "_start_handsfree", lambda self: started.append(True))
+    assert d._handsfree_command(["learn"]) == "handsfree learn: starting" and started and d._learn_pending
+
+
+class _Recognizer:
+    """Stands in for sherpa's OnlineRecognizer: each feed, the next step of `script`: (text, steps the
+    model ran, phrase ended?). Words are 0.3 s apart."""
+
+    def __init__(self, script):
+        self.script, self.resets, self.streams = list(script), 0, 0
+        self.now = ("", 0, False)
+
+    def create_stream(self):
+        self.streams += 1
+        return type("Stream", (), {"accept_waveform": lambda self, rate, samples: None})()
+
+    def is_ready(self, stream):
+        if self.steps:
+            self.steps -= 1
+            return True
+        return False
+
+    def decode_stream(self, stream):
+        pass
+
+    def get_result_all(self, stream):
+        words = self.now[0].split()
+        return type("R", (), {"text": self.now[0], "tokens": [" " + w for w in words],
+                              "timestamps": [0.3 * i for i in range(len(words))], "start_time": 0.0})()
+
+    def is_endpoint(self, stream):
+        return self.now[2]
+
+    def reset(self, stream):
+        self.resets += 1
+
+    def step(self):
+        self.now = self.script.pop(0)
+        self.steps = self.now[1]
+
+
+def _spotter(script, mine=()):
+    sp = wake.Spotter.__new__(wake.Spotter)
+    sp.rec, sp.sensitivity, sp.mine, sp.after_name = _Recognizer(script), "medium", tuple(mine), 0
+    sp.restart()
+    return sp
+
+
+def _run(sp, n):
+    out = []
+    for _ in range(n):
+        sp.rec.step()
+        out += [e[:2] for e in sp.feed(np.zeros(800, np.float32))]
+    return out
+
+
+def test_a_last_word_counts_only_after_a_model_step_left_it_unchanged():
+    # "MORN" appears; feeds without a model step don't make it final; the next step makes it "MORNING"
+    sp = _spotter([("MORN", 1, False), ("MORN", 0, False), ("MORN", 0, False), ("MORNING", 1, False)], mine=["morn"])
+    assert _run(sp, 4) == []
+    sp = _spotter([("MORN", 1, False), ("MORN", 0, False), ("MORN", 1, False)], mine=["morn"])
+    assert _run(sp, 3) == [("name", "MORN")]
+
+
+def test_words_after_the_name_are_counted_until_the_pause():
+    sp = _spotter([("OR IN OPEN", 1, False), ("OR IN OPEN FIREFOX", 1, False), ("OR IN OPEN FIREFOX", 1, True),
+                   ("HELLO", 1, False)])
+    assert _run(sp, 3) == [("name", "OR IN"), ("said", "OR IN OPEN FIREFOX")] and sp.after_name == 2
+    _run(sp, 1)
+    assert sp.after_name == 2                                 # a later phrase without the name: unchanged
+
+
+def test_a_gap_in_the_audio_starts_the_model_over(monkeypatch):
+    """Chunks skipped while paused: the spotter gets a fresh stream for the next one."""
+    hf = wake.HandsFree(lambda *a: None, pause_when_busy=False)
+    hf.spotter = _spotter([("", 0, False)] * 3)
+    hf._running, hf._loop = True, None
+    hf._work.put((1, bytes(wake.CHUNK), False))
+    hf._work.put((5, bytes(wake.CHUNK), True))
+    hf._work.put(None)
+    hf.spotter.rec.step = lambda: None
+    hf.spotter.rec.steps = 0
+    hf._spot()
+    assert hf.spotter.rec.streams == 2
+
+
+def test_events_after_stop_are_dropped():
+    calls = []
+    hf = wake.HandsFree(lambda *a: calls.append(a), pause_when_busy=False)
+    hf._running = True
+    hf._call(hf.on_wake, "ORIN", 1, True)
+    hf._running = False
+    hf._call(hf.on_wake, "ORIN", 2, True)
+    assert calls == [("ORIN", 1, True)]
