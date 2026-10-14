@@ -61,10 +61,12 @@ transcript check, so they cost a chime but no answer.
 2. **Spotter:** sherpa-onnx's keyword spotter in its own thread, fed 50 ms chunks. The model is in
    `~/.local/share/auren/models/kws-gigaspeech/` (`auren wake-model`; install.sh fetches it, and turning
    hands-free on fetches it if it's missing).
-3. **The name heard:** the daemon (`Daemon._wake`) ignores it while listening, or while Auren's own voice is
-   saying a sentence with the name in it. From idle it starts a listen fed from the open mic, with the
-   last 1.5 s of audio. While thinking or working it stops the answer first; while speaking it stops the
-   voice, and sends no audio from before the name (that would be Auren's own voice).
+3. **The name heard:** the daemon (`Daemon._wake`) ignores it while listening, while paused, or while
+   Auren's own voice is saying a sentence with the name in it (and for 1 s after it). Otherwise it starts
+   a listen fed from the open mic with the last 1.5 s of audio, so the transcript can be checked for the
+   name. While thinking or working the listen starts first and the answer is stopped after it, so nothing
+   you say is lost; while speaking the voice stops and no audio from before the name is sent (that would
+   be Auren's own voice). Super+A keeps its own recorder, so turning hands-free off never cuts a key turn.
 4. **The request:** AssemblyAI with turn detection on (500 ms after a finished sentence, `end_silence`
    otherwise). `Daemon._end_on_pause` checks the first words for the name (`wake.addressed`), keeps
    listening if the name was all so far, and sends the rest (`wake.strip_wake`) at the pause.

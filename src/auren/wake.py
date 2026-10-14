@@ -264,7 +264,10 @@ class HandsFree:
 
     async def _read(self) -> None:
         while self._running:
-            chunk = await self.mic.stdout.read(CHUNK) if self.mic else b""
+            try:                                           # whole chunks: the pre-roll is counted in them
+                chunk = await self.mic.stdout.readexactly(CHUNK) if self.mic else b""
+            except asyncio.IncompleteReadError:
+                chunk = b""
             if not chunk:                                  # pw-record died (the device went away): reopen
                 if not self._running:
                     return
@@ -312,12 +315,14 @@ class HandsFree:
             if not t.done():
                 t.cancel()
         self._tasks = []
-        if self.mic and self.mic.returncode is None:
+        mic, self.mic = self.mic, None
+        if mic and mic.returncode is None:
             try:
-                self.mic.send_signal(signal.SIGINT)
+                mic.send_signal(signal.SIGINT)
             except ProcessLookupError:
                 pass
-        self.mic = None
+            if self._loop and not self._loop.is_closed():  # it should be gone in a moment; if not, kill it
+                self._loop.call_later(2, lambda: mic.returncode is None and mic.kill())
         try:
             self._work.put_nowait(None)
         except queue.Full:

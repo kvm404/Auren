@@ -136,7 +136,7 @@ class _Session:
 
     def __init__(self, finals=(), hands="wake", check=False):
         self.finals, self.hands, self.check = list(finals), hands, check
-        self.turn, self.speaking, self.cancelled = asyncio.Event(), False, False
+        self.turn, self.speaking, self.cancelled, self.closed = asyncio.Event(), False, False, False
         self.error, self.held_seconds = None, 0.1
 
     async def cancel(self):
@@ -159,7 +159,7 @@ def _daemon(monkeypatch, state="idle"):
                         or setattr(self, "detail", detail))
     d = daemon.Daemon.__new__(daemon.Daemon)
     d.settings = {**settings.defaults(), "handsfree": True}
-    d.state, d.detail, d.listening, d.voice = state, "", None, None
+    d.state, d.detail, d.listening, d.voice, d.brain = state, "", None, None, None
     d.handsfree, d.level, d._spoken = _HF(), daemon.Level(), __import__("collections").deque(maxlen=2)
     d._waking = False
     return d
@@ -186,11 +186,38 @@ def test_the_name_from_idle_listens_with_the_audio_before_it(monkeypatch):
 def test_the_name_while_listening_or_in_auren_s_own_voice_is_ignored(monkeypatch):
     d = _daemon(monkeypatch, "speaking")
     monkeypatch.setattr(daemon.Daemon, "press", lambda *a, **k: pytest.fail("pressed"))
-    d._spoken.append("Hi, I'm Auren.")
+    now = daemon.time.monotonic()
+    d._spoken.append((now, "Hi, I'm Auren."))
+    d._wake("AUREN")
+    d._spoken.append((now - 0.2, "How can I help?"))         # just after it: the echo may still come in
     d._wake("AUREN")
     d.state, d.listening = "listening", _Session()
     d._wake("AUREN")
+    d.state, d.listening = "idle", None
+    d.handsfree.paused = True                                 # a late hit after a pause (or after turning it off)
+    d._wake("AUREN")
+    d.handsfree = None
+    d._wake("AUREN")
     assert not d._waking
+
+
+def test_the_name_in_a_later_sentence_still_interrupts(monkeypatch):
+    d = _daemon(monkeypatch, "speaking")
+    pressed = []
+
+    async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
+        pressed.append((hands_free, list(preroll), check))
+
+    monkeypatch.setattr(daemon.Daemon, "press", press)
+    now = daemon.time.monotonic()
+    d._spoken.extend([(now - 5, "Hi, I'm Auren."), (now - 3, "This is a long second sentence.")])
+
+    async def run():
+        d._wake("AUREN")
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    assert pressed == [("wake", [], False)]                   # Auren's own voice isn't sent
 
 
 def test_the_name_while_working_stops_it_and_listens(tmp_path, monkeypatch):
@@ -203,9 +230,10 @@ def test_the_name_while_working_stops_it_and_listens(tmp_path, monkeypatch):
             calls.append("interrupt")
 
     async def press(self, fresh=False, hands_free=None, preroll=(), check=False):
-        calls.append((self.state, hands_free, list(preroll), check))
+        calls.append((d.tools.cancelled(daemon.SESSION), hands_free, list(preroll), check))
 
     d.brain = Brain()
+    d.tools.new_turn(daemon.SESSION)
     monkeypatch.setattr(daemon.Daemon, "press", press)
 
     async def run():
@@ -213,7 +241,8 @@ def test_the_name_while_working_stops_it_and_listens(tmp_path, monkeypatch):
         await asyncio.sleep(0.05)
 
     asyncio.run(run())
-    assert calls == ["interrupt", ("idle", "wake", [], False)]       # no audio before it, no check
+    # the turn is cancelled first, the listen starts with the audio before the name, then the brain stops
+    assert calls == [(True, "wake", [b"before", b"auren"], True), "interrupt"]
 
 
 def _ended(d, session, monkeypatch, wait=0.3):
@@ -278,6 +307,75 @@ def test_silence_after_the_name_goes_back_to_waiting(monkeypatch):
 
     asyncio.run(run())
     assert released == [] and s.cancelled and d.detail == "heard nothing"
+
+
+def test_a_connection_that_ends_is_reported_without_waiting(monkeypatch):
+    d = _daemon(monkeypatch)
+    s = _Session()
+    s.speaking = True                       # words were coming when it failed
+    released, start = _ended(d, s, monkeypatch, wait=60)
+
+    async def run():
+        task = await start()
+        s.closed = True
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(run())
+    assert released == [""]
+
+
+def test_a_reply_that_comes_after_a_stop_is_not_spoken(tmp_path, monkeypatch):
+    d = _daemon(monkeypatch)
+    d.tools = Runtime(tmp_path / "t.sock")
+    said, records = [], []
+
+    class Brain:
+        using_backup = False
+
+        def ask(self, text):
+            d.tools.cancel(daemon.SESSION)          # the name was heard as the reply came in
+            yield ("say", "Closed it.")
+
+    async def say(self, text):
+        said.append(text)
+
+    monkeypatch.setattr(daemon.Daemon, "say", say)
+    monkeypatch.setattr(daemon.Daemon, "_history", lambda self, r: records.append(r))
+    monkeypatch.setattr(daemon.Daemon, "idle", lambda self, detail="": setattr(self, "detail", detail))
+    d.brain = Brain()
+
+    async def run():
+        d.busy, d.loop = asyncio.Lock(), asyncio.get_running_loop()
+        await d.respond("close it", source="voice")
+
+    asyncio.run(run())
+    assert said == [] and records[-1]["reply"] == "(cancelled)" and d.detail == "cancelled"
+
+
+def test_the_talk_key_keeps_its_own_mic_with_hands_free_on(monkeypatch):
+    d = _daemon(monkeypatch)
+    made = []
+
+    class Listening:
+        def __init__(self, vocab, external=False, turn_silence=None, **kw):
+            made.append((external, turn_silence))
+
+        async def start(self):
+            pass
+
+    monkeypatch.setattr(daemon, "Listening", Listening)
+    monkeypatch.setattr(daemon.notice, "show", lambda *a, **k: None)
+    monkeypatch.setattr(daemon.wake, "chime", lambda: None)
+    d.vocab = []
+
+    async def run():
+        await d.press()                          # Super+A: its own pw-record, ended by the key
+        d.listening = None
+        await d.press(hands_free="wake")         # the name: the open mic, ended by a pause
+        d.listening = None
+
+    asyncio.run(run())
+    assert made == [(False, None), (True, (500, 1200))]
 
 
 def test_release_takes_the_name_off_and_checks_it(monkeypatch):
@@ -393,3 +491,35 @@ def test_an_external_listen_takes_pushed_audio_and_returns_at_once_after_a_pause
 
     text, queued = asyncio.run(run())
     assert text == "Open Firefox." and queued == 2   # the chunk and the end-of-audio marker
+
+
+def test_a_dropped_listen_ends_the_session_and_leaves_no_tasks(monkeypatch):
+    """A fake speech service: the listen is cancelled (a false start); it must say Terminate and clean up."""
+    import websockets
+
+    got = []
+
+    async def service(ws):
+        await ws.send(json.dumps({"type": "Begin"}))
+        async for msg in ws:
+            got.append(msg if isinstance(msg, str) else "audio")
+
+    async def run():
+        async with websockets.serve(service, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setattr(ears, "URL", f"ws://127.0.0.1:{port}")
+            monkeypatch.setattr(ears, "secret", lambda name: "key")
+            s = ears.Listening([], external=True, turn_silence=(500, 1200))
+            await s.start()
+            s.push(b"\0" * 3200)
+            for _ in range(50):
+                if got:
+                    break
+                await asyncio.sleep(0.02)
+            await s.cancel()
+            await asyncio.sleep(0.1)
+            return s
+
+    s = asyncio.run(run())
+    assert any("Terminate" in m for m in got if m != "audio")
+    assert s._sender.done() and all(t.done() for t in s._tasks)

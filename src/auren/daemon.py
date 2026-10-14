@@ -55,6 +55,7 @@ MIN_HOLD = 0.35          # shorter key taps are ignored
 MAX_LISTEN = 120         # seconds; listening stops by itself (the speech service bills per second)
 NO_SPEECH = 8.0          # hands-free: seconds after the name with nothing said, then back to waiting for it
 FOLLOW_UP = 5.0          # hands-free: seconds to start answering after a reply, without the name
+ECHO_TAIL = 1.0          # hands-free: seconds a spoken sentence with the name in it still blocks the name
 MIN_TURN_SILENCE = 500   # ms: hands-free, a finished sentence ends the turn after this much silence
 # Said on its own, these start a fresh conversation instead of going to the brain.
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
@@ -93,7 +94,7 @@ class Daemon:
         self.busy = asyncio.Lock()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.level = Level()
-        self._spoken: collections.deque[str] = collections.deque(maxlen=2)    # the sentences just spoken
+        self._spoken: collections.deque[tuple[float, str]] = collections.deque(maxlen=2)   # (started, sentence) just spoken
 
     # --- state ---------------------------------------------------------------------
 
@@ -321,7 +322,7 @@ class Daemon:
                 return f"usage: handsfree {words[0]} {e}"
             changed = value != self.settings.get(key)
             self._save({key: value})
-            if changed and key == "handsfree.sensitivity" and self.handsfree:
+            if changed and key == "handsfree.sensitivity" and (self.handsfree or self._hf_task):
                 self._stop_handsfree()
                 self._start_handsfree()
             self._refresh_state()
@@ -379,7 +380,7 @@ class Daemon:
         if hf:
             hf.stop()
             log.info("hands-free off")
-            if self.listening and self.listening.external:      # its audio came from that mic
+            if self.listening and self.listening.external:      # a listen started by the name: its mic is gone
                 asyncio.create_task(self._drop(self.listening, ""))
         self._hf_problem = ""
 
@@ -388,11 +389,21 @@ class Daemon:
         if self.listening and self.listening.external:
             self.listening.push(chunk)
 
+    def _saying_the_name(self) -> bool:
+        """Is Auren's own voice saying its name (or a sound-alike) right now? The sentence being heard, and
+        the one before it for a moment after it ended (the spotter is a little behind)."""
+        now = time.monotonic()
+        recent = list(self._spoken)
+        return any(wake.mentions(text) for i, (at, text) in enumerate(recent)
+                   if i == len(recent) - 1 or now - recent[i + 1][0] < ECHO_TAIL)
+
     def _wake(self, word: str) -> None:
         """The spotter heard the name (on the loop)."""
+        if not self.handsfree or self.handsfree.paused:
+            return                         # turned off or paused since: a late hit from the spotter's thread
         if self.listening or self._waking or self.state in ("starting", "off"):
             return                         # already listening: the name inside a request doesn't start over
-        if self.state == "speaking" and any(wake.mentions(x) for x in self._spoken):
+        if self.state == "speaking" and self._saying_the_name():
             log.info("wake word ignored: Auren was saying it (%s)", word)
             return
         log.info("heard the wake word (%s) while %s", word.lower(), self.state)
@@ -401,13 +412,16 @@ class Daemon:
 
     async def _woken(self) -> None:
         try:
-            busy = self.state in ("thinking", "working", "speaking")
-            # From idle the audio before the name goes too, so the transcript can be checked for it; while
-            # Auren talks that audio is its own voice, and the name only stops it (no check).
-            preroll = [] if busy or not self.handsfree else self.handsfree.preroll()
-            if self.state in ("thinking", "working"):
-                await self.cancel()
+            # The audio before the name goes too, so the transcript can be checked for it; except while
+            # Auren speaks: that audio is its own voice, and the name only stops it (no check).
+            preroll = [] if self.state == "speaking" else self.handsfree.preroll()
+            working = self.state in ("thinking", "working")
+            if working:
+                self.tools.cancel(SESSION)           # sticks now; the brain is stopped once the listen is up
             await self.press(hands_free="wake", preroll=preroll, check=bool(preroll))
+            if working:
+                await asyncio.to_thread(self.brain.interrupt)
+                notice.show("Stopped", "stopped")
         finally:
             self._waking = False
 
@@ -429,6 +443,9 @@ class Daemon:
             except TimeoutError:
                 ended = False
             if self.listening is not session:
+                return
+            if not ended and session.closed:             # the connection ended (or failed): report it now
+                await self.release()
                 return
             text = " ".join(f for f in session.finals if f)
             if ended:
@@ -475,7 +492,8 @@ class Daemon:
             end = int(self.settings.get("handsfree.end_silence", 1.2) * 1000)
             silence = (MIN_TURN_SILENCE, max(MIN_TURN_SILENCE, end))
         self.listening = Listening(self.vocab, on_partial=lambda t: self.set_state("listening", t, **extra),
-                                   on_level=self.level.set, external=self.handsfree is not None, turn_silence=silence)
+                                   on_level=self.level.set, external=bool(hands_free and self.handsfree),
+                                   turn_silence=silence)
         session = self.listening
         session.hands, session.check = hands_free, check
         for chunk in preroll:
@@ -643,6 +661,14 @@ class Daemon:
             except BrainError as e:
                 reply = "Sorry, my brain hit an error: " + str(e)[:120]
                 log.error("brain error: %s", e)
+            if self.tools.cancelled(SESSION):         # stopped as the reply came in: the user moved on
+                log.info("cancelled with a reply ready: %s", reply)
+                self._history({"at": time.time(), "source": source, "transcript": text, "reply": "(cancelled)",
+                               "tools": tools, "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2),
+                               "brain": "codex" if self.brain.using_backup else "claude"})
+                if not self.listening:
+                    self.idle("cancelled")
+                return
             think_s = time.perf_counter() - t0
             log.info("reply (%.2fs, tools %s): %s", think_s, tools, reply)
             self._history({"at": time.time(), "source": source, "transcript": text, "reply": reply, "tools": tools,
@@ -677,7 +703,7 @@ class Daemon:
 
     def _caption(self, sentence: str) -> None:
         """The voice started a new sentence: show it in the mascot's bubble."""
-        self._spoken.append(sentence)          # for the wake word: Auren saying its own name isn't the user
+        self._spoken.append((time.monotonic(), sentence))     # for the wake word: Auren saying its name isn't the user
         self._from_thread("speaking", sentence, reply=getattr(self, "_reply", ""))
 
     def idle(self, detail: str = "") -> None:

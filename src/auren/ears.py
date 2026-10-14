@@ -87,6 +87,7 @@ class Listening:
         self.opened_at = 0.0
         self.released_at = 0.0
         self._tasks: list[asyncio.Task] = []
+        self._sender: asyncio.Task | None = None
         self._done = asyncio.Event()
         self._final = asyncio.Event()     # a final turn arrived after the key was released
         self.turn = asyncio.Event()       # a final turn arrived (set each time; the daemon clears it)
@@ -101,7 +102,7 @@ class Listening:
         # The mic starts first so nothing said while the socket connects is lost.
         if not self.external:
             self.mic = await asyncio.create_subprocess_exec(
-                "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+                "pw-record", "-P", '{ node.name = "auren-ears" application.name = "Auren" }', *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             self._tasks.append(asyncio.create_task(self._read_mic()))
         low, high = self.turn_silence or (10000, 10000)
@@ -144,7 +145,7 @@ class Listening:
                     await ws.send(json.dumps({"type": "ForceEndpoint"}))
                     await ws.send(json.dumps({"type": "Terminate"}))
 
-                sender = asyncio.create_task(send())
+                sender = self._sender = asyncio.create_task(send())
                 async for raw in ws:
                     msg = json.loads(raw)
                     if msg.get("type") == "Turn":
@@ -167,6 +168,8 @@ class Listening:
         except Exception as e:  # noqa: BLE001 - reported to the user, never crashes the daemon
             self.error = f"{type(e).__name__}: {e}"[:200]
         finally:
+            if self._sender and not self._sender.done():
+                self._sender.cancel()
             self._done.set()
 
     async def finish(self, timeout: float = 8) -> str:
@@ -190,6 +193,14 @@ class Listening:
         return " ".join(f for f in self.finals if f).strip()
 
     async def cancel(self) -> None:
+        if self.external:
+            self.released_at = self.released_at or time.perf_counter()
+        ws = self.ws
+        if ws is not None and not self._done.is_set():
+            try:                             # end the session properly (it's billed until it ends)
+                await asyncio.wait_for(ws.send(json.dumps({"type": "Terminate"})), 1)
+            except Exception:  # noqa: BLE001 - closing it below ends it too
+                pass
         if self.mic and self.mic.returncode is None:
             self.mic.send_signal(signal.SIGINT)
             try:
@@ -199,6 +210,11 @@ class Listening:
         for t in self._tasks:
             if not t.done():
                 t.cancel()
+
+    @property
+    def closed(self) -> bool:
+        """The connection ended (the service finished, or failed: see `error`)."""
+        return self._done.is_set()
 
     @property
     def held_seconds(self) -> float:
