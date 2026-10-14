@@ -24,12 +24,12 @@ the corner means an update is out.
 Laid out like Omarchy's own settings panels (Spaces settings, for one): a header with Auren's status and
 Close, the pages down the left, the page on the right, and Turn on/off, Restart and Log at the bottom, next
 to the installed version (or "Update available", which opens the Updates page). Built with Omarchy's
-`qs.Ui` parts (`KeyboardPanel`, `Button`, `Toggle`, `PanelSlider`, `PanelSectionHeader`), so it follows
+`qs.Ui` parts (`KeyboardPanel`, `Button`, `Toggle`, `PanelSlider`, `PanelSectionHeader`, `TextField`), so it follows
 the theme. The panel keeps the height of its tallest page, so it doesn't jump between pages.
 
 Keys: arrows or hjkl. On the pages, up/down changes page; right or Enter goes into it, and left from its
 first column comes back. In a page, up/down moves between rows, left/right between buttons or along a
-slider. Enter acts, Esc closes (or cancels an update you were about to start), Tab goes to the next bar
+slider. Enter acts (on the Vocabulary page's text field it starts typing; Enter adds the word, Esc goes back to the keys), Esc closes (or cancels an update you were about to start), Tab goes to the next bar
 panel. It remembers the last page while the shell runs.
 
 | Page | What | How |
@@ -38,6 +38,7 @@ panel. It remembers the last page while the shell runs.
 | **Mascot** | Auren or Veyra as live previews (click to choose; it says hello in its voice); speech bubble; sleep animation (~6% CPU); voice follows mascot; how faded it gets when idle; size; reset place; poke | writes `mascot`, `bubble`, `sleepAnimation`, `matchVoice`, `idleOpacity` in `~/.config/auren/mascot.json` (the mascot reloads it); size, reset and poke through the mascot's IPC |
 | **Voice** | voice replies on/off in English; voice F2 (Auren's), M3, F1, M1 (decision 0001's shortlist; a click plays a sample); speed 0.8–1.4×; quality Fast/Balanced/Best (3, 5, 8 steps); volume; pause between sentences; Test; Defaults | `auren-ctl voice`, `voice-name`, `tts …`, `say` (the Test sentence is always English) |
 | **Brain** | who answers: Auto (Claude, Codex on a limit) / Claude only / Codex only, and which is answering now; Claude's effort (Low, Medium, High, XHigh, Max; changing it starts a fresh conversation; greyed out in Codex-only mode); today's requests, average time to answer, how many Codex answered | `auren-ctl brain`, `auren-ctl effort`, history log |
+| **Vocabulary** | your own words for speech recognition: type one and press Enter (or Add); words show as chips, click one (or Enter on it) to remove it; the built-in words are listed below. A word the built-in list or yours already has is refused with a message, and so is one past the limit (100 less the built-in words; the heading shows "N of M"). New words are used from the next time you talk, no restart | `auren vocab list\|add\|remove --json`, `~/.config/auren/vocab.txt` |
 | **Updates** | the installed version; Check for updates; when one is out, what's new (the commit titles) and **Update now…**, which says what will happen and asks before it starts; progress while it runs, then the result (and the update log); "Tell me about updates" | `auren update check [--notify]`, `auren update apply`, `$XDG_RUNTIME_DIR/auren/update.json`, `~/.local/share/auren/install.json`, `~/.config/auren/panel.json` |
 
 **Updates** (see [architecture.md](architecture.md#updates)): the panel checks quietly a few minutes after

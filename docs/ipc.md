@@ -66,7 +66,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
 | `status` | JSON: state, brain, mode, effort, voice |
-| `reload` | Re-read `config.toml` and apply what changed (`auren config` sends it) |
+| `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
 | `quit` | Stop the daemon |
 
 ## Files
@@ -78,7 +78,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
 | `~/.config/auren/instructions.md` | user | Extra instructions for the brain (after the laptop facts) |
-| `~/.config/auren/vocab.txt` | user | Extra words for speech recognition, one per line, most important first |
+| `~/.config/auren/vocab.txt` | user | Extra words for speech recognition, one per line, most important first (`auren vocab`, the panel's Vocabulary page) |
 | `~/.local/state/auren/mascot.json` | mascot | Its place and size |
 | `~/.local/state/auren/history.jsonl` | daemon | Every exchange (read by the bar plugin) |
 | `~/.local/state/auren/daemon.log` | daemon | Log |

@@ -54,6 +54,7 @@ ShellRoot {
       if (kind === "updating") p.upd = { state: "updating", step: "Installing…", count: 1, installed: installed, commits: commits.slice(1, 2) }
       if (kind === "failed") p.upd = { state: "failed", installed: installed,
         message: "install.sh failed (exit 3): see ~/.local/state/auren/update.log. Auren is back on 54ebe81." }
+      if (kind === "refused") { p.vocabMessage = "\"herdr\" is already in the built-in list."; p.vocabOk = false }
       if (kind === "cursor") { p.cursorActive = true; p.inNav = false; p.cursorRow = 1; p.cursorCol = 1 }
       if (kind === "nav") { p.cursorActive = true; p.inNav = true }
       if (kind === "down") {      // the keyboard to the last row of the page: it scrolls on a short screen

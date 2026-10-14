@@ -55,6 +55,7 @@ def main() -> None:
     sub.add_parser("doctor")
     sub.add_parser("config").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("voice-model")
+    sub.add_parser("vocab").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("update").add_argument("args", nargs=argparse.REMAINDER)
     dmn = sub.add_parser("daemon")
     dmn.add_argument("--quiet", action="store_true", help="no voice; replies shown on the OSD")
@@ -75,6 +76,9 @@ def main() -> None:
     if a.cmd == "config":
         from .settings import main as config_main
         return config_main(a.args)
+    if a.cmd == "vocab":
+        from .vocab import main as vocab_main
+        return vocab_main(a.args)
     if a.cmd == "update":
         from .update import main as update_main
         return update_main(a.args)
