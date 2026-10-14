@@ -81,6 +81,7 @@ BASE_FIELDS = ("state", "detail", "since", "pid", "brain", "mode", "effort", "vo
 
 class Daemon:
     handsfree: wake.HandsFree | None = None      # the open mic and the wake word, while hands-free is on
+    listening: Listening | None = None           # the listen in progress (a quiet check too: hands == "probe")
     _hf_problem = ""                             # why hands-free didn't start
     _hf_task: asyncio.Task | None = None         # it's starting (the first time, its model downloads)
     _waking = False                              # the name was just heard: a listen is starting
@@ -89,7 +90,7 @@ class Daemon:
     _learn_pending = False                       # ...asked for while hands-free was still starting
     _learn_timer: asyncio.TimerHandle | None = None
     _learn_from = 0                              # ...the mic chunk it started at: phrases from before don't count
-    _upgrade: bool | None = None                 # the name was heard while a quiet check was starting (its `clear`)
+    _probes = 0                                  # quiet checks asked for: one still starting stops if this moved on
     _limit_noted = ""                            # the day the speech service's daily limit was logged
     _service = {"day": "", "seconds": 0.0}       # speech sent today that wasn't for Auren (service-use.json)
 
@@ -120,6 +121,8 @@ class Daemon:
             if self._learn_timer:
                 self._learn_timer.cancel()
             self._learner, self._learn_timer = None, None
+        if state not in ("idle", "error", "listening") and self.listening and self.listening.hands == "probe":
+            asyncio.create_task(self._drop(self.listening, ""))  # ...and so does a quiet check
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
@@ -190,13 +193,14 @@ class Daemon:
 
     async def command(self, line: str) -> str:
         cmd, _, arg = line.strip().partition(" ")
-        if cmd in ("talk", "talk-fresh") and not self.listening and self.state in ("thinking", "working"):
+        yours = self.listening if self.listening and self.listening.hands != "probe" else None   # not a quiet check
+        if cmd in ("talk", "talk-fresh") and not yours and self.state in ("thinking", "working"):
             await self.cancel()                      # the talk key stops an answer in progress
             return "stopped"
         if cmd == "talk":
-            return await (self.release() if self.listening else self.press())
+            return await (self.release() if yours else self.press())
         if cmd == "talk-fresh":
-            return await (self.release() if self.listening else self.press(fresh=True))
+            return await (self.release() if yours else self.press(fresh=True))
         if cmd == "start":
             return await self.press()
         if cmd == "stop":
@@ -392,7 +396,7 @@ class Daemon:
             if wake.model_dir() is None:
                 notice.show("Getting the wake word ready…", "auren", 4000)
                 await asyncio.to_thread(wake.download_model, log.info)
-            hf = wake.HandsFree(self._wake, on_audio=self._route, on_change=self._refresh_state,
+            hf = wake.HandsFree(self._wake, on_audio=self._route, on_change=self._hf_changed,
                                 sensitivity=s["handsfree.sensitivity"], pause_when_busy=s["handsfree.pause_when_mic_busy"],
                                 on_said=self._said, mine=s["handsfree.heard_as"], on_speech=self._speech)
             await hf.start()
@@ -431,6 +435,12 @@ class Daemon:
                 asyncio.create_task(self._drop(self.listening, ""))
         self._hf_problem = ""
 
+    def _hf_changed(self) -> None:
+        """Hands-free paused (another app records) or resumed."""
+        if self.handsfree and self.handsfree.paused and self.listening and self.listening.hands == "probe":
+            asyncio.create_task(self._drop(self.listening, ""))   # that app's call isn't for the speech service
+        self._refresh_state()
+
     def _route(self, chunk: bytes) -> None:
         """Audio from the hands-free mic: to the listen in progress, if there is one."""
         if self.listening and self.listening.external:
@@ -455,13 +465,13 @@ class Daemon:
         if self._learner and self._learner.step != "done":
             return                         # Learn my voice: the name is what it's listening to
         probe = self.listening if self.listening and self.listening.hands == "probe" else None
-        if probe or self._waking == "probe":       # the speech service is checking this phrase: it's a call
-            if not self._saying_the_name():
-                log.info("heard the wake word (%s) while %s", word.lower(), self.state)
-                if probe:
-                    self._shown(probe, clear)
-                else:
-                    self._upgrade = clear
+        if (probe or self._waking == "probe") and not self._saying_the_name():
+            # A quiet check is under way, maybe of something said before the name: it gives way to a listen
+            # from where the name starts, so what came before isn't taken for the request.
+            log.info("heard the wake word (%s) while %s", word.lower(), self.state)
+            self._probes += 1                      # a check still starting won't
+            self._waking = True
+            asyncio.create_task(self._woken(at, clear, probe))
             return
         if self.listening or self._waking or self.state in ("starting", "off"):
             return                         # already listening: the name inside a request doesn't start over
@@ -472,8 +482,12 @@ class Daemon:
         self._waking = True
         asyncio.create_task(self._woken(at, clear))
 
-    async def _woken(self, at: int | None = None, clear: bool = False) -> None:
+    async def _woken(self, at: int | None = None, clear: bool = False, probe: Listening | None = None) -> None:
         try:
+            if probe:
+                await self._drop(probe, "")
+            if self.listening and self.listening.hands == "probe":
+                await self._drop(self.listening, "")       # a quiet check that started meanwhile
             if not self.handsfree or self.listening:       # turned off, or a key press, since the hit
                 return
             # The audio before the name goes too, so the transcript can be checked for it; except while
@@ -512,22 +526,24 @@ class Daemon:
                 self._refresh_state()
             return
         self._waking = "probe"
-        asyncio.create_task(self._probe(at, learning=bool(learner)))
+        self._probes += 1
+        asyncio.create_task(self._probe(at, learning=bool(learner), n=self._probes))
 
-    async def _probe(self, at: int, learning: bool) -> None:
+    async def _probe(self, at: int, learning: bool, n: int) -> None:
         try:
             if not self.handsfree or self.listening:
                 return
             if await asyncio.to_thread(wake.playing):
                 return                              # a video on the speakers would be sent all day
+            if n != self._probes or not self.handsfree or self.listening:
+                return                              # the name, or the key, came first
             await self.press(hands_free="probe", preroll=self.handsfree.preroll(at), check=True)
             session = self.listening
             if session and session.hands == "probe":
                 session.learning = learning
-                if self._upgrade is not None:       # the local model heard the name meanwhile
-                    self._shown(session, self._upgrade)
         finally:
-            self._waking, self._upgrade = False, None
+            if self._waking == "probe":
+                self._waking = False
 
     def _shown(self, session: Listening, clear: bool = False) -> None:
         """A quiet check turned out to be a call: from here on it's a listen like any the name started."""
@@ -674,6 +690,9 @@ class Daemon:
             text = " ".join(f for f in session.finals if f)
             if ended:
                 session.turn.clear()
+                if probe and not text:                   # nothing it could write down
+                    await self._drop(session, "")
+                    return
                 if probe and session.learning:           # Learn my voice: how the service wrote the name
                     if self._learner:
                         self._learner.heard_by_service(text)
@@ -831,6 +850,8 @@ class Daemon:
                            "tools": [], "brain": "claude"})
 
     async def release(self) -> str:
+        if self.listening and self.listening.hands == "probe":
+            return "not listening"                  # a quiet check is never sent by the key
         session, self.listening = self.listening, None
         if session is None:
             return "not listening"
@@ -867,6 +888,8 @@ class Daemon:
         if answering:                                  # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)
         if session:
+            if session.hands == "probe":
+                self._count_service(session)
             await session.cancel()
         if answering:
             await asyncio.to_thread(self.brain.interrupt)

@@ -228,6 +228,9 @@ def test_hands_free_passes_audio_on_and_reports_the_name(tmp_path, monkeypatch):
 # --- the daemon ---------------------------------------------------------------------------------------
 
 
+_SET_STATE = daemon.Daemon.set_state                         # the real one (_daemon() replaces it)
+
+
 class _Session:
     """A Listening that's already been answered."""
     external = True
@@ -1082,12 +1085,51 @@ def test_speech_that_starts_with_the_name_becomes_a_listen(monkeypatch, tmp_path
     assert d._for_me(_Session(), "Orange, what time is it?") == "What time is it?"
 
 
-def test_the_local_name_during_a_quiet_check_shows_it(monkeypatch, tmp_path):
+def test_the_local_name_during_a_quiet_check_starts_a_listen_from_the_name(monkeypatch, tmp_path):
+    # The check may be of something said before the name ("We should order pizza. Auren, ..."): it's dropped,
+    # and a listen starts from where the name does.
+    d = _daemon(monkeypatch)
+    pressed = _service(monkeypatch, tmp_path, d)
+    d.listening = s = _Session(hands="probe", check=True)
+
+    async def run():
+        d._wake("OR IN", 3, True)
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    assert s.cancelled and pressed == [("wake", [b"auren"], True)]
+
+
+def test_a_check_still_starting_gives_way_to_the_name(monkeypatch, tmp_path):
+    d = _daemon(monkeypatch)
+    pressed = _service(monkeypatch, tmp_path, d)
+
+    async def run():
+        d._speech(7)                                # a phrase starts: a quiet check is on its way
+        d._wake("ORIN", 9, True)                    # ...and the local model hears the name in it
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    assert pressed == [("wake", [b"auren"], True)]
+
+
+def test_the_key_and_other_work_never_send_a_quiet_check(monkeypatch, tmp_path):
     d = _daemon(monkeypatch)
     _service(monkeypatch, tmp_path, d)
-    d.listening = s = _Session(hands="probe", check=True)
-    d._wake("OR IN", 3, True)
-    assert s.hands == "wake" and s.clear and d.state == "listening"
+    d.listening = s = _Session(["We should order pizza."], hands="probe", check=True)
+    assert asyncio.run(d.release()) == "not listening" and d.listening is s
+    monkeypatch.setattr(daemon.Daemon, "set_state", _SET_STATE)
+    monkeypatch.setattr(daemon, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(daemon, "STATE_FILE", tmp_path / "state.json")
+    d.brain = type("B", (), {"using_backup": False, "mode": "auto", "primary": type("P", (), {"effort": "low"})()})()
+    d._hf_problem, d._hf_task = "", None
+
+    async def run():
+        d.set_state("thinking", "a typed request")  # other work: the check goes
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    assert s.cancelled and d.listening is None
 
 
 def test_the_key_during_a_quiet_check_starts_its_own_listen(monkeypatch, tmp_path):
