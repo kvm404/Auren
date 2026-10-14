@@ -42,7 +42,7 @@ The model on the laptop is small. For some voices, or in a noisy room, it misses
 not. **Heard by: + Speech service** on the panel (`auren-ctl handsfree hear-with service`) adds a second
 listener: each time the local model hears you *start* saying something, AssemblyAI hears it too, from just
 before your first word. If that starts with the name, it carries on like any call (the chime comes when
-the sentence ends, or as soon as the local model hears the name); if not, it's dropped after that first
+the sentence ends, or sooner if the local model hears the name too); if not, it's dropped after that first
 sentence, and nothing shows. On a noisy recording of one user where the local model caught 2 names in 10,
 this caught all 10 (decision 0004).
 
@@ -124,8 +124,9 @@ transcript check, so they cost a chime but no answer.
    `on_speech`). From idle, `Daemon._speech` starts a quiet listen (`hands = "probe"`) with the audio from
    just before it: no state change, no chime, no level. Its first sentence goes through `_for_me`; a call
    turns it into a normal listen (`Daemon._shown`), anything else is dropped (no words in 4 s, or no
-   sentence end in 12 s: dropped too). The name from the local model meanwhile shows it at once; the key
-   drops it and starts its own. Seconds of dropped ones count against `service_minutes`
+   sentence end in 12 s: dropped too). The name from the local model meanwhile drops it for a listen from
+   the name (so what came before isn't taken for the request); so do the key and other work, and a pause
+   for another app's recording. The key never sends one. Seconds of dropped ones count against `service_minutes`
    (`~/.local/state/auren/service-use.json`). During Learn my voice, the name samples' sentences go to
    the learner instead.
 
