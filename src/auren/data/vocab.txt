@@ -8,6 +8,7 @@ OpenCode
 Antigravity
 Supertonic
 Groq
+Grok
 STT
 TTS
 MCP
@@ -30,5 +31,12 @@ README
 uv sync
 npm
 bun
+subagent
 subagents
+plugin
+browser
+window
+tab
+PR
 Auren
+Veyra
