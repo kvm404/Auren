@@ -12,7 +12,7 @@
     auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
-    auren-ctl reload                  # re-read config.toml (auren config sends this)
+    auren-ctl reload                  # re-read config.toml and the vocabulary (auren config and auren vocab send this)
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
 state (idle, listening, thinking, working, speaking, error) is written to
@@ -219,11 +219,14 @@ class Daemon:
         save_settings(changes)
 
     def _reload(self) -> str:
-        """Apply config.toml as it is now (after `auren config set` or an edit)."""
+        """Apply config.toml and the vocabulary as they are now (after `auren config set`, `auren vocab add`
+        or an edit). New words are used from the next press."""
+        vocab = vocabulary(self.profile)
+        vocab_changed, self.vocab = vocab != self.vocab, vocab
         new = load_settings()
         changed = [k for k in new if new[k] != self.settings.get(k)]
         if not changed:
-            return "no changes"
+            return "Auren picked up the new words" if vocab_changed else "no changes"
         old, self.settings = self.settings, new
         if self.voice:
             if new["voiceName"] != old["voiceName"]:

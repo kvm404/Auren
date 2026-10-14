@@ -202,11 +202,53 @@ Panel {
     historyProc.running = false; historyProc.running = true
     cursorActive = false
     now = Date.now() / 1000
-    if (page === 4) checkIfStale()
+    if (page === 5) checkIfStale()
+    if (page === 4) loadVocab()
   }
   onMoodChanged: if (opened && mood === "idle") { historyProc.running = false; historyProc.running = true }
   property real now: Date.now() / 1000
   Timer { interval: 30000; running: root.opened; repeat: true; onTriggered: root.now = Date.now() / 1000 }
+
+  // ---- vocabulary (auren vocab) -----------------------------------------------------------------
+  // The user's own boost words. `auren vocab` checks them against the built-in list and tells the daemon,
+  // which uses them from the next press.
+  property var vocabMine: []
+  property var vocabDefaults: []
+  property int vocabLimit: 0
+  property string vocabMessage: ""
+  property bool vocabOk: true
+  property string vocabAction: ""
+  property string vocabSent: ""
+  Process {
+    id: vocabProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var r
+        try { r = JSON.parse(String(text || "").trim().split("\n").pop()) }
+        catch (e) { root.vocabMessage = "Couldn't reach Auren's vocabulary (is Auren installed?)."; root.vocabOk = false; return }
+        root.vocabMine = r.mine || []
+        root.vocabDefaults = r.defaults || []
+        root.vocabLimit = r.limit || 0
+        if (r.message) { root.vocabMessage = r.message; root.vocabOk = r.ok }
+        if (r.ok && root.vocabAction === "add" && vocabField.text.trim() === root.vocabSent) vocabField.text = ""
+      }
+    }
+  }
+  function vocabRun(args) {
+    if (vocabProc.running) return
+    vocabAction = args[0]
+    vocabProc.command = [root.aurenBin, "vocab"].concat(args).concat(["--json"])
+    vocabProc.running = true
+  }
+  function loadVocab() { vocabRun(["list"]) }
+  function addVocab() {
+    var w = vocabField.text.trim()
+    if (w === "") { root.vocabMessage = "Type a word first."; root.vocabOk = false; return }
+    vocabSent = w
+    vocabRun(["add", w])
+  }
+  function removeVocab(w) { vocabRun(["remove", w]) }
 
   // ---- updates (auren update) -------------------------------------------------------------------
   property var upd: ({})
@@ -447,6 +489,7 @@ Panel {
     { label: "Mascot", icon: "󰏩" },
     { label: "Voice", icon: "󰗋" },
     { label: "Brain", icon: "󰧑" },
+    { label: "Vocabulary", icon: "󰈙" },
     { label: "Updates", icon: "󰚰" }
   ]
   property int page: 0
@@ -454,7 +497,9 @@ Panel {
     page = Math.max(0, Math.min(pages.length - 1, p))
     confirmingUpdate = false
     pagesBox.contentY = 0
-    if (page === 4) checkIfStale()
+    keyCatcher.forceActiveFocus()
+    if (page === 4) { vocabMessage = ""; loadVocab() }
+    if (page === 5) checkIfStale()
   }
 
   // Each page is rows of controls: { n: how many across, act(col), adjust(dx) for sliders }; the footer
@@ -480,6 +525,9 @@ Panel {
       { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
       { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } }]
     if (page === 4) return [
+      { n: 2, act: function(c) { if (c === 0) vocabField.forceActiveFocus(); else root.addVocab() } }
+    ].concat(root.vocabMine.length ? [{ n: root.vocabMine.length, act: function(c) { root.removeVocab(root.vocabMine[c]) } }] : [])
+    if (page === 5) return [
       { n: root.updateActions.length, act: function(c) { root.runAction(root.updateActions, c) } },
       { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
     return [
@@ -514,12 +562,24 @@ Panel {
         pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height) * cursorRow / (pageRows.length - 1)
       else if (cursorRow >= pageRows.length)
         pagesBox.contentY = Math.max(0, pagesBox.contentHeight - pagesBox.height)
+      vocabScroll()
       return
     }
     var r = rows[cursorRow]
     if (r.adjust) { r.adjust(dx); return }
     if (dx < 0 && cursorCol === 0) { inNav = true; return }
     cursorCol = Math.max(0, Math.min(r.n - 1, cursorCol + dx))
+    vocabScroll()
+  }
+  // On the Vocabulary page the chips wrap over several lines: scroll to the one the cursor is on.
+  function vocabScroll() {
+    if (page !== 4 || inNav) return
+    if (cursorRow !== 1) { pagesBox.contentY = 0; return }
+    var chip = chipRepeater.itemAt(cursorCol)
+    if (!chip) return
+    var y = chip.mapToItem(vocabPage, 0, 0).y
+    if (y < pagesBox.contentY) pagesBox.contentY = y
+    else if (y + chip.height > pagesBox.contentY + pagesBox.height) pagesBox.contentY = y + chip.height - pagesBox.height
   }
   function activate() {
     if (!cursorActive) return
@@ -576,6 +636,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: vocabField.activeFocus
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activate()
       onCloseRequested: { if (root.confirmingUpdate) root.confirmingUpdate = false; else root.close() }
@@ -646,7 +707,7 @@ Panel {
               required property int index
               width: nav.width
               leftAlign: true
-              text: modelData.label + (index === 4 && root.updateAvailable ? "  ●" : "")
+              text: modelData.label + (index === 5 && root.updateAvailable ? "  ●" : "")
               iconText: modelData.icon
               iconSize: Style.font.body
               selected: root.page === index
@@ -676,8 +737,9 @@ Panel {
           // screen it's capped and the page scrolls
           readonly property real tallest: Math.max(homePage.implicitHeight, mascotPage.implicitHeight,
                                                    voicePage.implicitHeight, brainPage.implicitHeight,
+                                                   Math.min(vocabPage.implicitHeight, Style.space(380)),
                                                    updatesPage.implicitHeight)
-          contentHeight: [homePage, mascotPage, voicePage, brainPage, updatesPage][root.page].implicitHeight
+          contentHeight: [homePage, mascotPage, voicePage, brainPage, vocabPage, updatesPage][root.page].implicitHeight
 
           // ---------------- Home ----------------
           Column {
@@ -1108,12 +1170,111 @@ Panel {
             }
           }
 
+          // ---------------- Vocabulary ----------------
+          Column {
+            id: vocabPage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 4
+
+            SectionTitle { text: "VOCABULARY" }
+            Caption {
+              text: "Names and words Auren should listen for: projects, tools, people. A new word is used the next time"
+                    + " you talk to Auren; no restart needed."
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              TextField {
+                id: vocabField
+                width: parent.width - addButton.width - parent.spacing
+                placeholderText: "Add a word or name"
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                foreground: root.fg
+                hasCursor: root.has(0, 0)
+                onAccepted: root.addVocab()
+                onTextEdited: root.vocabMessage = ""
+                Keys.onEscapePressed: keyCatcher.forceActiveFocus()
+                Keys.onTabPressed: { keyCatcher.forceActiveFocus(); root.switchPanel(1) }
+                Keys.onBacktabPressed: { keyCatcher.forceActiveFocus(); root.switchPanel(-1) }
+                onHoveredChanged: if (hovered) root.hover(0, 0)
+              }
+              Button {
+                id: addButton
+                anchors.verticalCenter: vocabField.verticalCenter
+                text: "Add"
+                iconText: "󰐕"
+                iconSize: Style.font.body
+                fontSize: Style.font.bodySmall
+                foreground: root.fg
+                fontFamily: root.font
+                bordered: true
+                enabled: !vocabProc.running
+                opacity: enabled ? 1 : 0.5
+                hasCursor: root.has(0, 1)
+                onClicked: root.addVocab()
+                onHovered: function(h) { if (h) root.hover(0, 1) }
+              }
+            }
+            Text {
+              width: parent.width
+              visible: root.vocabMessage !== ""
+              text: root.vocabMessage
+              color: root.vocabOk ? root.fg : Color.accent
+              wrapMode: Text.WordWrap
+              font.family: root.font
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            PanelSectionHeader {
+              text: "YOUR WORDS · " + root.vocabMine.length + (root.vocabLimit ? " OF " + root.vocabLimit : "")
+              foreground: root.fg
+              fontFamily: root.font
+            }
+            Caption {
+              visible: root.vocabMine.length === 0
+              text: "None yet. Add the names Auren keeps mishearing."
+            }
+            Flow {
+              width: parent.width
+              spacing: Style.space(6)
+              Repeater {
+                id: chipRepeater
+                model: root.vocabMine
+                Button {
+                  required property string modelData
+                  required property int index
+                  text: modelData
+                  iconText: "󰅖"
+                  tooltipText: "Remove"
+                  iconSize: Style.font.caption
+                  fontSize: Style.font.bodySmall
+                  foreground: root.fg
+                  fontFamily: root.font
+                  bordered: true
+                  hasCursor: root.has(1, index)
+                  onClicked: root.removeVocab(modelData)
+                  onHovered: function(h) { if (h) root.hover(1, index) }
+                }
+              }
+            }
+
+            PanelSectionHeader {
+              text: "BUILT IN · " + root.vocabDefaults.length
+              foreground: root.fg
+              fontFamily: root.font
+            }
+            Caption { text: root.vocabDefaults.join(", ") }
+          }
+
           // ---------------- Updates ----------------
           Column {
             id: updatesPage
             width: parent.width
             spacing: Style.space(12)
-            visible: root.page === 4
+            visible: root.page === 5
 
             SectionTitle { text: "UPDATES" }
 
@@ -1259,7 +1420,7 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.showPage(4)
+                onClicked: root.showPage(5)
               }
             }
           }

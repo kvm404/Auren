@@ -32,16 +32,20 @@ MIN_SEND, MAX_SEND = 1600, 32000           # AssemblyAI wants 50-1000 ms per mes
 URL = "wss://streaming.assemblyai.com/v3/ws"
 
 
+def read_terms(path) -> list[str]:
+    """The words in a vocabulary file: one per line, blank lines and # comments skipped."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")]
+
+
 def vocabulary(profile=None, limit: int = 100) -> list[str]:
     """Terms to bias recognition toward: the user's own (~/.config/auren/vocab.txt), the base list, then
     names from this laptop."""
-    terms: list[str] = []
-    for f in (USER_VOCAB, DATA / "vocab.txt"):
-        try:
-            lines = f.read_text().splitlines()
-        except OSError:
-            continue
-        terms += [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")]
+    terms = read_terms(USER_VOCAB) + read_terms(DATA / "vocab.txt")
+    own = len(terms)             # what the user chose is kept as typed; only names from the laptop are filtered
     if profile is not None:      # most useful first: bookmarks, web apps, projects, then apps
         s = profile.static()
         for names in (s.get("bookmarks") or {}).values() if isinstance(s.get("bookmarks"), dict) else []:
@@ -51,9 +55,9 @@ def vocabulary(profile=None, limit: int = 100) -> list[str]:
         terms += [p["name"] for p in s.get("projects", [])[:15]] if isinstance(s.get("projects"), list) else []
         terms += [a["name"] for a in apps.get("apps", [])]
     seen, out = set(), []
-    for t in terms:
+    for i, t in enumerate(terms):
         k = t.lower()
-        if k not in seen and 2 <= len(t) <= 40 and not t.lower().startswith(("libreoffice ", "openjdk")):
+        if k not in seen and 2 <= len(t) <= 40 and (i < own or not k.startswith(("libreoffice ", "openjdk"))):
             seen.add(k)
             out.append(t)
     return out[:limit]

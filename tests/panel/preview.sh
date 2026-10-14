@@ -3,8 +3,8 @@
 #
 #   tests/panel/preview.sh [out-dir] [shots]
 #
-# shots: a comma list of page[:state], pages 0-4 (Home, Mascot, Voice, Brain, Updates), states:
-# available, confirm, updating, failed (Updates page), cursor, nav, down (the keyboard cursor; down goes to the page's last row).
+# shots: a comma list of page[:state], pages 0-5 (Home, Mascot, Voice, Brain, Vocabulary, Updates), states:
+# available, confirm, updating, failed (Updates page), refused (Vocabulary page), cursor, nav, down (the keyboard cursor; down goes to the page's last row).
 # PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does.
 #
 # It runs a separate Quickshell off-screen with Omarchy's own UI parts, except the popup window and the
@@ -14,7 +14,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="$(realpath -m "${1:-$repo/.panel-preview}")"
-shots="${2:-0,1,2,3,4,4:available,4:confirm,4:updating,4:failed,1:cursor}"
+shots="${2:-0,1,2,3,4,4:refused,5,5:available,5:confirm,5:updating,5:failed,1:cursor}"
 omarchy=/usr/share/omarchy/shell
 [[ -d $omarchy/Ui ]] || { echo "needs the Omarchy shell ($omarchy)" >&2; exit 1; }
 
@@ -43,6 +43,13 @@ trap 'kill $keeper 2>/dev/null; rm -rf "$tmp"' EXIT
 now=$(date +%s)
 printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1}}' \
   "$now" "$keeper" >"$tmp/run/auren/state.json"
+# A stand-in for `auren vocab`, with a few words of the user's own.
+mkdir -p "$tmp/data/auren/venv/bin"
+cat >"$tmp/data/auren/venv/bin/auren" <<'SH'
+#!/bin/sh
+echo '{"ok": true, "message": "", "limit": 80, "mine": ["Zorblax", "Kaushal", "pull request", "Tensaku"], "defaults": ["herdr", "Codex", "Claude", "OpenCode", "Antigravity", "Grok", "Omarchy", "Hyprland", "systemctl", "subagent", "window", "tab", "browser", "Quickshell", "Auren", "Veyra", "npm", "bun", "PR", "plugin"]}'
+SH
+chmod +x "$tmp/data/auren/venv/bin/auren"
 printf '{"at":%s,"source":"voice","transcript":"Open Excalidraw.","reply":"Excalidraw is open now.","tools":["launch_app"],"think_s":3.2,"brain":"claude"}\n' \
   "$now" >"$tmp/state/auren/history.jsonl"
 printf '{"version":"0.1.0","commit":"54ebe81000000000000000000000000000000000","committed":%s,"mode":"install"}' \

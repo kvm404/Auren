@@ -23,8 +23,9 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
   screens and web pages is treated as untrusted.
 - **Mascot:** Auren (a hover-bot) or Veyra (a fox spirit). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
   captions in a speech bubble. Drag it anywhere; it fades and falls asleep when idle.
-- **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has four pages: Home (talk, last
-  exchange, quick switches), Mascot, Voice (voice and tuning) and Brain (who answers, Claude's effort).
+- **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has six pages: Home (talk, last
+  exchange, quick switches), Mascot, Voice (voice and tuning), Brain (who answers, Claude's effort),
+  Vocabulary (your own words for speech recognition) and Updates.
 
 <br clear="right">
 
@@ -104,7 +105,7 @@ Files:
 | `~/.config/auren/mascot.json` | Mascot preferences: `mascot` (auren, veyra), `idleOpacity`, `fadeAfter`, `sleepAfter`, `bubble`, `sleepAnimation`, `matchVoice` |
 | `~/.config/auren/routines/*.md` | Your saved workflows, given to the brain |
 | `~/.config/auren/instructions.md` | Anything else the brain should know about you (optional) |
-| `~/.config/auren/vocab.txt` | Names speech recognition should expect, one per line (optional) |
+| `~/.config/auren/vocab.txt` | Names speech recognition should expect, one per line (optional; the panel's Vocabulary page and `auren vocab` edit it) |
 | `~/.local/state/auren/` | History, daemon log, herdr jobs, mascot position |
 | `~/.local/share/auren/` | The installed program and the voice model |
 

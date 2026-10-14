@@ -18,6 +18,8 @@ class _Quiet(daemon.Daemon):
     def __init__(self):
         self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", **tuning()}
         self.voice = None
+        self.profile = None
+        self.vocab = []
         self.refreshed = 0
 
     def _refresh_state(self):
@@ -177,6 +179,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     import asyncio
 
     _config_in(tmp_path, monkeypatch)
+    monkeypatch.setattr(daemon, "vocabulary", lambda profile: [])
     efforts = []
 
     async def set_claude(self, effort=None, model=None):
@@ -358,3 +361,24 @@ def test_the_talk_key_stops_an_answer_in_progress(tmp_path, monkeypatch, _no_not
     assert d.brain.interrupted == 2 and pressed == []
     assert any("Stopped" in cmd for cmd in _no_notices)
     assert asyncio.run(d.command("talk")) == "listening" and pressed == [False]     # idle: talk as before
+
+
+def test_reload_picks_up_new_vocabulary(tmp_path, monkeypatch):
+    import asyncio
+
+    _config_in(tmp_path, monkeypatch)
+    words = [["herdr"]]
+    monkeypatch.setattr(daemon, "vocabulary", lambda profile: words[0])
+
+    async def run():
+        d = _Quiet()
+        d.settings = settings.load()
+        d.brain, d.voice = _FakeBrain(), _FakeVoice()
+        assert await d.command("reload") == "Auren picked up the new words"
+        assert d.vocab == ["herdr"]
+        assert await d.command("reload") == "no changes"
+        words[0] = ["Zorblax", "herdr"]
+        assert await d.command("reload") == "Auren picked up the new words"
+        return d
+
+    assert asyncio.run(run()).vocab == ["Zorblax", "herdr"]

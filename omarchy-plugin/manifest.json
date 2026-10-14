@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "krvm",
   "license": "MIT",
-  "description": "Control Auren, the voice assistant: on/off, voice, brain, mascot, fresh start, updates.",
+  "description": "Control Auren, the voice assistant: on/off, voice, brain, mascot, vocabulary, fresh start, updates.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
