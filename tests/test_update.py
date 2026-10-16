@@ -150,6 +150,14 @@ def test_the_shell_stays_when_the_plugin_didnt_change(env):
     assert update.run() == 0 and env.shell == []
 
 
+def test_the_shell_restarts_when_the_mascot_qml_changed(env):
+    # the panel imports the mascot's QML for its live mascot, so the shell must reload it
+    env.install_info(env.first)
+    update.check()
+    commit(env.remote, "mascot/mascots/common/MascotBase.qml")
+    assert update.run() == 0 and env.shell == [True]
+
+
 def test_a_failed_install_goes_back(env):
     env.install_info(env.first)
     update.check()
