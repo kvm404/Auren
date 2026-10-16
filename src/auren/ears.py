@@ -103,10 +103,11 @@ class Listening:
         if not key:
             raise RuntimeError("no AssemblyAI key (ASSEMBLYAI_API_KEY in ~/.config/auren/secrets.env)")
         self.opened_at = time.perf_counter()
-        # The mic starts first so nothing said while the socket connects is lost.
+        # The mic starts first so nothing said while the socket connects is lost. It's always the default
+        # mic: WirePlumber otherwise remembers whichever mic an "Auren" stream was once moved to, for good.
         if not self.external:
             self.mic = await asyncio.create_subprocess_exec(
-                "pw-record", "-P", '{ node.name = "auren-ears" application.name = "Auren" }', *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+                "pw-record", "-P", '{ node.name = "auren-ears" application.name = "Auren" state.restore-target = false }', *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             self._tasks.append(asyncio.create_task(self._read_mic()))
         low, high = self.turn_silence or (10000, 10000)

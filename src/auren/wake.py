@@ -526,7 +526,8 @@ class HandsFree:
 
     async def _open_mic(self) -> None:
         self.mic = await asyncio.create_subprocess_exec(
-            "pw-record", "-P", f'{{ node.name = "{MIC_NAME}" application.name = "Auren" }}', *self.source,
+            "pw-record", "-P",                      # the default mic, never a remembered one (see ears.py)
+            f'{{ node.name = "{MIC_NAME}" application.name = "Auren" state.restore-target = false }}', *self.source,
             "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
 
