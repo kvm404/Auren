@@ -73,6 +73,7 @@ place() { # place <source> <target>: a link in dev mode, a fresh copy otherwise
   rm -rf -- "$2"
   if [[ $mode == dev ]]; then ln -s "$1" "$2"; else cp -r "$1" "$2"; fi
 }
+[[ -e $share/bar-plugin ]] && had_plugin=1 || had_plugin=
 place "$repo/mascot" "$share/mascot"
 place "$repo/omarchy-plugin" "$share/bar-plugin"
 
@@ -119,6 +120,8 @@ if command -v omarchy >/dev/null; then
   mkdir -p "$plugins"
   ln -sfn "$share/bar-plugin" "$plugins/krvm.auren"
   grep -q '"krvm.auren"' "$config/omarchy/shell.json" 2>/dev/null || omarchy plugin enable krvm.auren
+  # the running shell keeps the panel it loaded (auren update restarts it itself)
+  [[ -z $had_plugin || -n ${AUREN_UPDATE:-} ]] || warn "the bar plugin was replaced: omarchy restart shell (loads the new panel)"
 fi
 
 # ---- what's installed, for auren update ----------------------------------------------------------
