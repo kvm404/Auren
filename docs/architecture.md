@@ -75,8 +75,8 @@ It never changes what it can't put back: before touching anything it makes sure 
 in its clone (fetching it from the checkout it came from if GitHub doesn't have it), and a failed install
 (or one past 20 minutes, which stops everything it started) puts that commit back and installs it again;
 a `--dev` checkout goes back with `git reset --keep`. One check or update at a time (`update.lock`); a
-check doesn't replace the progress of a running update. If `omarchy-plugin/` changed, `omarchy restart
-shell` loads the new panel. Progress goes to `$XDG_RUNTIME_DIR/auren/update.json`, the install's output to
+check doesn't replace the progress of a running update. If `omarchy-plugin/` or `mascot/` changed (the panel
+imports the mascot's QML), `omarchy restart shell` loads the new panel. Progress goes to `$XDG_RUNTIME_DIR/auren/update.json`, the install's output to
 `~/.local/state/auren/update.log`. `install.json` notes whether the checkout had uncommitted changes, and
 the panel says an update replaces them.
 

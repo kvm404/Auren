@@ -14,7 +14,7 @@ runs that checkout's code: then the checkout itself is updated (fast-forward onl
 The update runs as its own transient systemd unit, so stopping Auren or restarting the bar doesn't stop
 it. It waits until Auren is idle, stops Auren and its mascot, runs the new install.sh, and starts them
 again as they were. If the install fails, the version that was there is installed back. If the bar
-plugin changed, the Omarchy shell is restarted to load it. Progress and the result go to
+plugin or the mascot's QML changed, the Omarchy shell is restarted to load it. Progress and the result go to
 $XDG_RUNTIME_DIR/auren/update.json (the bar panel shows it) and ~/.local/state/auren/update.log.
 """
 
@@ -43,6 +43,10 @@ LOG = STATE_DIR / "update.log"
 NOTIFIED = STATE_DIR / "update-notified"           # the newest version a notification was sent for
 LOCK = RUNTIME_DIR / "update.lock"
 UNITS = ("auren", "auren-mascot")
+# What the Omarchy shell loads: the bar plugin, and the mascot's QML, which the panel imports for its
+# live mascot. A change in either needs the shell restarted (it keeps what it already loaded).
+SHELL_PATHS = ("omarchy-plugin", "mascot")
+
 BUSY = {"starting", "listening", "thinking", "working", "speaking"}
 IDLE_WAIT = 15 * 60                                # how long an update waits for Auren to be idle
 INSTALL_TIMEOUT = 20 * 60
@@ -374,7 +378,7 @@ def _update() -> tuple[str, bool]:
             raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
                               "update from your checkout instead (git pull && ./install.sh)")
     plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
-                                     "omarchy-plugin"]).returncode != 0
+                                     *SHELL_PATHS]).returncode != 0
     _step("Waiting for Auren to finish…")
     _wait_idle()
     running = {u: _systemctl("is-active", "--quiet", u) == 0 for u in UNITS}
