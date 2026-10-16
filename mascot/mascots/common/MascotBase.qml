@@ -167,12 +167,14 @@ Item {
     }
   }
 
-  // Where the eyes look (-1..1): the pointer when hovered, otherwise by mood.
-  readonly property real lookXTarget: hovered ? (pointerX - 0.5) * 2
+  // Where the eyes look (-1..1): the pointer when hovered, otherwise by mood. The pointer is clamped:
+  // a caller measuring from a box larger than the body (the panel's card) can report past 0..1, and
+  // the eyes would leave the face.
+  readonly property real lookXTarget: hovered ? Math.max(-1, Math.min(1, (pointerX - 0.5) * 2))
                                     : mood === "thinking" ? (osc(0.22) > 0 ? 0.8 : -0.8)
                                     : mood === "working" ? osc(0.35) * 0.6
                                     : mood === "listening" ? 0 : glanceX
-  readonly property real lookYTarget: hovered ? (pointerY - 0.5) * 2
+  readonly property real lookYTarget: hovered ? Math.max(-1, Math.min(1, (pointerY - 0.5) * 2))
                                     : mood === "thinking" ? -0.9
                                     : mood === "working" ? 0.7
                                     : mood === "listening" ? -0.35 : glanceY
