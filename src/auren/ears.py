@@ -6,6 +6,7 @@
 
 Settings that matter (all measured in experiments/stt):
 - speech_model universal-3-5-pro (3.6 Pro answered in Hindi script on this voice)
+- language_codes ["en"]: Auren is English-only, and without it an Indian accent can come back as Hindi script
 - min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
 - keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
 - audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
@@ -63,6 +64,16 @@ def vocabulary(profile=None, limit: int = 100) -> list[str]:
     return out[:limit]
 
 
+def connection_params(vocab: list[str]) -> dict:
+    """The query parameters of the streaming connection."""
+    params = {"sample_rate": RATE, "encoding": "pcm_s16le", "speech_model": "universal-3-5-pro",
+              "language_codes": json.dumps(["en"]),
+              "min_turn_silence": 10000, "max_turn_silence": 10000}
+    if vocab:
+        params["keyterms_prompt"] = json.dumps(vocab[:100])
+    return params
+
+
 class Listening:
     """One push-to-talk turn."""
 
@@ -92,11 +103,7 @@ class Listening:
             "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         self._tasks.append(asyncio.create_task(self._read_mic()))
-        params = {"sample_rate": RATE, "encoding": "pcm_s16le", "speech_model": "universal-3-5-pro",
-                  "min_turn_silence": 10000, "max_turn_silence": 10000}
-        if self.vocab:
-            params["keyterms_prompt"] = json.dumps(self.vocab[:100])
-        self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(params)}", key)))
+        self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(connection_params(self.vocab))}", key)))
 
     async def _read_mic(self) -> None:
         while chunk := await self.mic.stdout.read(CHUNK):

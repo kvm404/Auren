@@ -18,6 +18,9 @@ daily dictation.
 - Endpoint `wss://streaming.assemblyai.com/v3/ws`, 16 kHz `pcm_s16le`, API key in the `Authorization` header.
 - Request `universal-3-5-pro` explicitly. The newer default, 3.6 Pro, was worse on the user's voice:
   it once answered in Hindi script and missed herdr/Voisu/Hyprland even when pinned to English.
+- **English only:** `language_codes=["en"]` (a JSON list) in the URL. Without it the model picks the
+  language itself, and an Indian accent sometimes came back as Hindi script, which Auren no longer
+  handles (the replies are English-only).
 - **Push-to-talk:** `min_turn_silence=10000` and `max_turn_silence=10000`, and send
   `{"type":"ForceEndpoint"}` when the key is released. Letting pauses end turns split sentences and
   added errors.
