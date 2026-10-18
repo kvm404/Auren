@@ -6,7 +6,8 @@
 
 Settings that matter (all measured in experiments/stt):
 - speech_model universal-3-5-pro (3.6 Pro answered in Hindi script on this voice)
-- language_codes ["en"]: Auren is English-only, and without it an Indian accent can come back as Hindi script
+- language_codes ["en"]: Auren is English-only. 3.5 Pro ignores it (Hindi speech still comes back in Devanagari);
+  it is sent for the models that honor it
 - min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
 - keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
 - audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
