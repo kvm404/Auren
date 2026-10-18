@@ -18,6 +18,11 @@ daily dictation.
 - Endpoint `wss://streaming.assemblyai.com/v3/ws`, 16 kHz `pcm_s16le`, API key in the `Authorization` header.
 - Request `universal-3-5-pro` explicitly. The newer default, 3.6 Pro, was worse on the user's voice:
   it once answered in Hindi script and missed herdr/Voisu/Hyprland even when pinned to English.
+- **English only:** `language_codes=["en"]` (a JSON list) in the URL. AssemblyAI documents it for 3.6 Pro;
+  **3.5 Pro accepts it but ignores it**: tested 2026-10-17, Hindi speech still comes back in Devanagari
+  (so did 3.6 Pro). The only hard English-only option found is `universal-streaming-english`: it never
+  writes Devanagari (Hindi comes out as phonetic Latin text) but it ignores the vocabulary
+  (herdr became "herdor") and drops punctuation. Not adopted yet.
 - **Push-to-talk:** `min_turn_silence=10000` and `max_turn_silence=10000`, and send
   `{"type":"ForceEndpoint"}` when the key is released. Letting pauses end turns split sentences and
   added errors.
