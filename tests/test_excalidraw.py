@@ -290,3 +290,16 @@ def test_the_paste_point_is_left_of_the_welcome_menu_in_a_half_screen_window_too
     for width in (600, 763, 1536):
         x, _ = ex._canvas_point({"at": (100, 0), "size": (width, 800)})
         assert 100 + 40 <= x <= 100 + width / 2 - 170
+
+
+def test_only_excalidraw_itself_is_taken_for_its_window(monkeypatch):
+    from auren.hands import desktop
+    wins = [{"class": "foot", "title": "auren on excalidraw-drawing", "focusHistoryID": 0},
+            {"class": "brave-browser", "title": "Draw in Excalidraw by kvm404 · Pull Request #19 - Brave",
+             "focusHistoryID": 1}]
+    monkeypatch.setattr(desktop, "windows", lambda: list(wins))
+    assert ex._find() is None
+    wins.append({"class": "brave-browser", "title": "Excalidraw Whiteboard - Brave", "focusHistoryID": 3})
+    assert ex._find()["focusHistoryID"] == 3                          # the page in a browser tab
+    wins.append({"class": "brave-excalidraw.com__-Default", "title": "Excalidraw Whiteboard", "focusHistoryID": 5})
+    assert ex._find()["focusHistoryID"] == 5                          # the web app comes first

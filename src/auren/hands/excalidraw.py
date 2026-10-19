@@ -504,10 +504,21 @@ def _copied(sentinel: str, timeout: float, old: set[str] = frozenset()) -> list[
 # --- the window ----------------------------------------------------------------------------------------
 
 def _find() -> dict | None:
+    """Excalidraw's window: an app (its class says so: the web app, or a desktop app), else a browser window
+    showing the page, whose title then starts with the page's own ("Excalidraw Whiteboard - Brave"). Never
+    just any window with the word in its title (a terminal on a branch, a page about Excalidraw): the keys
+    would go there. A browser tab that isn't the one showing can't be seen."""
     try:
-        return desktop.find_window("excalidraw")
+        wins = [w for w in desktop.windows() if w.get("mapped", True)]
     except desktop.DesktopError:
         return None
+
+    def score(w: dict) -> int:
+        if "excalidraw" in f"{w.get('class') or ''} {w.get('initialClass') or ''}".lower():
+            return 2
+        return 1 if (w.get("title") or "").lower().startswith("excalidraw whiteboard") else 0
+    hits = sorted((w for w in wins if score(w)), key=lambda w: (-score(w), w.get("focusHistoryID", 99)))
+    return hits[0] if hits else None
 
 
 def _open() -> dict:

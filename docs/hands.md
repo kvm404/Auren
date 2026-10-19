@@ -281,6 +281,10 @@ deleted: then Ctrl+A, Delete, and the same paste again, so a drawing that won't 
   The menu is about 300 px wide in the centre of an empty canvas and a pointer over it doesn't count as
   on the canvas: in a half-screen window the old spot (30 % across) landed on its Help button and every
   paste was dropped. The spot is now at most 200 px left of the middle.
+- The window is the one whose class says Excalidraw (the web app), else a browser window whose title
+  starts with "Excalidraw Whiteboard" (the page is the visible tab). Matching the word anywhere in a title
+  would pick a terminal on the `excalidraw-drawing` branch. A background tab can't be seen, so the web app
+  opens instead (same site storage, same drawing). Tested in a normal Brave tab too.
 - The clipboard is saved in one format (text, else PNG, else whatever was offered, such as copied files)
   because `wl-copy` serves one. Rich text comes back as plain text.
 - `wtype` uploads its own keymap, so apps that read the physical key (`event.code`) see the wrong one.
