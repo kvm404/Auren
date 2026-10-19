@@ -354,9 +354,8 @@ def press_code(combo: str) -> str:
                 kb.write(e.EV_KEY, c, 1); kb.syn()
             kb.write(e.EV_KEY, key, 1); kb.syn()
             time.sleep(0.04)
-            kb.write(e.EV_KEY, key, 0); kb.syn()
-        finally:
-            for c in reversed(mods):
+        finally:                               # never leave the digit or a modifier held down
+            for c in (key, *reversed(mods)):
                 kb.write(e.EV_KEY, c, 0); kb.syn()
     return f"pressed {combo}"
 

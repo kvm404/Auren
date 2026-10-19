@@ -68,7 +68,7 @@ MERMAID_SHAPES = ("flowchart", "graph", "sequenceDiagram", "classDiagram", "stat
 MERMAID_TYPES = (*MERMAID_SHAPES, "journey", "gantt", "pie", "quadrantChart", "requirementDiagram", "gitGraph",
                  "C4Context", "mindmap", "timeline", "zenuml", "sankey", "xychart", "block")
 
-_drawn: set[str] = set()                # ids of the elements Auren pasted (as Excalidraw named them)
+_drawn: dict[str, int] = {}             # the elements Auren pasted (as Excalidraw named them): id -> version
 
 
 class ExcalidrawError(RuntimeError):
@@ -440,9 +440,11 @@ def _clip_types() -> list[str]:
 
 
 def _save_clipboard() -> tuple[str, bytes] | None:
-    """What's on the clipboard now, in the one format worth putting back (text, else a PNG)."""
+    """What's on the clipboard now, in the one format worth putting back (text, else a PNG, else whatever it
+    is, such as copied files). wl-copy serves one format, so a copy that offered several keeps only that one."""
     types = _clip_types()
-    kind = next((t for t in ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "image/png") if t in types), None)
+    kind = next((t for t in ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "image/png") if t in types),
+                next((t for t in types if "/" in t), None))
     if kind is None:
         return None
     p = subprocess.run(["wl-paste", "--no-newline", "--type", kind], capture_output=True, timeout=5)
@@ -526,9 +528,10 @@ def _open() -> dict:
 
 def _canvas_point(w: dict) -> tuple[int, int]:
     """An empty part of the canvas: left of the middle, below it. Clear of the toolbar (top), the style panel
-    (left edge), the welcome screen's menu (centre) and the zoom and help buttons (bottom corners)."""
+    (left edge), the welcome screen's menu (centre, about 300 wide: a pointer over it doesn't count as on the
+    canvas, so a paste there is dropped) and the zoom and help buttons (bottom corners)."""
     (x, y), (width, height) = w["at"], w["size"]
-    px = x + max(width * 0.3, min(260, width * 0.45))
+    px = x + min(260, max(60, width / 2 - 200))
     return round(px), round(y + height * 0.62)
 
 
@@ -552,16 +555,22 @@ def _ready(open_it: bool) -> tuple[dict, tuple[int, int], bool]:
 
 # --- what the tools do ---------------------------------------------------------------------------------
 
-def _extent(elements: list[dict]) -> tuple[float, float, float, float]:
-    """The bounds (x1, y1, x2, y2) of Excalidraw elements on the canvas."""
+def _extent(elements: list[dict], turned: bool = False) -> tuple[float, float, float, float]:
+    """The bounds (x1, y1, x2, y2) of Excalidraw elements on the canvas. turned: as rotated elements really
+    reach (else unrotated, as the drawing was built)."""
     xs, ys = [], []
     for x in elements:
-        if x.get("points"):
-            xs += [x["x"] + p[0] for p in x["points"]]
-            ys += [x["y"] + p[1] for p in x["points"]]
-        else:
-            xs += [x.get("x", 0), x.get("x", 0) + x.get("width", 0)]
-            ys += [x.get("y", 0), x.get("y", 0) + x.get("height", 0)]
+        ox, oy, w, h = x.get("x", 0), x.get("y", 0), x.get("width", 0), x.get("height", 0)
+        pts = [(ox + p[0], oy + p[1]) for p in x["points"]] if x.get("points") else \
+            [(ox, oy), (ox + w, oy), (ox, oy + h), (ox + w, oy + h)]
+        angle = x.get("angle") or 0
+        if turned and angle:                 # Excalidraw turns an element about the middle of its box
+            cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+            cy = (min(p[1] for p in pts) + max(p[1] for p in pts)) / 2
+            c, s = math.cos(angle), math.sin(angle)
+            pts = [(cx + (px - cx) * c - (py - cy) * s, cy + (px - cx) * s + (py - cy) * c) for px, py in pts]
+        xs += [p[0] for p in pts]
+        ys += [p[1] for p in pts]
     return (min(xs), min(ys), max(xs), max(ys)) if xs else (0, 0, 0, 0)
 
 
@@ -575,6 +584,17 @@ def _paste(payload: str, pt: tuple[int, int], timeout: float, old: set[str]) -> 
     screen.press_keys("ctrl+v")
     time.sleep(0.4)
     return _copied(payload, timeout, old)
+
+
+def _delete(landed: list[dict]) -> None:
+    """Delete the paste, which must still be the selection: never something the user picked meanwhile."""
+    probe = f"auren-excalidraw-probe-{time.time()}"
+    _copy(probe.encode())
+    now = _copied(probe, 1.5)
+    if now is None or {x.get("id") for x in now} != {x.get("id") for x in landed}:
+        raise ExcalidrawError("the selection changed while I was drawing, so I left the drawing where it landed: "
+                              "look at the screen")
+    screen.press_keys("Delete")
 
 
 def _pan(w: dict, dx: float, dy: float) -> None:
@@ -597,14 +617,17 @@ def _move(landed: list[dict], target: tuple[float, float], w: dict, pt: tuple[in
     take the paste away again, move the canvas under the pointer by the difference, and paste again. The zoom
     was reset to 100 %, so a screen pixel is a canvas pixel; if it's off anyway, the miss tells by how much."""
     zoom = 1.0
-    for _ in range(3):
+    for tries in range(4):
         x1, y1, _, _ = _extent(landed)
         sx, sy = target[0] - x1, target[1] - y1
         log.debug("drawing at %.0f, %.0f; wanted at %.0f, %.0f (zoom %.2f)", x1, y1, *target, zoom)
         if abs(sx) <= 2 and abs(sy) <= 2:
             break
+        if tries == 3:
+            raise ExcalidrawError(f"the drawing landed {max(abs(sx), abs(sy)):.0f} canvas pixels from its place and "
+                                  "moving it didn't help: look at the screen")
         old = old | {x.get("id") for x in landed}
-        screen.press_keys("Delete")          # the paste is still selected
+        _delete(landed)                      # the paste is still selected
         _pan(w, -sx * zoom, -sy * zoom)
         again = _paste(payload, pt, timeout, old)
         if again is None:
@@ -646,14 +669,9 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
         _copy(probe.encode())
         w, pt, opened = _ready(open_it=True)
         screen.press_keys("ctrl+a")
-        if clear:
-            screen.press_keys("Delete")
-            _drawn.clear()
-            existing = []
-        else:
-            time.sleep(0.1)
-            existing = _copied(probe, 2) or []
-            screen.press_keys("Escape")
+        time.sleep(0.1)
+        existing = _copied(probe, 2) or []
+        screen.press_keys("Escape")
         old = {x.get("id") for x in existing}
         if reach:
             missing = reach - old
@@ -675,15 +693,26 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
             raise ExcalidrawError("Excalidraw didn't take the drawing (nothing new got selected). Look at the "
                                   "screen: a dialog or a text box may be open")
         if mermaid.strip() and all(x.get("type") == "text" for x in landed):
-            screen.press_keys("Delete")       # Excalidraw couldn't read the Mermaid and pasted it as text
+            _delete(landed)                   # Excalidraw couldn't read the Mermaid and pasted it as text
             raise ExcalidrawError("Excalidraw couldn't read that Mermaid definition: check its syntax")
+        if clear:
+            # only now the new drawing is known to paste: empty the canvas (it with it) and paste it again
+            screen.press_keys("ctrl+a")
+            screen.press_keys("Delete")
+            _drawn.clear()
+            old |= {x.get("id") for x in landed}
+            landed = _paste(payload, pt, timeout, old)
+            if landed is None:
+                raise ExcalidrawError("I cleared the canvas but Excalidraw didn't take the drawing again: Ctrl+Z in "
+                                      "Excalidraw brings the old drawing back")
+            existing = []
         if existing:
-            there = _extent(existing)
+            there = _extent(existing, turned=True)
             if place == "exact" and corner:
                 landed = _move(landed, corner, w, pt, payload, timeout, old)
-            elif _overlap(_extent(landed), there):
+            elif _overlap(_extent(landed, turned=True), there):
                 landed = _move(landed, (there[2] + 100, there[1]), w, pt, payload, timeout, old)
-        _drawn.update(x["id"] for x in landed if x.get("id"))
+        _drawn.update({x["id"]: x.get("version", 0) for x in landed if x.get("id")})
         screen.press_code("shift+2")          # into view, zoomed out if it's bigger than the window
         time.sleep(0.2)
         screen.press_keys("Escape")
@@ -718,14 +747,27 @@ def scene() -> list[dict]:
 
 
 def drawn_by_auren(elements: list[dict]) -> bool:
-    """Is everything on the canvas something Auren drew (so clearing it loses none of the user's work)?"""
-    return all(x.get("id") in _drawn for x in elements)
+    """Is everything on the canvas something Auren drew and nobody changed since (so clearing it loses none of
+    the user's work)? Excalidraw raises an element's version whenever it's edited."""
+    return all(x.get("id") in _drawn and x.get("version", 0) == _drawn[x["id"]] for x in elements)
+
+
+def fingerprint(elements: list[dict]) -> list[tuple[str, int]]:
+    """What's on the canvas, to tell whether it changed: each element's id and version."""
+    return sorted((x.get("id", ""), x.get("version", 0)) for x in elements)
+
+
+_FONT_NAMES = {1: "hand", 5: "hand", 2: "normal", 6: "normal", 3: "code", 8: "code"}
 
 
 def summary(elements: list[dict]) -> dict:
     """The canvas for the brain: each element with what's needed to redraw or change it, in the same form
-    excalidraw_draw takes (absolute points, labels folded into their shapes)."""
-    labels = {x.get("containerId"): x.get("text", "") for x in elements if x.get("type") == "text" and x.get("containerId")}
+    excalidraw_draw takes (absolute points, labels folded into their shapes, styles that aren't the usual)."""
+    labels = {x.get("containerId"): x for x in elements if x.get("type") == "text" and x.get("containerId")}
+    children: dict[str, list] = {}
+    for x in elements:
+        if x.get("frameId"):
+            children.setdefault(x["frameId"], []).append(x.get("id"))
     items = []
     for x in elements:
         if x.get("type") == "text" and x.get("containerId"):
@@ -734,26 +776,46 @@ def summary(elements: list[dict]) -> dict:
                 "width": round(x.get("width", 0)), "height": round(x.get("height", 0))}
         if x.get("type") == "text":
             item["text"] = x.get("text", "")
-            item["fontSize"] = x.get("fontSize")
-        if x.get("id") in labels:
-            item["label"] = labels[x["id"]]
+        text = labels.get(x.get("id")) or (x if x.get("type") == "text" else None)
+        if text is not x and text:
+            item["label"] = text.get("text", "")
+        if text and text.get("fontSize", 20) != 20:
+            item["fontSize"] = text["fontSize"]
+        if text and _FONT_NAMES.get(text.get("fontFamily"), "hand") != "hand":
+            item["font"] = _FONT_NAMES[text["fontFamily"]]
         for key in ("strokeColor", "backgroundColor"):
             if x.get(key) and x[key] not in ("#1e1e1e", "transparent"):
                 item[key] = x[key]
         if x.get("type") in ("rectangle", "diamond"):
             item["rounded"] = bool(x.get("roundness"))
-        for key, usual in (("roughness", 1), ("strokeStyle", "solid"), ("strokeWidth", 2)):
+        if x.get("backgroundColor", "transparent") != "transparent" and x.get("fillStyle", "solid") != "solid":
+            item["fillStyle"] = x["fillStyle"]
+        for key, usual in (("roughness", 1), ("strokeStyle", "solid"), ("strokeWidth", 2), ("opacity", 100)):
             if x.get(key, usual) != usual:
                 item[key] = x[key]
+        if x.get("angle"):
+            item["rotate"] = round(math.degrees(x["angle"])) % 360
         if x.get("type") in ("arrow", "line", "freedraw") and x.get("points"):
             pts = x["points"]
             if len(pts) > 24:
                 pts = pts[:: math.ceil(len(pts) / 24)] + [pts[-1]]
             item["points"] = [[round(x["x"] + p[0]), round(x["y"] + p[1])] for p in pts]
             del item["width"], item["height"]
+        if x.get("type") in ("arrow", "line"):
+            if x.get("elbowed"):
+                item["elbow"] = True
+            elif x.get("roundness"):
+                item["smooth"] = True
+            ends = (None, "arrow") if x["type"] == "arrow" else (None, None)
+            for key, usual in zip(("startArrowhead", "endArrowhead"), ends, strict=True):
+                if x.get(key, usual) != usual:
+                    item[key] = x.get(key)
         for key, name in (("startBinding", "start"), ("endBinding", "end")):
             if isinstance(x.get(key), dict) and x[key].get("elementId"):
                 item[name] = x[key]["elementId"]
+        if x.get("type") == "frame":
+            item["name"] = x.get("name") or ""
+            item["children"] = children.get(x.get("id"), [])
         if x.get("groupIds"):
             item["group"] = x["groupIds"][-1]
         items.append(item)

@@ -122,11 +122,58 @@ def test_a_paste_is_moved_to_its_place_even_when_the_zoom_isnt_what_was_assumed(
 
     monkeypatch.setattr(ex, "_paste", paste)
     monkeypatch.setattr(ex, "_pan", pan)
-    monkeypatch.setattr(screen, "press_keys", lambda keys: None)
+    monkeypatch.setattr(ex, "_delete", lambda landed: None)
     first = paste("", None, 0, set())
     landed = ex._move(first, (1200, 100), {}, (0, 0), "", 3, set())
     assert abs(landed[0]["x"] - 1200) <= 2 and abs(landed[0]["y"] - 100) <= 2
     assert len(pasted) == 3                            # the first paste, a miss, then on target
+
+    monkeypatch.setattr(ex, "_pan", lambda w, dx, dy: None)                  # panning does nothing at all
+    with pytest.raises(ex.ExcalidrawError, match="moving it didn't help"):
+        ex._move(paste("", None, 0, set()), (0, 0), {}, (0, 0), "", 3, set())
+
+
+def test_only_the_paste_is_deleted_never_what_the_user_selected_meanwhile(monkeypatch):
+    pressed = []
+    monkeypatch.setattr(ex, "_copy", lambda data, kind=None, sensitive=True: None)
+    monkeypatch.setattr(screen, "press_keys", pressed.append)
+    monkeypatch.setattr(ex, "_copied", lambda sentinel, timeout, old=frozenset(): [{"id": "theirs"}])
+    with pytest.raises(ex.ExcalidrawError, match="selection changed"):
+        ex._delete([{"id": "p1"}, {"id": "p2"}])
+    assert pressed == []
+    monkeypatch.setattr(ex, "_copied", lambda sentinel, timeout, old=frozenset(): [{"id": "p2"}, {"id": "p1"}])
+    ex._delete([{"id": "p1"}, {"id": "p2"}])
+    assert pressed == ["Delete"]
+
+
+@pytest.fixture
+def desk(monkeypatch):
+    """Excalidraw on a fake desktop: the canvas holds the user's drawing; pastes come back as `pastes` says."""
+    d = {"keys": [], "pastes": []}
+    monkeypatch.setattr(ex, "_need_clipboard", lambda: None)
+    monkeypatch.setattr(ex, "_save_clipboard", lambda: ("text/plain", b"theirs"))
+    monkeypatch.setattr(ex, "_restore_clipboard", lambda saved: d.setdefault("restored", saved))
+    monkeypatch.setattr(ex, "_copy", lambda data, kind=None, sensitive=True: None)
+    monkeypatch.setattr(ex, "_ready", lambda open_it: ({}, (0, 0), False))
+    monkeypatch.setattr(ex, "_copied", lambda sentinel, timeout, old=frozenset(): [
+        {"id": "theirs", "type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 50}])
+    monkeypatch.setattr(ex, "_paste", lambda payload, pt, timeout, old: d["pastes"].pop(0))
+    monkeypatch.setattr(screen, "press_keys", d["keys"].append)
+    monkeypatch.setattr(screen, "press_code", d["keys"].append)
+    return d
+
+
+def test_clearing_deletes_the_old_drawing_only_once_the_new_one_has_pasted(desk):
+    desk["pastes"] = [None]
+    with pytest.raises(ex.ExcalidrawError, match="didn't take"):
+        ex.draw([{"type": "rectangle", "x": 0, "y": 0}], clear=True)
+    assert "Delete" not in desk["keys"] and desk["restored"] == ("text/plain", b"theirs")
+
+    desk["keys"].clear()
+    new = [{"id": "n1", "type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 50, "version": 3}]
+    desk["pastes"] = [new, new]
+    assert ex.draw([{"type": "rectangle", "x": 0, "y": 0}], clear=True).startswith("cleared the canvas")
+    assert desk["keys"].count("Delete") == 1 and ex._drawn == {"n1": 3}
 
 
 def test_reading_the_canvas_folds_labels_into_shapes_and_knows_what_auren_drew(monkeypatch):
@@ -141,10 +188,35 @@ def test_reading_the_canvas_folds_labels_into_shapes_and_knows_what_auren_drew(m
     assert r["label"] == "Box" and r["rounded"] is False and r["backgroundColor"] == "#a5d8ff"
     assert a["points"] == [[100, 25], [180, 25]] and a["start"] == "r" and "end" not in a
     assert len(s["elements"]) == 2 and s["count"] == 3
-    monkeypatch.setattr(ex, "_drawn", {"r", "t"})
+    monkeypatch.setattr(ex, "_drawn", {"r": 0, "t": 0})
     assert not ex.drawn_by_auren(elements)
-    monkeypatch.setattr(ex, "_drawn", {"r", "t", "a"})
+    monkeypatch.setattr(ex, "_drawn", {"r": 0, "t": 0, "a": 0})
     assert ex.drawn_by_auren(elements)
+    elements[1]["version"] = 2                                     # the user edited the label since
+    assert not ex.drawn_by_auren(elements)
+
+
+def test_a_drawing_read_back_redraws_as_it_was():
+    elements = [{"id": "f", "type": "frame", "x": 0, "y": 0, "width": 400, "height": 300, "name": "Plan"},
+                {"id": "r", "type": "rectangle", "x": 10, "y": 10, "width": 100, "height": 50, "frameId": "f",
+                 "angle": 3.14159 / 2, "opacity": 60, "backgroundColor": "#a5d8ff", "fillStyle": "hachure"},
+                {"id": "t", "type": "text", "x": 20, "y": 200, "width": 50, "height": 20, "text": "Hi",
+                 "fontSize": 28, "fontFamily": 8, "frameId": "f"},
+                {"id": "a", "type": "arrow", "x": 0, "y": 0, "points": [[0, 0], [50, 50]], "elbowed": True,
+                 "startArrowhead": "dot", "endArrowhead": "arrow"}]
+    f, r, t, a = ex.summary(elements)["elements"]
+    assert f["name"] == "Plan" and f["children"] == ["r", "t"]
+    assert (r["rotate"], r["opacity"], r["fillStyle"]) == (90, 60, "hachure")
+    assert (t["fontSize"], t["font"]) == (28, "code")
+    assert a["elbow"] and a["startArrowhead"] == "dot" and "endArrowhead" not in a
+    ex.build([f, r, t, a])                                         # and it builds again
+
+
+def test_what_is_beside_counts_rotated_shapes_as_they_reach():
+    tall = {"type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 1000, "angle": 3.14159265 / 2}
+    assert ex._extent([tall]) == (0, 0, 100, 1000)
+    x1, y1, x2, y2 = ex._extent([tall], turned=True)
+    assert (round(x1), round(y1), round(x2), round(y2)) == (-450, 450, 550, 550)
 
 
 @pytest.fixture
@@ -166,9 +238,21 @@ def test_clearing_the_users_work_asks_first_but_clearing_aurens_own_does_not(rt,
     canvas.append({"id": "more", "type": "ellipse"})                 # the user drew more meanwhile
     assert "canvas changed" in rt.call("daemon", "confirm_action", {"token": asked["token"]})[0]
 
-    monkeypatch.setattr(ex, "_drawn", {"theirs", "more"})          # all of it Auren's own drawing
+    monkeypatch.setattr(ex, "_drawn", {"theirs": 0, "more": 0})    # all of it Auren's own drawing
     assert rt.call("daemon", "excalidraw_draw", {"mermaid": "flowchart LR\n A-->B", "clear": True}) == ["drew it"]
     assert drawn == [True]
+
+
+def test_clearing_a_canvas_that_cant_be_read_clears_nothing(rt, monkeypatch):
+    """Closed (opening it brings back the user's drawing) or unreadable: draw beside, don't clear unasked."""
+    drawn = []
+
+    def closed():
+        raise ex.ExcalidrawError("Excalidraw isn't open")
+    monkeypatch.setattr(ex, "scene", closed)
+    monkeypatch.setattr(ex, "draw", lambda elements, mermaid, clear, place: drawn.append(clear) or "drew it")
+    assert rt.call("daemon", "excalidraw_draw", {"mermaid": "flowchart LR\n A-->B", "clear": True}) == ["drew it"]
+    assert drawn == [False]
 
 
 def test_the_brain_is_told_to_draw_with_the_tool_only_when_it_has_it():
@@ -180,3 +264,29 @@ def test_the_brain_is_told_to_draw_with_the_tool_only_when_it_has_it():
 def test_physical_keys_are_only_modifiers_and_digits():
     with pytest.raises(screen.ScreenError, match="modifiers and a digit"):
         screen.press_code("ctrl+q")
+
+
+def test_a_physical_key_is_let_go_even_when_pressing_it_fails(monkeypatch):
+    from evdev import ecodes as e
+    up = []
+
+    class Keyboard:
+        def write(self, kind, code, value):
+            if value == 0:
+                up.append(code)
+            elif code == e.KEY_2:
+                raise OSError("the device went away")
+
+        def syn(self):
+            pass
+    monkeypatch.setattr(screen, "_refocus", lambda: None)
+    monkeypatch.setattr(screen, "_keys", Keyboard)
+    with pytest.raises(OSError):
+        screen.press_code("shift+2")
+    assert up == [e.KEY_2, e.KEY_LEFTSHIFT]
+
+
+def test_the_paste_point_is_left_of_the_welcome_menu_in_a_half_screen_window_too():
+    for width in (600, 763, 1536):
+        x, _ = ex._canvas_point({"at": (100, 0), "size": (width, 800)})
+        assert 100 + 40 <= x <= 100 + width / 2 - 170

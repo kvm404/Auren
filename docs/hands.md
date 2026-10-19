@@ -243,7 +243,7 @@ out with mermaid-to-excalidraw. `hands/excalidraw.py` uses both, so a whole draw
 | Tool | How |
 |---|---|
 | `excalidraw_draw(elements \| mermaid, place, clear)` | Builds the skeletons, puts them on the clipboard (`wl-copy --sensitive`), and presses Ctrl+V over the canvas. Then Ctrl+C copies the selection back, which proves the paste landed. Shift+2 scrolls it into view. The user's clipboard is put back afterwards |
-| `excalidraw_read()` | Ctrl+A, Ctrl+C: the canvas as Excalidraw's own clipboard JSON, cut down to ids, boxes, labels, colours and arrow ends, in the form `excalidraw_draw` takes |
+| `excalidraw_read()` | Ctrl+A, Ctrl+C: the canvas as Excalidraw's own clipboard JSON, cut down to ids, boxes, labels, arrow ends and every style that isn't the default (colours, fonts, rotation, opacity, fill style, arrowheads, frames), in the form `excalidraw_draw` takes, so a drawing read back redraws as it was |
 
 What the builder adds on top of Excalidraw's format:
 - Colour names from Excalidraw's palette (`light-blue` fill, `dark-blue` stroke, `blue` in between), and
@@ -259,19 +259,30 @@ What the builder adds on top of Excalidraw's format:
 **Placement.** Excalidraw always pastes at the pointer and ignores the elements' own coordinates. Before
 pasting, the tool copies the canvas. If there's something there, it resets the zoom to 100 % (Shift+0),
 pastes, reads back where the paste landed, and if that's wrong, deletes it, pans the canvas by the
-difference with middle-button drags, and pastes again. A miss also measures the real zoom (a browser
+difference with middle-button drags, and pastes again. Before deleting, it copies the selection once more
+and stops if it isn't exactly the paste (the user may have clicked something meanwhile). A miss also measures the real zoom (a browser
 zoom level breaks the 1:1 guess), and the second try corrects for it. `place="beside"` puts a new drawing
 100 px right of what's there. `place="exact"` keeps the brain's coordinates, for additions to a drawing it
 read. Arrows may start or end at shapes already on the canvas. They are aimed from the canvas geometry but
-can't be attached, because Excalidraw only binds within one paste, and the result says so.
+can't be attached, because Excalidraw only binds within one paste, and the result says so. If three moves
+don't get it within 2 px, the tool says so instead of reporting success. "Beside" measures rotated shapes as
+they really reach. Locked elements aren't selected by Ctrl+A, so they're invisible to placement.
 
 **Clear.** `clear` empties the canvas first. If everything on it is something Auren pasted in this run
-(ids remembered from the copy-back), it just does it. Otherwise it asks (kind `files`), bound to the ids
-it saw.
+and nobody changed since (id and version remembered from the copy-back; Excalidraw raises an element's
+version on every edit), it just does it. Otherwise it asks (kind `files`), bound to the ids and versions
+it saw. If the canvas can't be read (Excalidraw closed, which reopens the user's saved drawing, or the
+copy failed), it clears nothing and draws beside. The new drawing is pasted and checked before anything is
+deleted: then Ctrl+A, Delete, and the same paste again, so a drawing that won't paste leaves the old one.
 
 **Gotchas found live:**
 - Paste only works with the pointer over the canvas and no text box focused, so the tool points at an
-  empty spot (left of centre, below the welcome screen's menu), presses Escape, Escape, V and clicks.
+  empty spot (left of the welcome screen's menu, below the middle), presses Escape, Escape, V and clicks.
+  The menu is about 300 px wide in the centre of an empty canvas and a pointer over it doesn't count as
+  on the canvas: in a half-screen window the old spot (30 % across) landed on its Help button and every
+  paste was dropped. The spot is now at most 200 px left of the middle.
+- The clipboard is saved in one format (text, else PNG, else whatever was offered, such as copied files)
+  because `wl-copy` serves one. Rich text comes back as plain text.
 - `wtype` uploads its own keymap, so apps that read the physical key (`event.code`) see the wrong one.
   Excalidraw's Shift+2 and Shift+0 are such shortcuts, so they come from the uinput keyboard
   (`screen.press_code`, digits only, which sit on the same keys in every layout). Letters stay on `wtype`.

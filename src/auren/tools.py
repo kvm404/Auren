@@ -785,13 +785,16 @@ def excalidraw_draw(elements: list[dict] | None = None, mermaid: str = "", place
     try:
         before = excalidraw.scene()
     except (excalidraw.ExcalidrawError, screen.ScreenError, desktop.DesktopError):
-        before = []                                       # not open yet: nothing to lose
+        before = []
+    if not before:
+        # empty, closed (opening it may bring back a drawing) or unreadable: clear nothing, draw beside
+        return _run(excalidraw.draw, elements, mermaid, False, place)
     if excalidraw.drawn_by_auren(before):
         return _run(excalidraw.draw, elements, mermaid, True, place)
-    ids = sorted(x.get("id", "") for x in before)
+    seen = excalidraw.fingerprint(before)
 
     def check() -> None:
-        if sorted(x.get("id", "") for x in excalidraw.scene()) != ids:
+        if excalidraw.fingerprint(excalidraw.scene()) != seen:
             raise PermissionError("the canvas changed since you asked: ask the user again")
     n = f"{len(before)} element{'s' if len(before) != 1 else ''}"
     return _gate({safety.FILES}, f"Clear the Excalidraw canvas ({n}; Excalidraw's undo brings them back) and draw "
