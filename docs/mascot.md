@@ -42,7 +42,7 @@ Both characters show every state (their poses are in the table above); the bubbl
 | thinking | thinking pose | what you said |
 | working | typing; holds a clicking pointer when it uses the mouse | what it's doing ("Opening WhatsApp", "Clicking Allow button") |
 | speaking | moves with the voice's loudness | the sentence being spoken (captions) |
-| waiting for a yes/no | head tilt, "?" | the question + "Hold to answer yes or no" |
+| waiting for a yes/no | head tilt, "?" | the question(s), a **Yes** and a **No** button (the only part of the bubble that takes clicks), and "Or Super+A, then say yes or no" |
 | error | X eyes | the error |
 | off (daemon not running) | grey, asleep | on hover: "click to start" |
 

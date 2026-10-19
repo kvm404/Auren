@@ -36,6 +36,7 @@ Always present:
 | `voiceName` | Supertonic voice (`F2`, `M3`, …) |
 | `voices` | Voices available |
 | `tts` | `{speed, steps, volume, pause}` |
+| `safety` | Approval level: `ask`, `task` or `free` ([safety.md](safety.md#approval-levels)) |
 
 Sometimes present:
 
@@ -45,7 +46,7 @@ Sometimes present:
 | `tool`, `mouse` | working: the tool being run; `mouse` true for screen control |
 | `fresh` | listening: a fresh conversation was asked for |
 | `reply`, `silent` | speaking: the whole reply; `silent` when the voice is off (bubble only) |
-| `awaiting`, `question`, `until` | idle: a yes/no question is open until `until` |
+| `awaiting`, `question`, `until` | idle: yes/no question(s) are open until `until`. `question` is the text of every question one answer covers (several: one per line, each starting with `• `) |
 
 ## Socket commands
 
@@ -65,7 +66,9 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `tts speed X steps N volume X pause X` / `tts reset` | Voice tuning |
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
-| `status` | JSON: state, brain, mode, effort, voice |
+| `safety ask\|task\|free` | How much Auren asks before risky actions (saved in `config.toml`) |
+| `yes` / `no` | Answer the question(s) it is waiting on (the bubble's and the panel's buttons send these; bind them to keys if you like). The reply says how many were approved or dropped, or that nothing is waiting |
+| `status` | JSON: state, brain, mode, effort, voice, safety |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
 | `quit` | Stop the daemon |
 
@@ -73,7 +76,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[brain]` (mode, effort). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[brain]` (mode, effort), `[safety]` (level). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
