@@ -4,7 +4,8 @@
 #   tests/panel/preview.sh [out-dir] [shots]
 #
 # shots: a comma list of page[:state], pages 0-5 (Home, Mascot, Voice, Brain, Vocabulary, Updates), states:
-# available, confirm, updating, failed (Updates page), refused (Vocabulary page), cursor, nav, down (the keyboard cursor; down goes to the page's last row).
+# available, confirm, updating, failed (Updates page), refused (Vocabulary page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
+# awaiting (Auren is asking two yes/no questions: every page of that run shows it).
 # PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does.
 #
 # It runs a separate Quickshell off-screen with Omarchy's own UI parts, except the popup window and the
@@ -41,8 +42,10 @@ theme="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
 bash -c 'exec -a auren-preview sleep 600' & keeper=$!
 trap 'kill $keeper 2>/dev/null; rm -rf "$tmp"' EXIT
 now=$(date +%s)
-printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1}}' \
-  "$now" "$keeper" >"$tmp/run/auren/state.json"
+asking=''
+[[ ,$shots, != *:awaiting,* ]] || asking=",\"awaiting\":true,\"question\":\"• Close Calculator “Calc”?\\n• Run \`rm -r old-notes\`? It can change your system or data (rm).\",\"until\":$((now + 300))"
+printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","safety":"ask","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1}%s}' \
+  "$now" "$keeper" "$asking" >"$tmp/run/auren/state.json"
 # A stand-in for `auren vocab`, with a few words of the user's own.
 mkdir -p "$tmp/data/auren/venv/bin"
 cat >"$tmp/data/auren/venv/bin/auren" <<'SH'

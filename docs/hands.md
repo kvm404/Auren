@@ -137,7 +137,7 @@ Without Open Browser Use (or with `integrations.browser = false`) the browser to
 | `browser_type(target, text, submit)`, `browser_scroll` | Type into a field; scroll |
 | `browser_bookmarks`, `recent_downloads`, `browser_close` | Bookmark names (URLs with long tokens are shortened in output); recent files; close Auren's tabs |
 
-**Safety.** Clicks on buy, pay, send, post, submit, delete and similar labels need confirmation. Page text is wrapped as untrusted.
+**Safety.** Clicks on buy, pay, send, post, submit, delete and similar labels need confirmation (at the default approval level, see [safety.md](safety.md#approval-levels)). Page text is wrapped as untrusted.
 
 **Lessons from the first real site (IITM Seek, Google Drive):**
 - **Chrome doesn't lay out background tabs,** so their visible text is empty (Drive rows read as nothing). Auren brings its tab to the front before reading or clicking (CDP `Page.bringToFront`).

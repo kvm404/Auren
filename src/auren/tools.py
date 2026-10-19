@@ -13,9 +13,10 @@ redeemable. `cancel` refuses further tool calls until the next message. `acted` 
 something that shouldn't be repeated has run in this turn (then a backup brain mustn't start over).
 
 Every tool returns plain text (or JSON text). Errors come back as text starting with "error:" so the
-brain can tell the user what went wrong. Risky tools go through auren.safety: they return a question
-and a token, and only `confirm_action` in a later user turn runs them. Text that comes from panes, the
-screen or the web is wrapped as untrusted.
+brain can tell the user what went wrong. Risky tools go through auren.safety: by the approval level
+(`Runtime.level`) they run, or return a question and a token. A yes runs the questions waiting: the
+daemon's, for a plain answer it read itself (`Runtime.answer`), or the brain's `confirm_action` in a later
+user turn. Text that comes from panes, the screen or the web is wrapped as untrusted.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import socketserver
 import threading
 import traceback
@@ -82,6 +84,15 @@ class Session:
 
 
 @dataclass
+class Outcome:
+    """What became of one question the user answered."""
+    question: str
+    ok: bool
+    result: str
+    say: str | None = None          # nothing for the brain to add: this is all that is said
+
+
+@dataclass
 class _Call:
     runtime: Runtime
     session: str
@@ -97,6 +108,7 @@ class Runtime:
         self.socket = socket
         self.profile = Profile()
         self.confirmations = safety.Confirmations()
+        self.level = "ask"                  # the approval level (safety.LEVELS); the daemon keeps it in step with config.toml
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._server: socketserver.ThreadingUnixStreamServer | None = None
@@ -105,11 +117,27 @@ class Runtime:
         with self._lock:
             return self._sessions.setdefault(sid, Session())
 
-    def new_turn(self, sid: str) -> int:
-        """A new user message in this session."""
+    def new_turn(self, sid: str, same_task: bool = False) -> int:
+        """A new user message in this session. It ends the previous task, so a yes that covered it
+        (level "task") stops covering anything; same_task: this continues that task (an answer to its
+        question, or the brain going on after one), so what it covered and what already ran still count."""
         s = self._session(sid)
-        s.turn, s.cancelled, s.acted = s.turn + 1, False, False
+        s.turn, s.cancelled = s.turn + 1, False
+        if not same_task:
+            s.acted = False
+            self.confirmations.revoke(sid)
         return s.turn
+
+    def forget(self, sid: str) -> None:
+        """A fresh conversation: nothing asked in the old one can be answered any more."""
+        self.confirmations.clear(sid)
+
+    def set_level(self, level: str) -> None:
+        if level not in safety.LEVELS:
+            raise ValueError("safety level must be one of " + ", ".join(safety.LEVELS))
+        self.level = level
+        for sid in list(self._sessions):
+            self.confirmations.revoke(sid)
 
     def cancel(self, sid: str) -> None:
         self._session(sid).cancelled = True
@@ -125,6 +153,65 @@ class Runtime:
 
     def awaiting(self, sid: str) -> safety.Pending | None:
         return self.confirmations.latest(sid)
+
+    def batch(self, sid: str) -> list[safety.Pending]:
+        """The questions one yes or no answers, oldest first."""
+        return [p for _, p in self.confirmations.batch(sid)]
+
+    def answerable(self, sid: str) -> bool:
+        """Is the user's next plain yes or no an answer to what Auren asked last? Not if they have said
+        something else since: then only the brain, who knows what they meant, can tell."""
+        batch = self.batch(sid)
+        return bool(batch) and batch[0].turn == self._session(sid).turn
+
+    def answer(self, sid: str, yes: bool, tokens: set[str] | None = None) -> list[Outcome]:
+        """The user's yes or no to the questions waiting, read by the daemon itself (a plain spoken answer,
+        a click, auren-ctl yes): no brain turn in between. The caller counts the user's message first
+        (`new_turn`), which is what makes the tokens redeemable. tokens: only these (the ones the user was
+        shown when they answered; a question asked since is not theirs to have approved)."""
+        batch = [(t, p) for t, p in self.confirmations.batch(sid) if tokens is None or t in tokens]
+        if not yes:
+            self.confirmations.drop(sid, [t for t, _ in batch])
+            return [Outcome(p.question, False, "the user said no") for _, p in batch]
+        return self.run_confirmed(sid, [t for t, _ in batch])
+
+    def run_confirmed(self, sid: str, tokens: list[str]) -> list[Outcome]:
+        """Run the approved actions in order, each only if its target is still what was asked about. The
+        first that fails stops the rest (they are dropped: the brain has to look again and ask again)."""
+        s = self._session(sid)
+        turn, epoch = s.turn, self.confirmations.epoch(sid)
+        outcomes: list[Outcome] = []
+        ran: set[str] = set()
+        for i, token in enumerate(tokens):
+            if s.cancelled:                            # Stop: what hasn't started doesn't
+                outcomes.append(Outcome("", False, "error: the user cancelled this request"))
+                self.confirmations.drop(sid, tokens[i:])
+                break
+            try:
+                p = self.confirmations.redeem(sid, token, turn)
+            except PermissionError as e:
+                outcomes.append(Outcome("", False, f"error: {e}"))
+                break
+            with p.lock or contextlib.nullcontext():
+                try:
+                    if s.cancelled:                    # stopped while waiting for the browser or the screen
+                        raise PermissionError("the user cancelled this request")
+                    if p.check:
+                        p.check()
+                    result = _run(p.run)
+                except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
+                    result = f"error: {e}"
+            ok = not _failed(result)
+            outcomes.append(Outcome(p.question, ok, result, p.say(result) if ok and p.say else None))
+            if not ok:
+                self.confirmations.drop(sid, tokens[i + 1:])
+                break
+            ran |= p.kinds
+            s.acted = True
+        if ran:
+            if self.level == "task":
+                self.confirmations.grant(sid, ran, epoch)
+        return outcomes
 
     def call(self, sid: str, name: str, args: dict) -> list[str | Image]:
         s = self._session(sid)
@@ -214,14 +301,35 @@ def _run(fn, *args, **kwargs) -> str:
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
 
-def _ask(question: str, run: Callable, check: Callable[[], None] | None = None) -> str:
-    """Ask the user first: `run` happens only after a yes in their next message, and only if `check`
-    (the target is still what the question was about) passes then."""
+def _failed(result: str) -> bool:
+    """Did an approved action fail? Errors say so, and so does a command that finished with a non-zero exit."""
+    if result.startswith("error:"):
+        return True
+    try:
+        d = json.loads(result)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and isinstance(d.get("exit_code"), int) and d["exit_code"] != 0
+
+
+def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], None] | None = None,
+          *, say: Callable[[str], str | None] | None = None) -> str:
+    """A risky action of these kinds (safety.WINDOW, FILES, ...). Depending on the approval level it runs
+    now, or asks the user first: `run` then happens only after a yes in their next message, and only if
+    `check` (the target is still what the question was about) passes then. say: given the result, what to
+    say if nothing is left for the brain to do (None: the brain should see the result)."""
     c = _call.get()
+    rt = c.runtime
+    if not safety.needs_ask(rt.level, kinds, rt.confirmations.granted(c.session)):
+        log.info("safety %s: ran without asking: %s", rt.level, question)
+        return _run(run)
+    turn = rt._session(c.session).turn
+    if sum(p.turn == turn for p in rt.batch(c.session)) >= safety.MAX_BATCH:
+        return (f"error: {safety.MAX_BATCH} questions are already waiting for the user's answer. Don't ask more "
+                "now: ask about those, and do the rest after they answer.")
     c.asked = True
-    turn = c.runtime._session(c.session).turn
-    return json.dumps(c.runtime.confirmations.request(c.session, turn, question, run, check, c.lock),
-                      ensure_ascii=False)
+    return json.dumps(rt.confirmations.request(c.session, turn, question, run, check, c.lock,
+                                               kinds=kinds, say=say), ensure_ascii=False)
 
 
 def _profile() -> Profile:
@@ -285,13 +393,15 @@ def switch_workspace(workspace: str) -> str:
 
 @tool()
 def close_window(window: str) -> str:
-    """Close a window. Needs the user's confirmation (unsaved work could be lost)."""
+    """Close a window. Unsaved work could be lost, so the user is asked first: just call it, don't ask in words first."""
     try:
         w = desktop.find_window(window)
     except desktop.DesktopError as e:
         return f"error: {e}"
-    return _ask(f"Close {w.get('class')} “{(w.get('title') or '')[:50]}”?",
-                lambda: desktop.close_window(w))      # that very window, checked to still be open
+    return _gate({safety.WINDOW}, f"Close {w.get('class')} “{(w.get('title') or '')[:50]}”?",
+                 lambda: desktop.close_window(w),     # that very window, checked to still be open
+                 # an app that answers with its own "Close all tabs?" dialog hasn't closed: the brain must say so
+                 say=lambda result: f"Closed {w.get('class')}." if result.startswith("closed") else None)
 
 
 @tool()
@@ -354,8 +464,8 @@ def toggle(feature: str) -> str:
 
 @tool()
 def lock_screen() -> str:
-    """Lock the screen. Needs the user's confirmation."""
-    return _ask("Lock the screen now?", desktop.lock_screen)
+    """Lock the screen. The user is asked first: just call it, don't ask in words first."""
+    return _gate({safety.WINDOW}, "Lock the screen now?", desktop.lock_screen, say=lambda result: "Locked.")
 
 
 # --- herdr: coding agents and commands ---------------------------------------------------------------
@@ -411,12 +521,12 @@ def start_agent(kind: str = "", folder: str = "~", name: str = "", task: str = "
 @tool()
 def run_command(command: str, folder: str = "~", name: str = "", wait: bool = True, timeout_s: int = 60) -> str:
     """Run a shell command as a job (in its own tab of auren's herdr workspace when herdr is there, else in
-    the background). Returns exit code and output when wait=True. Commands that delete, overwrite, need root, restart services, push, or touch secrets need
-    the user's confirmation first."""
-    risk = safety.command_risk(command)
+    the background). Returns exit code and output when wait=True. Commands that delete, overwrite, need root, restart services, push, or touch secrets
+    make the tool ask the user itself (needs_confirmation): just call it, don't ask in words first."""
+    risk = safety.assess_command(command)
     if risk:
-        return _ask(f"Run `{command}`? {risk[0].upper() + risk[1:]}.",
-                    lambda: _run_command(command, folder, name, wait, timeout_s))
+        return _gate(risk.kinds, f"Run `{command}`? {risk.reason[0].upper() + risk.reason[1:]}.",
+                     lambda: _run_command(command, folder, name, wait, timeout_s))
     return _run_command(command, folder, name, wait, timeout_s)
 
 
@@ -483,7 +593,7 @@ def browser_read() -> str:
 def browser_click(target: str, expect_download: bool = False) -> str:
     """Click an item: its number from the last read, or words from its label. Returns the page after the
     click. expect_download=True waits for a file to finish downloading and returns its path. Clicks that
-    buy, pay, send, post, submit or delete need the user's confirmation."""
+    buy, pay, send, post, submit or delete make the tool ask the user itself: just click, don't ask in words first."""
     try:
         label = web.label_of(target)
         if label and web.RISKY_CLICK.search(label):
@@ -495,16 +605,16 @@ def browser_click(target: str, expect_download: bool = False) -> str:
             _same_page(here)()
             if not pinned or web.label_of(pinned) != label:
                 raise PermissionError(f"“{label}” isn't there any more: read the page again and ask the user again")
-        return _ask(f"Click “{label}”? That could buy, send, post or delete something.",
-                    lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check)
+        return _gate({safety.click_kind(label)}, f"Click “{label}”? That could buy, send, post or delete something.",
+                     lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check)
     return _web(_run(web.browser_click, target, None, expect_download))
 
 
 @tool(lock=BROWSER)
 def browser_type(target: str, text: str, submit: bool = False) -> str:
     """Type text into a numbered field from the last read; submit=True presses Enter. Submitting a search
-    box runs straight away; submitting any other field (a message, a comment, a form) needs the user's
-    confirmation, since it can send or post."""
+    box runs straight away; submitting any other field (a message, a comment, a form) makes the tool ask the
+    user itself, since it can send or post: just call it, don't ask in words first."""
     if submit:
         try:
             f = web.field_of(target)
@@ -526,8 +636,8 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
                     raise PermissionError(f"“{f['label'] or 'that field'}” isn't there any more: read the page "
                                           "again and ask the user again")
             short = text if len(text) <= 60 else text[:57] + "…"
-            return _ask(f"Type “{short}” into “{f['label'] or 'the field'}” and press Enter? That could send or post it.",
-                        lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check)
+            return _gate({safety.SEND}, f"Type “{short}” into “{f['label'] or 'the field'}” and press Enter? That could send or post it.",
+                         lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check)
     return _web(_run(web.browser_type, target, text, submit))
 
 
@@ -589,9 +699,10 @@ def look_at_screen() -> list:
 def click_at(x: int, y: int, target: str, button: str = "left", double: bool = False) -> str:
     """Click at pixel (x, y) of the latest look_at_screen image. target: what you are clicking, in words
     (for example "Allow on Chrome's download popup"). Look again afterwards to check it worked. Clicks
-    that buy, pay, send, post, submit or delete need the user's confirmation."""
+    that buy, pay, send, post, submit or delete make the tool ask the user itself: just click, don't ask first."""
     if web.RISKY_CLICK.search(target):
-        return _ask(f"Click “{target}”?", lambda: screen.click(x, y, button, double), _same_screen())
+        return _gate({safety.click_kind(target)}, f"Click “{target}”?", lambda: screen.click(x, y, button, double),
+                     _same_screen())
     return _run(screen.click, x, y, button, double)
 
 
@@ -601,9 +712,10 @@ def drag_at(x1: int, y1: int, x2: int, y2: int, target: str, hold: str = "") -> 
     draw a shape (pick the tool first, then drag from one corner of the shape to the opposite one), move a
     slider, an item or a window, select text. hold: "shift" (in drawing apps: a perfect circle or square),
     "ctrl", "alt", or several joined with "+". target: what you are doing, in words. Look again afterwards.
-    Drags that delete or send something (to the trash, onto Send) need the user's confirmation."""
+    Drags that delete or send something (to the trash, onto Send) make the tool ask the user itself."""
     if web.RISKY_CLICK.search(target):
-        return _ask(f"Drag to “{target}”?", lambda: screen.drag(x1, y1, x2, y2, hold), _same_screen())
+        return _gate({safety.click_kind(target)}, f"Drag to “{target}”?", lambda: screen.drag(x1, y1, x2, y2, hold),
+                     _same_screen())
     return _run(screen.drag, x1, y1, x2, y2, hold)
 
 
@@ -622,14 +734,14 @@ def type_text(text: str) -> str:
 @tool(lock=SCREEN)
 def press_keys(keys: str) -> str:
     """Press a key or shortcut in the focused window: 'Enter', 'Escape', 'Tab', 'ctrl+s', 'ctrl+t'...
-    Shortcuts that close windows or quit apps need confirmation."""
+    Shortcuts that close windows or quit apps make the tool ask the user itself."""
     if keys.strip().lower().replace(" ", "") in RISKY_KEYS:
         window = screen.key_target()        # where the keys will go (the window auren last clicked, if recent)
 
         def check() -> None:
             if screen.key_target() != window:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
-        return _ask(f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
+        return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
     return _run(screen.press_keys, keys)
 
 
@@ -637,18 +749,17 @@ def press_keys(keys: str) -> str:
 
 @tool()
 def confirm_action(token: str) -> str:
-    """Run an action the user has just approved. Only call this after the user said yes in their own
-    reply to your question; it fails if they haven't answered yet, or if what it would act on has
-    changed since (then look again and ask again)."""
+    """Run the actions the user has just approved: pass every token you asked them about, separated by
+    spaces. Only call this after the user said yes in their own reply to your question; it fails if they
+    haven't answered yet, or if what it would act on has changed since (then look again and ask again)."""
     c = _call.get()
-    try:
-        p = c.runtime.confirmations.redeem(c.session, token, c.runtime._session(c.session).turn)
-    except PermissionError as e:
-        return f"error: {e}"
-    with p.lock or contextlib.nullcontext():
-        try:
-            if p.check:
-                p.check()
-        except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
-            return f"error: {e}"
-        return _run(p.run)
+    tokens = [t for t in re.split(r"[\s,]+", token) if t]
+    if not tokens:
+        return "error: no token given"
+    outcomes = c.runtime.run_confirmed(c.session, tokens)
+    if len(tokens) == 1:
+        return outcomes[0].result
+    lines = [f"{o.question}: {o.result}" if o.question else o.result for o in outcomes]
+    if len(outcomes) < len(tokens) or not all(o.ok for o in outcomes):
+        lines.append("The ones after a failure were not run: look again and ask the user again.")
+    return "\n".join(lines)

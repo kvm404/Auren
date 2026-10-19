@@ -34,6 +34,7 @@ import tomlkit
 
 from .config import CONFIG_FILE
 from .config import SETTINGS as LEGACY
+from .safety import LEVELS as SAFETY_LEVELS
 
 log = logging.getLogger("auren.settings")
 
@@ -140,6 +141,9 @@ KEYS = [
     Key("brain.codex_model", "brain.codex_model", "gpt-6.1-sol", _model, "Codex's model (codex exec -m)"),
     Key("brain.codex_effort", "brain.codex_effort", "low", _choice(*CODEX_EFFORTS),
         "Codex's reasoning effort: minimal, low, medium, high or xhigh"),
+    Key("safety.level", "safety", "ask", _choice(*SAFETY_LEVELS),
+        "How much Auren asks before a risky action: ask (every time), task (once per task: a yes covers the rest of it) "
+        "or free (never; root, power, packages, secrets and buying still ask)"),
     Key("integrations.herdr", "integrations.herdr", "auto", _switch,
         "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
     Key("integrations.browser", "integrations.browser", "auto", _switch,

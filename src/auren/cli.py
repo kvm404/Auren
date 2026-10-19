@@ -98,6 +98,7 @@ def main() -> None:
     runtime.start()
     from .settings import load
     s = load()
+    runtime.set_level(s["safety"])
     if a.backup:
         brain = CodexBrain(runtime, session, model=s["brain.codex_model"], effort=s["brain.codex_effort"])
     else:

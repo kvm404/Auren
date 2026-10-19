@@ -10,11 +10,11 @@ import qs.Ui
 //                 dim with shut eyes when auren is off; a dot when an update is waiting
 //   click         the panel, laid out like Omarchy's settings panels: a header (status, Close), the
 //                 pages on the left, the page on the right, and Auren's on/off, restart and log below:
-//                   Home     the live mascot (click it to talk), status, last exchange, quick switches
+//                   Home     the live mascot (click it to talk), status, Yes/No when it asks, last exchange, quick switches
 //                   Mascot   Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
 //                   Voice    spoken replies in English, voice (F2, M3, F1, M1), speed,
 //                            quality, volume, pause, test
-//                   Brain    auto / Claude / Codex, Claude's effort, today's numbers
+//                   Brain    auto / Claude / Codex, Claude's effort, how much it asks before risky actions, today's numbers
 //                   Updates  the installed version, a check for a newer one, and the update (auren update)
 //   right-click   start a fresh conversation
 //
@@ -66,6 +66,7 @@ Panel {
   readonly property bool voiceOn: st.voice !== false
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
+  readonly property string safety: st.safety || "ask"
   readonly property string voiceName: st.voiceName || "F2"
   readonly property var tts: st.tts || ({ speed: 1.05, steps: 5, volume: 1.0, pause: 0.0 })
   // The voices picked by ear in decision 0001: F2 (chosen), M3 (normal pace), F1 and M1 (slower, calmer).
@@ -363,6 +364,8 @@ Panel {
   function toggleMascot() { systemctl(root.mascotActive ? "stop" : "start", "auren-mascot") }
   function setBrain(mode) { ctlRun(["brain", mode]) }
   function setEffort(level) { if (level !== root.effort) ctlRun(["effort", level]) }
+  function setSafety(level) { if (level !== root.safety) ctlRun(["safety", level]) }
+  function answer(yes) { ctlRun([yes ? "yes" : "no"]) }
   function setVoiceName(name) { ctlRun(["voice-name", name]) }
   function startFresh() { ctlRun(["forget"]) }
   function stopTalking() { ctlRun(["cancel"]) }
@@ -445,6 +448,16 @@ Panel {
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the Claude allowance" },
     { value: "max", label: "Max", tip: "Slowest and most expensive" }
   ]
+  // How much Auren asks before a risky action (like Claude Code's permission modes). Root, power, packages,
+  // secrets and buying ask at every level.
+  readonly property var safeties: [
+    { value: "ask", label: "Ask first", icon: "󰒃", tip: "Asks before every risky action; one yes answers everything waiting (the default)" },
+    { value: "task", label: "Once per task", icon: "󰒓", tip: "Asks the first time; a yes covers the rest of that task" },
+    { value: "free", label: "Don't ask", icon: "󰒙", tip: "Never asks, except for root, power, packages, secrets and buying" }
+  ]
+  readonly property string safetyText: safety === "task" ? "Asks the first time; a yes covers the rest of that task."
+                                     : safety === "free" ? "Never asks. Root, power, packages, secrets and buying still ask."
+                                     : "Asks before every risky action. One yes answers everything waiting."
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
     { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
@@ -523,17 +536,19 @@ Panel {
       { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } }]
     if (page === 3) return [
       { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
-      { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } }]
+      { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } },
+      { n: 3, act: function(c) { root.setSafety(root.safeties[c].value) } }]
     if (page === 4) return [
       { n: 2, act: function(c) { if (c === 0) vocabField.forceActiveFocus(); else root.addVocab() } }
     ].concat(root.vocabMine.length ? [{ n: root.vocabMine.length, act: function(c) { root.removeVocab(root.vocabMine[c]) } }] : [])
     if (page === 5) return [
       { n: root.updateActions.length, act: function(c) { root.runAction(root.updateActions, c) } },
       { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
-    return [
-      { n: 1, act: function() { root.talk() } },
-      { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }]
+    return [{ n: 1, act: function() { root.talk() } }]
+      .concat(root.awaiting ? [{ n: 2, act: function(c) { root.answer(c === 0) } }] : [])
+      .concat([{ n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }])
   }
+  readonly property int quickRow: awaiting ? 2 : 1       // Home's rows: the mascot, [Yes/No while it asks], quick actions
   readonly property var rows: pageRows.concat([{ n: footerActions.length, act: function(c) { root.runAction(root.footerActions, c) } }])
   readonly property int footerRow: rows.length - 1
   onRowsChanged: {
@@ -830,15 +845,41 @@ Panel {
               }
             }
 
+            Column {      // a question is waiting: one click answers all of it
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.awaiting
+              Choice {
+                width: parent.width
+                title: "WAITING FOR YOUR ANSWER"
+                options: [{ value: "yes", label: "Yes", icon: "󰄬" }, { value: "no", label: "No", icon: "󰅖" }]
+                value: ""
+                foreground: root.fg; fontFamily: root.font
+                cursorIndex: root.has(1) ? root.cursorCol : -1
+                onPicked: function(v) { root.answer(v === "yes") }
+                onHoveredIndex: function(i) { root.hover(1, i) }
+              }
+              Text {
+                width: parent.width
+                text: root.st.question || ""
+                color: root.fg
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.Wrap
+                maximumLineCount: 14          // a batch is at most 6 questions (safety.MAX_BATCH)
+                elide: Text.ElideRight
+              }
+            }
+
             Choice {
               width: parent.width
               title: "QUICK ACTIONS"
               options: root.asOptions(root.quickActions)
               value: ""
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(1) ? root.cursorCol : -1
+              cursorIndex: root.has(root.quickRow) ? root.cursorCol : -1
               onPicked: function(v, i) { root.runAction(root.quickActions, i) }
-              onHoveredIndex: function(i) { root.hover(1, i) }
+              onHoveredIndex: function(i) { root.hover(root.quickRow, i) }
             }
 
             Column {      // the last exchange
@@ -1148,6 +1189,19 @@ Panel {
               text: root.brainMode === "codex" ? "Codex only: Claude isn't used"
                     : "Higher thinks harder but answers slower. Changing it starts a fresh conversation."
             }
+
+            Choice {
+              width: parent.width
+              title: "RISKY ACTIONS"
+              enabled: root.daemonAlive
+              options: root.safeties
+              value: root.safety
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(2) ? root.cursorCol : -1
+              onPicked: function(v) { root.setSafety(v) }
+              onHoveredIndex: function(i) { root.hover(2, i) }
+            }
+            Caption { text: root.safetyText }
 
             PanelSectionHeader { text: "TODAY"; foreground: root.fg; fontFamily: root.font }
             Card {

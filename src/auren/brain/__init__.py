@@ -177,7 +177,8 @@ class ClaudeBrain:
                 self._asking = False
 
     def _ask(self, transcript: str) -> Iterator[tuple]:
-        msg = prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session))
+        msg = prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session),
+                                  level=self.runtime.level)
         sent = time.perf_counter()
         with self._lock:
             if self._interrupted or _cancelled(self.runtime, self.session):    # stopped while preparing
@@ -281,7 +282,8 @@ class CodexBrain:
             prompt.system_prompt(self.profile.static_context()),
             "Use only the auren tools to act; do not run shell commands yourself.",
             f"Recent conversation:\n{recent}" if recent else "",
-            prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session))) if x)
+            prompt.user_message(transcript, self.profile.live_context(), pending=self.runtime.summary(self.session),
+                                level=self.runtime.level)) if x)
         cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
                "-m", self.model, "-c", f"model_reasoning_effort={self.effort}", "-c", "project_doc_max_bytes=0",
                "-c", f'mcp_servers.auren.command="{sys.executable}"',

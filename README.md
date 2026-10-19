@@ -19,12 +19,14 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
   saved routines.
 - **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English. Speed, quality,
   volume and the pause between sentences are adjustable.
-- **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first. Text from
-  screens and web pages is treated as untrusted.
+- **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first, and one yes
+  answers everything waiting, by voice or with a click. `auren-ctl safety ask|task|free` (or the bar
+  panel) picks how much it asks, like Claude Code's modes; root, power, packages, secrets and buying always
+  ask. Text from screens and web pages is treated as untrusted.
 - **Mascot:** Auren (a hover-bot) or Veyra (a fox spirit). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
   captions in a speech bubble. Drag it anywhere; it fades and falls asleep when idle.
 - **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has six pages: Home (talk, last
-  exchange, quick switches), Mascot, Voice (voice and tuning), Brain (who answers, Claude's effort),
+  exchange, quick switches), Mascot, Voice (voice and tuning), Brain (who answers, Claude's effort, how much it asks),
   Vocabulary (your own words for speech recognition) and Updates.
 
 <br clear="right">

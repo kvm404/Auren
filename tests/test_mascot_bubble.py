@@ -21,6 +21,9 @@ Item {
   property color bg: "#101315"
   property color fg: "#cacccc"
   property color accent: "#D77757"
+  property bool awaiting: false
+  property var answered: []
+  function answer(yes) { answered.push(yes) }
   QtObject { id: bubbleWin; property bool above: true }
   Item { id: tail; height: 10 }
 """
@@ -67,6 +70,30 @@ CHECKS = r"""
     function test_exact_hint_suffix() {
       root.bubbleText = "Press some other key\nordinary speech"; settled()
       compare(root.bubbleBody, root.bubbleText); verify(!hint.visible)
+    }
+    function buttons() {
+      var found = []
+      for (var i = 0; i < answerRow.children.length; i++)
+        if (answerRow.children[i].modelData !== undefined) found.push(answerRow.children[i])
+      return found
+    }
+    function test_no_buttons_unless_it_is_waiting_for_an_answer() {
+      root.awaiting = false
+      root.bubbleText = "Close Calc?\n" + root.bubbleHints[2]; settled()
+      compare(answerRow.width, 0); compare(answerRow.height, 0); verify(!answerRow.parent.visible)
+    }
+    function test_yes_and_no_buttons_sit_inside_the_card_and_answer() {
+      root.awaiting = true; root.answered = []
+      root.bubbleText = longText() + "\n" + root.bubbleHints[2]; settled()
+      var b = buttons()
+      compare(b.length, 2); compare(b[0].modelData.label, "Yes"); compare(b[1].modelData.label, "No")
+      verify(answerRow.width > 0 && answerRow.height === 24)
+      var bottom = answerRow.mapToItem(card, 0, answerRow.height).y
+      verify(bottom <= card.height, "buttons must fit in the card: " + bottom + " > " + card.height)
+      mouseClick(b[0]); mouseClick(b[1])
+      compare(root.answered.length, 2); compare(root.answered[0], true); compare(root.answered[1], false)
+      checkLastVisible()
+      root.awaiting = false
     }
     function test_growth() {
       root.bubbleText = longText(); settled()
