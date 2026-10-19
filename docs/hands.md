@@ -226,8 +226,66 @@ move, release, optionally holding shift/ctrl/alt; Shift = perfect circle). Two f
   uses relative motion from the virtual mouse. It steers by reading the cursor back after each step and
   learning the gain, because pointer acceleration applies to it.
 - `wtype` releases its keys when it exits, so held modifiers come from a second small uinput device
-  (`auren-virtual-modifiers`).
+  (now `auren-virtual-keys`, which also has the digit keys for `press_code`).
 
 Tested on a full-screen test surface: drags land within 1 px (400,300→701,500; 900,600→649,250;
 200,700→1300,150), apps get 40–60 motion events, and Shift is held from press to release. The brain's
 rules now say it has full mouse control and must never offer to install mouse tools.
+
+## Excalidraw (2026-10-20)
+
+Drawing with `drag_at` makes one rough shape per call, so "draw a cat" or "draw my app's architecture"
+never came out right. Excalidraw has a better way in. If you paste JSON of type `excalidraw-api/clipboard`,
+it runs the elements through `convertToExcalidrawElements`, its own skeleton API: it measures and wraps
+labels, binds arrows to shapes and fills in every default. If you paste Mermaid text, it lays the diagram
+out with mermaid-to-excalidraw. `hands/excalidraw.py` uses both, so a whole drawing goes in with one tool call.
+
+| Tool | How |
+|---|---|
+| `excalidraw_draw(elements \| mermaid, place, clear)` | Builds the skeletons, puts them on the clipboard (`wl-copy --sensitive`), and presses Ctrl+V over the canvas. Then Ctrl+C copies the selection back, which proves the paste landed. Shift+2 scrolls it into view. The user's clipboard is put back afterwards |
+| `excalidraw_read()` | Ctrl+A, Ctrl+C: the canvas as Excalidraw's own clipboard JSON, cut down to ids, boxes, labels, colours and arrow ends, in the form `excalidraw_draw` takes |
+
+What the builder adds on top of Excalidraw's format:
+- Colour names from Excalidraw's palette (`light-blue` fill, `dark-blue` stroke, `blue` in between), and
+  `font` hand / normal / code.
+- Points in canvas coordinates, made relative for Excalidraw. A line that ends where it started is a
+  polygon and can be filled.
+- Arrows that only name their shapes. Excalidraw binds an arrow but keeps the coordinates it gets, so the
+  builder aims it, edge to edge, on the rectangle, ellipse or diamond outline. `elbow: true` tries four
+  right-angled routes and takes the one crossing the fewest other shapes.
+- Shapes with a label but no size get one that fits the label. Boxes with labels are rounded, unlabelled
+  parts (a house wall, a door) are sharp.
+
+**Placement.** Excalidraw always pastes at the pointer and ignores the elements' own coordinates. Before
+pasting, the tool copies the canvas. If there's something there, it resets the zoom to 100 % (Shift+0),
+pastes, reads back where the paste landed, and if that's wrong, deletes it, pans the canvas by the
+difference with middle-button drags, and pastes again. A miss also measures the real zoom (a browser
+zoom level breaks the 1:1 guess), and the second try corrects for it. `place="beside"` puts a new drawing
+100 px right of what's there. `place="exact"` keeps the brain's coordinates, for additions to a drawing it
+read. Arrows may start or end at shapes already on the canvas. They are aimed from the canvas geometry but
+can't be attached, because Excalidraw only binds within one paste, and the result says so.
+
+**Clear.** `clear` empties the canvas first. If everything on it is something Auren pasted in this run
+(ids remembered from the copy-back), it just does it. Otherwise it asks (kind `files`), bound to the ids
+it saw.
+
+**Gotchas found live:**
+- Paste only works with the pointer over the canvas and no text box focused, so the tool points at an
+  empty spot (left of centre, below the welcome screen's menu), presses Escape, Escape, V and clicks.
+- `wtype` uploads its own keymap, so apps that read the physical key (`event.code`) see the wrong one.
+  Excalidraw's Shift+2 and Shift+0 are such shortcuts, so they come from the uinput keyboard
+  (`screen.press_code`, digits only, which sit on the same keys in every layout). Letters stay on `wtype`.
+- Mermaid converts in the background. A Ctrl+C before it lands copied the previous selection, which then
+  got deleted as "the paste" when moving it. Now a copy only counts if every id in it is new.
+- Excalidraw puts selection changes in its undo history, so one Ctrl+Z doesn't undo a paste.
+- `wl-copy` forks to serve the clipboard. It must not inherit our pipes, or `subprocess.run` waits forever.
+
+**Tested 2026-10-20** (in a throwaway Brave profile, `uv run auren ask`):
+- "Draw a cute cat sitting next to a house": one `excalidraw_draw` with 23 elements, then one look, 30 s.
+  A grey cat with ears, whiskers and tail beside a yellow house with a red roof, placed beside the
+  drawings already there.
+- "Make a diagram of how a voice assistant works": Mermaid flowchart, 20 s, laid out correctly. It was
+  black and white until the rules told the brain to colour nodes with `classDef`.
+- "Add a box called Mascot below the brain": `excalidraw_read`, then `place="exact"`. The box landed
+  centred under Brain. Exact placement lands within 2 px (wanted 764,560, got 764,558). Placing a paste
+  1959 px away took two pans.

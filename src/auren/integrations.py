@@ -33,7 +33,8 @@ INTEGRATIONS = {
     "browser": Integration("browser", "browser tools (Open Browser Use)",
                            frozenset({"browser_open", "browser_read", "browser_click", "browser_type", "browser_scroll",
                                       "browser_close", "browser_bookmarks", "recent_downloads"})),
-    "screen": Integration("screen", "mouse control", frozenset({"click_at", "drag_at", "scroll_at"})),
+    "screen": Integration("screen", "mouse control",
+                          frozenset({"click_at", "drag_at", "scroll_at", "excalidraw_draw", "excalidraw_read"})),
 }
 
 
