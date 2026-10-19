@@ -24,6 +24,19 @@ def test_choices_match_the_code_that_uses_them():
             k.check(high + 1)
 
 
+def test_the_safety_level_is_one_of_the_levels_and_defaults_to_asking(cfg):
+    from auren import safety
+
+    assert settings.SAFETY_LEVELS == safety.LEVELS
+    assert settings.defaults()["safety"] == "ask"
+    assert settings.set_value("safety.level", "task") == "task"
+    assert settings.load()["safety"] == "task"
+    with pytest.raises(ValueError, match="safety.level should be ask or task or free"):
+        settings.set_value("safety.level", "yolo")
+    values, problems = settings.read('[safety]\nlevel = "everything"\n')
+    assert values["safety"] == "ask" and "safety.level" in problems[0]
+
+
 def test_a_new_config_has_every_setting_with_its_help(cfg):
     assert settings.load() == settings.defaults()
     text = (cfg / "config.toml").read_text()
