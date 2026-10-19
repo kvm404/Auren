@@ -1,5 +1,8 @@
 
+from pathlib import Path
+
 from auren import daemon, settings
+from auren.tools import Runtime
 from auren.voice import tuning
 
 
@@ -16,7 +19,8 @@ class _Quiet(daemon.Daemon):
     """Only what the tts command touches: no voice model, no brain."""
 
     def __init__(self):
-        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", **tuning()}
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", "safety": "ask", **tuning()}
+        self.tools = Runtime(Path("/nonexistent/tools.sock"))       # never started
         self.voice = None
         self.profile = None
         self.vocab = []

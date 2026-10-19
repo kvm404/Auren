@@ -12,6 +12,8 @@
     auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
+    auren-ctl safety ask|task|free    # how much it asks before risky actions (saved in config.toml)
+    auren-ctl yes | no                # answer the question(s) it is waiting on (the bubble's buttons do this)
     auren-ctl reload                  # re-read config.toml and the vocabulary (auren config and auren vocab send this)
 
 Commands arrive on a Unix socket ($XDG_RUNTIME_DIR/auren/auren.sock). The current
@@ -39,10 +41,10 @@ from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCK
 from .ears import Listening, vocabulary
 from .live import Level, describe, notice_kind
 from .profile import Profile
-from .safety import TOKEN_TTL
+from .safety import LEVELS, TOKEN_TTL, parse_answer
 from .settings import load as load_settings
 from .settings import save as save_settings
-from .tools import Runtime
+from .tools import Outcome, Runtime
 from .voice import TUNING, tuning
 
 SESSION = "daemon"          # the daemon's tool session (an `auren chat` has its own)
@@ -56,11 +58,14 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
 
 
 class Daemon:
+    _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
+
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
         self.profile = Profile()
         self.tools = Runtime(TOOLS_SOCKET)           # serving from serve() on
         s = self.settings
+        self.tools.level = s["safety"]
         self.brain = Brain(self.tools, SESSION, mode=s["brain"], effort=s["effort"], claude_model=s["brain.claude_model"],
                            codex_model=s["brain.codex_model"], codex_effort=s["brain.codex_effort"])
         self.voice = None
@@ -81,6 +86,7 @@ class Daemon:
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
                                    "brain": "codex" if self.brain.using_backup else "claude",
                                    "mode": self.brain.mode, "effort": self.brain.primary.effort, "voice": self.voice_on,
+                                   "safety": self.tools.level,
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
                                    "tts": tuning(self.settings), **extra}))
@@ -97,7 +103,7 @@ class Daemon:
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
                      if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "voice", "voiceName",
-                                  "voices", "tts")}
+                                  "voices", "tts", "safety")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)
@@ -200,11 +206,25 @@ class Daemon:
             self._save({"effort": level})
             asyncio.create_task(self._set_claude(effort=level))
             return "effort " + level
+        if cmd == "safety":
+            level = arg.strip()
+            if level not in LEVELS:
+                return "usage: safety " + "|".join(LEVELS)
+            self.tools.set_level(level)
+            self._save({"safety": level})
+            self._refresh_state()
+            return "safety " + level
+        if cmd in ("yes", "no"):
+            waiting = self.tools.batch(SESSION)
+            if not waiting:
+                return "nothing is waiting for an answer"
+            asyncio.create_task(self.answer(cmd == "yes", source="button"))
+            return ("approved " if cmd == "yes" else "dropped ") + str(len(waiting))
         if cmd == "status":
             return json.dumps({"state": self.state, "detail": self.detail,
                                "brain": "codex" if self.brain.using_backup else "claude",
                                "mode": self.brain.mode, "effort": self.brain.primary.effort,
-                               "voice": self.voice_on})
+                               "voice": self.voice_on, "safety": self.tools.level})
         if cmd == "reload":
             return self._reload()
         if cmd == "quit":
@@ -228,6 +248,8 @@ class Daemon:
         if not changed:
             return "Auren picked up the new words" if vocab_changed else "no changes"
         old, self.settings = self.settings, new
+        if new["safety"] != old["safety"]:
+            self.tools.set_level(new["safety"])
         if self.voice:
             if new["voiceName"] != old["voiceName"]:
                 try:
@@ -313,6 +335,7 @@ class Daemon:
 
     async def _forget_quietly(self) -> None:
         async with self.busy:
+            self._earlier = ()
             await asyncio.to_thread(self.brain.forget)
             log.info("fresh conversation (Super+Shift+A)")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
@@ -360,6 +383,7 @@ class Daemon:
     async def forget(self, say: bool = True) -> None:
         async with self.busy:
             self.set_state("thinking", "Starting fresh…")
+            self._earlier = ()
             await asyncio.to_thread(self.brain.forget)
             log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
@@ -374,58 +398,115 @@ class Daemon:
             await self.forget()
             return
         async with self.busy:                          # one request at a time; later ones wait
-            t0 = time.perf_counter()
-            # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
-            self.tools.new_turn(SESSION)              # once per user message, whichever brain answers
-            self.set_state("thinking", text, transcript=text)
-            notice.show("Thinking…", "thinking")
-            tools: list[str] = []
-            reply = ""
-
-            def progress(state: str, detail: str, **extra) -> None:
-                # Checked on the loop, where cancel() runs: once stopped, events still in the stream
-                # mustn't bring back "working" over idle, or over a new listen.
-                if not self.tools.cancelled(SESSION):
-                    self.set_state(state, detail, **extra)
-
-            def run() -> str:
-                said = ""
-                for ev in self.brain.ask(text):
-                    if ev[0] == "tool":
-                        tools.append(ev[1])
-                        doing, mouse = describe(ev[1], ev[2] if len(ev) > 2 else {})
-                        self.loop.call_soon_threadsafe(lambda d=doing, t=ev[1], m=mouse: progress(
-                            "working", d, tool=t, mouse=m, transcript=text))
-                        if (kind := notice_kind(ev[1])) and not self.tools.cancelled(SESSION):
-                            notice.show(doing, kind, always=True)      # actions show on the OSD with the bubble up too
-                    elif ev[0] == "switch":
-                        self.loop.call_soon_threadsafe(lambda d=ev[1]: progress("thinking", d))
-                    elif ev[0] == "say":
-                        said = ev[1]
-                return said
-
-            try:
-                reply = await asyncio.to_thread(run)
-            except Interrupted:
-                log.info("cancelled while %s", "working" if tools else "thinking")
-                self._history({"at": time.time(), "source": source, "transcript": text, "reply": "(cancelled)",
-                               "tools": tools, "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2),
-                               "brain": "codex" if self.brain.using_backup else "claude"})
-                if not self.listening:            # the talk key may already have started the next listen
-                    self.idle("cancelled")
-                return
-            except BrainError as e:
-                reply = "Sorry, my brain hit an error: " + str(e)[:120]
-                log.error("brain error: %s", e)
-            think_s = time.perf_counter() - t0
-            log.info("reply (%.2fs, tools %s): %s", think_s, tools, reply)
-            self._history({"at": time.time(), "source": source, "transcript": text, "reply": reply, "tools": tools,
-                           "heard_s": heard_s, "think_s": round(think_s, 2),
-                           "brain": "codex" if self.brain.using_backup else "claude"})
-            if reply:
-                await self.say(reply)
+            # A plain yes or no to what it just asked is read here, not by the brain: the user's own words
+            # are the proof, and nothing waits for a model to turn them into a tool call.
+            if self.tools.answerable(SESSION) and (answer := parse_answer(text)):
+                await self._answer(answer == "yes", source, text, heard_s)
             else:
-                self.idle()
+                await self._think(text, source, heard_s)
+
+    async def answer(self, yes: bool, source: str) -> None:
+        """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no)."""
+        async with self.busy:
+            await self._answer(yes, source)
+
+    async def _answer(self, yes: bool, source: str, text: str = "", heard_s: float | None = None) -> None:
+        batch = self.tools.batch(SESSION)
+        if not batch:
+            return
+        said = text or ("yes" if yes else "no")
+        t0 = time.perf_counter()
+        # The user's answer is a message, which is what lets the tokens run; it goes on with the task, so what an
+        # earlier yes covered (level "task") stays covered.
+        self.tools.new_turn(SESSION, keep_grants=True)
+        asked = [p.question for p in batch]
+        if not yes:
+            self.tools.answer(SESSION, False)
+            self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)} and the user said no, so none of it was done.",)
+            await self._finish_answer(said, source, heard_s, t0, "Okay, I won't.", [])
+            return
+        self.set_state("working", "Doing it", transcript=said)
+        notice.show("Doing it", "auren", always=True)
+        outcomes = await asyncio.to_thread(self.tools.answer, SESSION, True)
+        if self.tools.cancelled(SESSION):             # stopped meanwhile: what was running finished, nothing more
+            self._earlier += ("The user said yes and then stopped you; some of it may have run.",)
+            self._history({"at": time.time(), "source": source, "transcript": said, "reply": "(cancelled)",
+                           "tools": ["confirm_action"], "heard_s": heard_s, "brain": "none"})
+            return
+        if outcomes and all(o.ok and o.say for o in outcomes):
+            self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)}, the user said yes and it was done.",)
+            await self._finish_answer(said, source, heard_s, t0, " ".join(o.say for o in outcomes), ["confirm_action"])
+            return
+        # Anything else: the brain sees what happened, so it can go on with the task or say how it went.
+        await self._think(said, source, heard_s, brain_text=_followup(outcomes, len(batch)), keep_grants=True,
+                          already=["confirm_action"])
+
+    async def _finish_answer(self, said: str, source: str, heard_s: float | None, t0: float, reply: str,
+                             tools: list[str]) -> None:
+        log.info("answered %r without the brain (%.2fs): %s", said, time.perf_counter() - t0, reply)
+        self._history({"at": time.time(), "source": source, "transcript": said, "reply": reply, "tools": tools,
+                       "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2), "brain": "none"})
+        await self.say(reply)
+
+    async def _think(self, text: str, source: str, heard_s: float | None = None, brain_text: str | None = None,
+                     keep_grants: bool = False, already: list[str] | None = None) -> None:
+        """Ask the brain (the lock is held). text: what the user said; brain_text: what the brain gets, if not that."""
+        t0 = time.perf_counter()
+        # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
+        self.tools.new_turn(SESSION, keep_grants=keep_grants)     # once per user message, whichever brain answers
+        earlier, self._earlier = self._earlier, ()
+        to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
+        self.set_state("thinking", text, transcript=text)
+        notice.show("Thinking…", "thinking")
+        tools = list(already or [])
+        reply = ""
+
+        def progress(state: str, detail: str, **extra) -> None:
+            # Checked on the loop, where cancel() runs: once stopped, events still in the stream
+            # mustn't bring back "working" over idle, or over a new listen.
+            if not self.tools.cancelled(SESSION):
+                self.set_state(state, detail, **extra)
+
+        def run() -> str:
+            said = ""
+            for ev in self.brain.ask(to_brain):
+                if ev[0] == "tool":
+                    tools.append(ev[1])
+                    doing, mouse = describe(ev[1], ev[2] if len(ev) > 2 else {})
+                    self.loop.call_soon_threadsafe(lambda d=doing, t=ev[1], m=mouse: progress(
+                        "working", d, tool=t, mouse=m, transcript=text))
+                    if (kind := notice_kind(ev[1])) and not self.tools.cancelled(SESSION):
+                        notice.show(doing, kind, always=True)      # actions show on the OSD with the bubble up too
+                elif ev[0] == "switch":
+                    self.loop.call_soon_threadsafe(lambda d=ev[1]: progress("thinking", d))
+                elif ev[0] == "say":
+                    said = ev[1]
+            return said
+
+        try:
+            reply = await asyncio.to_thread(run)
+        except Interrupted:
+            self._earlier = earlier + self._earlier        # the brain never got them
+            log.info("cancelled while %s", "working" if tools else "thinking")
+            self._history({"at": time.time(), "source": source, "transcript": text, "reply": "(cancelled)",
+                           "tools": tools, "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2),
+                           "brain": "codex" if self.brain.using_backup else "claude"})
+            if not self.listening:            # the talk key may already have started the next listen
+                self.idle("cancelled")
+            return
+        except BrainError as e:
+            self._earlier = earlier + self._earlier
+            reply = "Sorry, my brain hit an error: " + str(e)[:120]
+            log.error("brain error: %s", e)
+        think_s = time.perf_counter() - t0
+        log.info("reply (%.2fs, tools %s): %s", think_s, tools, reply)
+        self._history({"at": time.time(), "source": source, "transcript": text, "reply": reply, "tools": tools,
+                       "heard_s": heard_s, "think_s": round(think_s, 2),
+                       "brain": "codex" if self.brain.using_backup else "claude"})
+        if reply:
+            await self.say(reply)
+        else:
+            self.idle()
 
     async def say(self, text: str) -> None:
         if not self.voice_on:
@@ -446,10 +527,13 @@ class Daemon:
         self._from_thread("speaking", sentence, reply=getattr(self, "_reply", ""))
 
     def idle(self, detail: str = "") -> None:
-        """Back to idle; if the brain asked a yes/no question that's still open, say so for the mascot."""
-        p = self.tools.awaiting(SESSION)
-        if p:
-            self.set_state("idle", detail, awaiting=True, question=p.question, until=p.at + TOKEN_TTL)
+        """Back to idle; if the brain asked yes/no questions that are still open, say so for the mascot: all of
+        them in `question`, since one answer covers them."""
+        waiting = self.tools.batch(SESSION)
+        if waiting:
+            question = waiting[0].question if len(waiting) == 1 else "\n".join("• " + p.question for p in waiting)
+            self.set_state("idle", detail, awaiting=True, question=question,
+                           until=min(p.at for p in waiting) + TOKEN_TTL)
         else:
             self.set_state("idle", detail)
 
@@ -484,6 +568,15 @@ class Daemon:
         log.info("listening on %s", SOCKET)
         async with server:
             await server.serve_forever()
+
+
+def _followup(outcomes: list[Outcome], asked: int) -> str:
+    """What the brain is told after the user's yes ran its questions (it didn't make that call itself)."""
+    lines = [f"- {o.question or 'a question'} -> {'done' if o.ok else 'FAILED'}: {o.result[:1500]}" for o in outcomes]
+    if len(outcomes) < asked:
+        lines.append(f"- {asked - len(outcomes)} more were not run because of the failure: look again and ask again.")
+    return ("(The user said yes to what you asked. This is what happened:\n" + "\n".join(lines)
+            + "\nGo on with their task if there is more to do; otherwise tell them how it went in a sentence or two.)")
 
 
 def take_lock():
