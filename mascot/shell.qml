@@ -286,6 +286,9 @@ ShellRoot {
     }
   }
 
+  // Yes or No to what it asks (the buttons in the bubble): the daemon runs it, no speech and no brain turn
+  function answer(yes) { Quickshell.execDetached([ctl, yes ? "yes" : "no"]) }
+
   function clicked() {
     if (mood === "off") {
       Quickshell.execDetached(["systemctl", "--user", "start", "auren"])
@@ -313,7 +316,7 @@ ShellRoot {
       case "error": return d ? "Oops: " + d : "Something went wrong"
       case "starting": return "Waking up…"
     }
-    if (awaiting) return (st.question || "Waiting for your answer") + "\nPress Super+A to answer yes or no"
+    if (awaiting) return (st.question || "Waiting for your answer") + "\nOr Super+A, then say yes or no"
     if (mood === "idle" && d === "heard nothing" && now - (st.since || 0) < 3) return "Didn't catch that"
     if (mood === "idle" && d === "cancelled" && now - (st.since || 0) < 2.5) return "Stopped"
     if (mood === "idle" && now < captionUntil) return lastCaption
@@ -321,7 +324,7 @@ ShellRoot {
     return ""
   }
   // the control hints that bubbleText appends; shown pinned under the scrolling text
-  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Press Super+A to answer yes or no"]
+  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Or Super+A, then say yes or no"]
   readonly property string bubbleHint: {
     for (var i = 0; i < bubbleHints.length; i++)
       if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]
@@ -354,7 +357,7 @@ ShellRoot {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
-    mask: Region {}                        // clicks go through to whatever is below
+    mask: Region { item: answerRow }       // clicks go through to whatever is below, except on Yes and No
 
     readonly property real mascotCenter: root.posX + mascot.implicitWidth / 2
     readonly property bool above: root.posY + mascot.bubbleAnchorY - implicitHeight > 8
@@ -449,6 +452,47 @@ ShellRoot {
           color: card.textColor
           font: body.font
           wrapMode: Text.Wrap
+        }
+
+        // Yes and No while it waits for an answer. Everywhere else the bubble lets clicks through, so
+        // outside the buttons the row has no size.
+        Item {
+          width: parent.width
+          height: root.awaiting ? answerRow.height + 8 : 0
+          visible: root.awaiting
+
+          Row {
+            id: answerRow
+            y: 8
+            spacing: 8
+            width: root.awaiting ? implicitWidth : 0
+            height: root.awaiting ? 24 : 0
+            Repeater {
+              model: [{ label: "Yes", yes: true }, { label: "No", yes: false }]
+              Rectangle {
+                required property var modelData
+                width: 56
+                height: 24
+                radius: 6
+                color: modelData.yes ? root.accent : "transparent"
+                border.color: root.accent
+                border.width: 1
+                Text {
+                  anchors.centerIn: parent
+                  text: parent.modelData.label
+                  color: parent.modelData.yes ? root.bg : root.fg
+                  font.family: "monospace"
+                  font.pixelSize: 12
+                  font.bold: true
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.answer(parent.modelData.yes)
+                }
+              }
+            }
+          }
         }
       }
     }
