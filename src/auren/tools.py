@@ -117,14 +117,20 @@ class Runtime:
         with self._lock:
             return self._sessions.setdefault(sid, Session())
 
-    def new_turn(self, sid: str, keep_grants: bool = False) -> int:
+    def new_turn(self, sid: str, same_task: bool = False) -> int:
         """A new user message in this session. It ends the previous task, so a yes that covered it
-        (level "task") stops covering anything; keep_grants: this continues that task."""
+        (level "task") stops covering anything; same_task: this continues that task (an answer to its
+        question, or the brain going on after one), so what it covered and what already ran still count."""
         s = self._session(sid)
-        s.turn, s.cancelled, s.acted = s.turn + 1, False, False
-        if not keep_grants:
+        s.turn, s.cancelled = s.turn + 1, False
+        if not same_task:
+            s.acted = False
             self.confirmations.revoke(sid)
         return s.turn
+
+    def forget(self, sid: str) -> None:
+        """A fresh conversation: nothing asked in the old one can be answered any more."""
+        self.confirmations.clear(sid)
 
     def set_level(self, level: str) -> None:
         if level not in safety.LEVELS:
@@ -158,11 +164,12 @@ class Runtime:
         batch = self.batch(sid)
         return bool(batch) and batch[0].turn == self._session(sid).turn
 
-    def answer(self, sid: str, yes: bool) -> list[Outcome]:
+    def answer(self, sid: str, yes: bool, tokens: set[str] | None = None) -> list[Outcome]:
         """The user's yes or no to the questions waiting, read by the daemon itself (a plain spoken answer,
         a click, auren-ctl yes): no brain turn in between. The caller counts the user's message first
-        (`new_turn`), which is what makes the tokens redeemable."""
-        batch = self.confirmations.batch(sid)
+        (`new_turn`), which is what makes the tokens redeemable. tokens: only these (the ones the user was
+        shown when they answered; a question asked since is not theirs to have approved)."""
+        batch = [(t, p) for t, p in self.confirmations.batch(sid) if tokens is None or t in tokens]
         if not yes:
             self.confirmations.drop(sid, [t for t, _ in batch])
             return [Outcome(p.question, False, "the user said no") for _, p in batch]
@@ -171,10 +178,15 @@ class Runtime:
     def run_confirmed(self, sid: str, tokens: list[str]) -> list[Outcome]:
         """Run the approved actions in order, each only if its target is still what was asked about. The
         first that fails stops the rest (they are dropped: the brain has to look again and ask again)."""
-        turn = self._session(sid).turn
+        s = self._session(sid)
+        turn, epoch = s.turn, self.confirmations.epoch(sid)
         outcomes: list[Outcome] = []
         ran: set[str] = set()
         for i, token in enumerate(tokens):
+            if s.cancelled:                            # Stop: what hasn't started doesn't
+                outcomes.append(Outcome("", False, "error: the user cancelled this request"))
+                self.confirmations.drop(sid, tokens[i:])
+                break
             try:
                 p = self.confirmations.redeem(sid, token, turn)
             except PermissionError as e:
@@ -182,21 +194,23 @@ class Runtime:
                 break
             with p.lock or contextlib.nullcontext():
                 try:
+                    if s.cancelled:                    # stopped while waiting for the browser or the screen
+                        raise PermissionError("the user cancelled this request")
                     if p.check:
                         p.check()
                     result = _run(p.run)
                 except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
                     result = f"error: {e}"
-            ok = not result.startswith("error:")
+            ok = not _failed(result)
             outcomes.append(Outcome(p.question, ok, result, p.say(result) if ok and p.say else None))
             if not ok:
                 self.confirmations.drop(sid, tokens[i + 1:])
                 break
             ran |= p.kinds
+            s.acted = True
         if ran:
-            self._session(sid).acted = True
             if self.level == "task":
-                self.confirmations.grant(sid, ran)
+                self.confirmations.grant(sid, ran, epoch)
         return outcomes
 
     def call(self, sid: str, name: str, args: dict) -> list[str | Image]:
@@ -287,6 +301,17 @@ def _run(fn, *args, **kwargs) -> str:
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
 
+def _failed(result: str) -> bool:
+    """Did an approved action fail? Errors say so, and so does a command that finished with a non-zero exit."""
+    if result.startswith("error:"):
+        return True
+    try:
+        d = json.loads(result)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and isinstance(d.get("exit_code"), int) and d["exit_code"] != 0
+
+
 def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], None] | None = None,
           *, say: Callable[[str], str | None] | None = None) -> str:
     """A risky action of these kinds (safety.WINDOW, FILES, ...). Depending on the approval level it runs
@@ -298,8 +323,11 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
     if not safety.needs_ask(rt.level, kinds, rt.confirmations.granted(c.session)):
         log.info("safety %s: ran without asking: %s", rt.level, question)
         return _run(run)
-    c.asked = True
     turn = rt._session(c.session).turn
+    if sum(p.turn == turn for p in rt.batch(c.session)) >= safety.MAX_BATCH:
+        return (f"error: {safety.MAX_BATCH} questions are already waiting for the user's answer. Don't ask more "
+                "now: ask about those, and do the rest after they answer.")
+    c.asked = True
     return json.dumps(rt.confirmations.request(c.session, turn, question, run, check, c.lock,
                                                kinds=kinds, say=say), ensure_ascii=False)
 

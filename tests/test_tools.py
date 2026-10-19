@@ -288,7 +288,7 @@ def test_task_level_one_yes_covers_the_rest_of_the_task_for_the_same_kinds(rt, s
     assert _ask(rt, "run_command", command="rm b") == "ran rm b"  # same task, same kind: no question
     assert _asked(_ask(rt, "run_command", command="sudo rm c"))    # the floor is never covered
     assert _asked(_ask(rt, "lock_screen"))                         # a kind the yes didn't cover
-    rt.new_turn("daemon", keep_grants=True)                        # the daemon went on with the same task
+    rt.new_turn("daemon", same_task=True)                        # the daemon went on with the same task
     assert _ask(rt, "run_command", command="rm d") == "ran rm d"
     rt.new_turn("daemon")                                          # the user said something else: a new task
     assert _asked(_ask(rt, "run_command", command="rm e"))
@@ -403,3 +403,82 @@ def test_a_close_is_only_announced_when_the_window_really_closed(rt, monkeypatch
     rt.new_turn("daemon")
     closes.append(1)                                              # now it really closes
     assert rt.answer("daemon", True)[0].say == "Closed omacalc."
+
+
+def test_stop_prevents_the_rest_of_a_batch(rt, monkeypatch):
+    ran = []
+
+    def run(command, *a):
+        ran.append(command)
+        rt.cancel("daemon")                               # the user pressed Stop during the first
+        return f"ran {command}"
+
+    monkeypatch.setattr(tools, "_run_command", run)
+    for command in ("rm a", "rm b"):
+        _ask(rt, "run_command", command=command)
+    rt.new_turn("daemon")
+    outcomes = rt.answer("daemon", True)
+    assert ran == ["rm a"] and [o.ok for o in outcomes] == [True, False]
+    assert "cancelled" in outcomes[1].result and rt.batch("daemon") == []
+
+
+def test_a_command_that_exits_with_an_error_is_a_failed_step(rt, monkeypatch):
+    ran = []
+
+    def run(command, *a):
+        ran.append(command)
+        return json.dumps({"status": "finished", "exit_code": 1 if command == "rm a" else 0, "output_tail": ""})
+
+    monkeypatch.setattr(tools, "_run_command", run)
+    rt.set_level("task")
+    for command in ("rm a", "rm b"):
+        _ask(rt, "run_command", command=command)
+    rt.new_turn("daemon")
+    outcomes = rt.answer("daemon", True)
+    assert ran == ["rm a"] and [o.ok for o in outcomes] == [False]
+    assert rt.confirmations.granted("daemon") == frozenset()      # a failed step covers nothing
+    assert tools._failed('{"exit_code": 0}') is False and tools._failed("plain text") is False
+    assert tools._failed('{"status": "running"}') is False
+
+
+def test_a_yes_still_running_cant_grant_after_the_task_ended(rt, monkeypatch):
+    def run(command, *a):
+        rt.set_level("task")                              # the level changed while it ran: a new task
+        return f"ran {command}"
+
+    monkeypatch.setattr(tools, "_run_command", run)
+    rt.set_level("task")
+    _ask(rt, "run_command", command="rm a")
+    rt.new_turn("daemon")
+    rt.answer("daemon", True)
+    assert rt.confirmations.granted("daemon") == frozenset()
+
+
+def test_only_the_questions_the_user_was_shown_are_answered(rt, shell_log):
+    first = json.loads(_ask(rt, "run_command", command="rm a"))["token"]
+    _ask(rt, "run_command", command="rm b")                       # joined the batch after the user looked at it
+    rt.new_turn("daemon")
+    out = rt.answer("daemon", True, {first})
+    assert [o.result for o in out] == ["ran rm a"] and shell_log == ["rm a"]
+    assert [p.question.split("`")[1] for p in rt.batch("daemon")] == ["rm b"]      # still waiting, not approved
+    assert rt.answer("daemon", True, {first}) == []
+
+
+def test_one_answer_covers_at_most_a_few_questions(rt, shell_log):
+    for i in range(6):
+        assert _asked(_ask(rt, "run_command", command=f"rm {i}"))
+    seventh = _ask(rt, "run_command", command="rm 6")
+    assert seventh.startswith("error:") and "6 questions are already waiting" in seventh
+    assert len(rt.batch("daemon")) == 6
+
+
+def test_a_fresh_conversation_drops_questions_and_grants(rt, shell_log):
+    rt.set_level("task")
+    _ask(rt, "run_command", command="rm a")
+    rt.new_turn("daemon")
+    rt.answer("daemon", True)
+    token = json.loads(_ask(rt, "run_command", command="sudo ls"))["token"]
+    rt.forget("daemon")
+    assert rt.batch("daemon") == [] and rt.confirmations.granted("daemon") == frozenset()
+    rt.new_turn("daemon")
+    assert "unknown" in _ask(rt, "confirm_action", token=token)

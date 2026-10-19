@@ -46,7 +46,7 @@ Sometimes present:
 | `tool`, `mouse` | working: the tool being run; `mouse` true for screen control |
 | `fresh` | listening: a fresh conversation was asked for |
 | `reply`, `silent` | speaking: the whole reply; `silent` when the voice is off (bubble only) |
-| `awaiting`, `question`, `until` | idle: yes/no question(s) are open until `until`. `question` is the text of every question one answer covers (several: one per line, each starting with `• `) |
+| `awaiting`, `question`, `until` | idle: yes/no question(s) are open until `until`. `question` is the text of every question one answer covers (several: a first line "N things, one answer:", then one line each starting with `• `; at most 6) |
 
 ## Socket commands
 

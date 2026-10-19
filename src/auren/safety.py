@@ -37,6 +37,7 @@ from typing import Any
 
 TOKEN_TTL = 300   # seconds a confirmation stays valid
 GRANT_TTL = 300   # seconds a yes keeps covering the rest of its task (level "task")
+MAX_BATCH = 6     # questions one yes can answer: the bubble and the panel can't show many more
 
 # --- levels and kinds of risk --------------------------------------------------------------------
 
@@ -77,6 +78,8 @@ _COMMAND_KINDS: dict[str, re.Pattern] = {
       | \bgh\s+(pr\s+(merge|close)|repo\s+delete|release\s+create)\b
       | \b(curl|wget)\b.*\|\s*(ba|z)?sh\b                              # pipe to shell
       | \bcrontab\b|\bhyprctl\s+keyword\b
+      | \bauren-ctl\s+(?!status\b)|\bauren\s+(config|update)\b            # Auren's own controls: answering for the
+      | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren/config\.toml     # user, or changing how much it asks
     """, re.X | re.I),
     FILES: re.compile(r"""
         \brm\s|\brmdir\b|\bshred\b|\bunlink\b|\btruncate\b           # deleting
@@ -136,7 +139,7 @@ _LONGEST = max(map(len, _PHRASES))
 def parse_answer(text: str) -> str | None:
     """"yes" or "no" if the whole message is just that ("yeah, go ahead", "no, don't", "okay please"), else
     None: anything more ("yes, but use the other file") goes to the brain."""
-    words = re.sub(r"[^a-z0-9' ]+", " ", text.lower().replace("’", "'")).split()
+    words = re.sub(r"[^\w' ]+", " ", text.lower().replace("’", "'")).split()      # any other word ends it: None
     kinds: set[str] = set()
     i = 0
     while i < len(words):
@@ -172,6 +175,7 @@ class Confirmations:
     def __init__(self):
         self._pending: dict[str, dict[str, Pending]] = {}
         self._grants: dict[str, tuple[set[str], float]] = {}
+        self._epochs: dict[str, int] = {}          # bumped when a task ends: a yes that was still running can't grant late
         self._lock = threading.Lock()
 
     def pending(self, session: str) -> dict[str, Pending]:
@@ -233,10 +237,17 @@ class Confirmations:
 
     # --- level "task": a yes that covers the rest of the task
 
-    def grant(self, session: str, kinds: Iterable[str]) -> None:
-        """A yes covers these kinds until the task ends (the next message that isn't an answer) or GRANT_TTL.
-        The floor is never granted."""
+    def epoch(self, session: str) -> int:
         with self._lock:
+            return self._epochs.get(session, 0)
+
+    def grant(self, session: str, kinds: Iterable[str], epoch: int | None = None) -> None:
+        """A yes covers these kinds until the task ends (the next message that isn't an answer) or GRANT_TTL.
+        The floor is never granted. epoch: the task's, as it was when the yes began: if the task has ended
+        since, the grant is dropped."""
+        with self._lock:
+            if epoch is not None and epoch != self._epochs.get(session, 0):
+                return
             have = self._grants.get(session, (set(), 0.0))[0] if self._grant_live(session) else set()
             self._grants[session] = (have | (set(kinds) - FLOOR), time.time())
 
@@ -247,6 +258,13 @@ class Confirmations:
     def revoke(self, session: str) -> None:
         with self._lock:
             self._grants.pop(session, None)
+            self._epochs[session] = self._epochs.get(session, 0) + 1
+
+    def clear(self, session: str) -> None:
+        """Forget everything open (a fresh conversation): the questions, and what a yes covered."""
+        with self._lock:
+            self._pending.pop(session, None)
+        self.revoke(session)
 
     def _grant_live(self, session: str) -> bool:
         grant = self._grants.get(session)

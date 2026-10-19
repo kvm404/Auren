@@ -11,11 +11,11 @@ Reading anything, opening apps, URLs and files, moving and focusing windows, swi
 | `window` | closing a window; locking the screen; shortcuts that close windows or quit apps (Alt+F4, Ctrl+Q, Ctrl+W…) |
 | `files` | shell commands that delete, move or overwrite (`rm`, `mv`, `>`), change permissions, or throw away git work (`reset --hard`, `clean`, `rebase`) |
 | `send` | browser or mouse clicks and drags whose label is send, post, publish, submit, delete, remove, confirm, unsubscribe, sign out…; pressing Enter in a browser field that isn't a search box |
-| `system` | `sudo`/`pkexec`, `dd` and disk tools, killing processes, starting/stopping services, power off and reboot, installing or removing packages (`pacman`, `omarchy pkg/install/remove/update/refresh`), `git push` and other publishing, piping a download into a shell, `crontab`, `hyprctl keyword` |
+| `system` | `sudo`/`pkexec`, `dd` and disk tools, killing processes, starting/stopping services, power off and reboot, installing or removing packages (`pacman`, `omarchy pkg/install/remove/update/refresh`), `git push` and other publishing, piping a download into a shell, `crontab`, `hyprctl keyword`, and Auren's own controls (`auren-ctl` except `status`, `auren config/update`, its sockets, `config.toml`) |
 | `secrets` | commands that touch `.env`, API keys, passwords, tokens, `~/.ssh`, `secret-tool` |
 | `money` | clicks and drags whose label is buy, pay, purchase, check out, place order, transfer, book now |
 
-The command check (`assess_command`) errs on the side of asking. `>>` and `2>/dev/null` don't count as overwriting.
+The command check (`assess_command`) errs on the side of asking. `>>` and `2>/dev/null` don't count as overwriting. It is a filter, not a sandbox: a brain with a shell can in principle reach Auren's socket some way the patterns don't name (the daemon's yes/no/safety commands are the reason `auren-ctl` is in the floor), so treat the levels as protection against mistakes and page text, not against a determined brain.
 
 ## Approval levels
 
@@ -39,8 +39,10 @@ The brain is told to call a risky tool straight away and not to ask in words fir
 
 A risky tool that has to ask returns `needs_confirmation`, a question and a short token. The brain is told to request the *independent* steps of a task together ("delete these three files and close that window") and then ask **once**, covering everything waiting. One yes approves the whole batch, in the order they were requested.
 
-- The batch is what the **latest message** asked. A question asked later replaces what an earlier message left open, so a yes can only mean the newest question.
-- If a step fails (or its target changed since it was asked about), it stops there and the rest are dropped; the brain looks again and asks again.
+- The batch is what the **latest message** asked, at most 6 questions (`MAX_BATCH`; a seventh call gets an error telling the brain to ask about those first). A question asked later replaces what an earlier message left open, so a yes can only mean the newest question.
+- A yes answers the questions that were showing when it was given (a click carries their tokens), so a second click, or a question asked meanwhile, isn't approved by it.
+- If a step fails (an error, a command that exits non-zero, or a target that changed since it was asked about), it stops there and the rest are dropped; the brain looks again and asks again. **Stop** also stops the steps that haven't started.
+- A fresh conversation (Super+Shift+A, "start fresh", changing Claude's effort or model) forgets every open question and what a yes covered.
 - Steps that depend on an earlier step's *result* can't be queued (the brain never sees a result before it runs). At `ask` each asks in turn; at `task` the first yes covers them.
 
 The question the mascot and the panel show is the runtime's own text for every action waiting (not the brain's wording of it).
@@ -64,8 +66,8 @@ There are three ways to answer, and none of them needs the brain to decide wheth
 
 After a yes the daemon runs the actions, then:
 
-- if each reports that nothing is left to do (a window that really closed, the screen locked), it says what was done ("Closed Calculator.") and the brain isn't involved at all. A window whose app answered with its own "Close all tabs?" dialog isn't closed, so that goes to the brain, which tells the user;
-- otherwise the brain gets a short message with what ran and what came back, so it can go on with the task or say how it went (the same turn count rules apply; it doesn't have to ask again at `task`).
+- if each reports that nothing is left to do (a window that really closed, the screen locked) **and the request had one part** (no "and", "then", "also", commas…), it says what was done ("Closed Calculator.") and the brain isn't involved at all. A window whose app answered with its own "Close all tabs?" dialog isn't closed, so that goes to the brain, which tells the user;
+- otherwise the brain gets a short message with what ran and what came back, so it can go on with the task or say how it went. That message continues the task: what a yes covered at `task` still counts and the "something already ran" guard for the backup brain stays set.
 
 After a no, or a final yes, the brain is told on its *next* message ("You asked …, the user said no, so none of it was done"), so its conversation stays truthful.
 

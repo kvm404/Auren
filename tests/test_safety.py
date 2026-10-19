@@ -157,3 +157,32 @@ def test_drop_forgets_the_given_tokens_only():
     b = c.request("daemon", 1, "B?", lambda: None)["token"]
     c.drop("daemon", [a, "nope"])
     assert [t for t, _ in c.batch("daemon")] == [b]
+
+
+@pytest.mark.parametrize("cmd", [
+    "auren-ctl yes", "auren-ctl safety free", "auren-ctl ask yes", "auren config set safety.level free",
+    "auren update", "sed -i s/ask/free/ ~/.config/auren/config.toml", "nc -U $XDG_RUNTIME_DIR/auren/auren.sock",
+])
+def test_auren_s_own_controls_are_in_the_floor(cmd):
+    assert safety.assess_command(cmd).kinds >= {"system"}      # a brain can't answer for the user from a shell
+
+
+def test_asking_auren_for_its_status_is_not_risky():
+    assert safety.command_risk("auren-ctl status") is None
+
+
+@pytest.mark.parametrize("text", ["yes, 不要执行", "yes हाँ नहीं", "ja", "yes señor", "oui"])
+def test_words_in_other_scripts_are_not_a_plain_answer(text):
+    assert safety.parse_answer(text) is None
+
+
+def test_a_grant_from_an_ended_task_is_dropped():
+    c = safety.Confirmations()
+    epoch = c.epoch("daemon")
+    c.revoke("daemon")                                          # the task ended while the yes was running
+    c.grant("daemon", {"files"}, epoch)
+    assert c.granted("daemon") == frozenset()
+    c.grant("daemon", {"files"}, c.epoch("daemon"))
+    assert c.granted("daemon") == {"files"}
+    c.clear("daemon")
+    assert c.granted("daemon") == frozenset() and c.batch("daemon") == []

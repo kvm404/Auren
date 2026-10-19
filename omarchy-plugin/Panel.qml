@@ -544,10 +544,11 @@ Panel {
     if (page === 5) return [
       { n: root.updateActions.length, act: function(c) { root.runAction(root.updateActions, c) } },
       { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
-    return [
-      { n: 1, act: function() { root.talk() } },
-      { n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }]
+    return [{ n: 1, act: function() { root.talk() } }]
+      .concat(root.awaiting ? [{ n: 2, act: function(c) { root.answer(c === 0) } }] : [])
+      .concat([{ n: root.quickActions.length, act: function(c) { root.runAction(root.quickActions, c) } }])
   }
+  readonly property int quickRow: awaiting ? 2 : 1       // Home's rows: the mascot, [Yes/No while it asks], quick actions
   readonly property var rows: pageRows.concat([{ n: footerActions.length, act: function(c) { root.runAction(root.footerActions, c) } }])
   readonly property int footerRow: rows.length - 1
   onRowsChanged: {
@@ -854,7 +855,9 @@ Panel {
                 options: [{ value: "yes", label: "Yes", icon: "󰄬" }, { value: "no", label: "No", icon: "󰅖" }]
                 value: ""
                 foreground: root.fg; fontFamily: root.font
+                cursorIndex: root.has(1) ? root.cursorCol : -1
                 onPicked: function(v) { root.answer(v === "yes") }
+                onHoveredIndex: function(i) { root.hover(1, i) }
               }
               Text {
                 width: parent.width
@@ -863,7 +866,7 @@ Panel {
                 font.family: root.font
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.Wrap
-                maximumLineCount: 4
+                maximumLineCount: 14          // a batch is at most 6 questions (safety.MAX_BATCH)
                 elide: Text.ElideRight
               }
             }
@@ -874,9 +877,9 @@ Panel {
               options: root.asOptions(root.quickActions)
               value: ""
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(1) ? root.cursorCol : -1
+              cursorIndex: root.has(root.quickRow) ? root.cursorCol : -1
               onPicked: function(v, i) { root.runAction(root.quickActions, i) }
-              onHoveredIndex: function(i) { root.hover(1, i) }
+              onHoveredIndex: function(i) { root.hover(root.quickRow, i) }
             }
 
             Column {      // the last exchange

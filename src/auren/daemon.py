@@ -57,7 +57,12 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
                     r"\W*(?:please)?\W*$", re.I)
 
 
+# A request with more than one part ("close it and open Spotify"): after a yes to one part, the brain must go on.
+COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|next|too|as well)\b|[,;]|[.?!]\s*\S", re.I)
+
+
 class Daemon:
+    _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
 
     def __init__(self, speak: bool = True):
@@ -215,10 +220,11 @@ class Daemon:
             self._refresh_state()
             return "safety " + level
         if cmd in ("yes", "no"):
-            waiting = self.tools.batch(SESSION)
+            waiting = self.tools.confirmations.batch(SESSION)
             if not waiting:
                 return "nothing is waiting for an answer"
-            asyncio.create_task(self.answer(cmd == "yes", source="button"))
+            # Only what is shown now: a second click, or a question asked meanwhile, isn't covered by this one.
+            asyncio.create_task(self.answer(cmd == "yes", "button", {t for t, _ in waiting}))
             return ("approved " if cmd == "yes" else "dropped ") + str(len(waiting))
         if cmd == "status":
             return json.dumps({"state": self.state, "detail": self.detail,
@@ -319,6 +325,7 @@ class Daemon:
         what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)
         async with self.busy:              # after the current answer, if there is one
             self.set_state("thinking", f"Switching to {what}…")
+            self._fresh()
             await asyncio.to_thread(self.brain.set_claude, effort, model)
             log.info("claude: %s (fresh conversation)", what)
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"({what})",
@@ -333,9 +340,14 @@ class Daemon:
             except Exception as e:  # noqa: BLE001 - retried on the next request
                 log.error("brain didn't start: %s", e)
 
+    def _fresh(self) -> None:
+        """A new conversation: what was asked in the old one can't be answered, and its notes are gone."""
+        self._earlier, self._request = (), ""
+        self.tools.forget(SESSION)
+
     async def _forget_quietly(self) -> None:
         async with self.busy:
-            self._earlier = ()
+            self._fresh()
             await asyncio.to_thread(self.brain.forget)
             log.info("fresh conversation (Super+Shift+A)")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
@@ -383,7 +395,7 @@ class Daemon:
     async def forget(self, say: bool = True) -> None:
         async with self.busy:
             self.set_state("thinking", "Starting fresh…")
-            self._earlier = ()
+            self._fresh()
             await asyncio.to_thread(self.brain.forget)
             log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
@@ -405,40 +417,41 @@ class Daemon:
             else:
                 await self._think(text, source, heard_s)
 
-    async def answer(self, yes: bool, source: str) -> None:
-        """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no)."""
+    async def answer(self, yes: bool, source: str, tokens: set[str] | None = None) -> None:
+        """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no), to these questions."""
         async with self.busy:
-            await self._answer(yes, source)
+            await self._answer(yes, source, tokens=tokens)
 
-    async def _answer(self, yes: bool, source: str, text: str = "", heard_s: float | None = None) -> None:
-        batch = self.tools.batch(SESSION)
+    async def _answer(self, yes: bool, source: str, text: str = "", heard_s: float | None = None,
+                      tokens: set[str] | None = None) -> None:
+        batch = [p for t, p in self.tools.confirmations.batch(SESSION) if tokens is None or t in tokens]
         if not batch:
             return
         said = text or ("yes" if yes else "no")
         t0 = time.perf_counter()
         # The user's answer is a message, which is what lets the tokens run; it goes on with the task, so what an
         # earlier yes covered (level "task") stays covered.
-        self.tools.new_turn(SESSION, keep_grants=True)
+        self.tools.new_turn(SESSION, same_task=True)
         asked = [p.question for p in batch]
         if not yes:
-            self.tools.answer(SESSION, False)
+            self.tools.answer(SESSION, False, tokens)
             self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)} and the user said no, so none of it was done.",)
             await self._finish_answer(said, source, heard_s, t0, "Okay, I won't.", [])
             return
         self.set_state("working", "Doing it", transcript=said)
         notice.show("Doing it", "auren", always=True)
-        outcomes = await asyncio.to_thread(self.tools.answer, SESSION, True)
+        outcomes = await asyncio.to_thread(self.tools.answer, SESSION, True, tokens)
         if self.tools.cancelled(SESSION):             # stopped meanwhile: what was running finished, nothing more
             self._earlier += ("The user said yes and then stopped you; some of it may have run.",)
             self._history({"at": time.time(), "source": source, "transcript": said, "reply": "(cancelled)",
                            "tools": ["confirm_action"], "heard_s": heard_s, "brain": "none"})
             return
-        if outcomes and all(o.ok and o.say for o in outcomes):
+        if outcomes and all(o.ok and o.say for o in outcomes) and self._request and not COMPOUND.search(self._request):
             self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)}, the user said yes and it was done.",)
             await self._finish_answer(said, source, heard_s, t0, " ".join(o.say for o in outcomes), ["confirm_action"])
             return
         # Anything else: the brain sees what happened, so it can go on with the task or say how it went.
-        await self._think(said, source, heard_s, brain_text=_followup(outcomes, len(batch)), keep_grants=True,
+        await self._think(said, source, heard_s, brain_text=_followup(outcomes, len(batch)), same_task=True,
                           already=["confirm_action"])
 
     async def _finish_answer(self, said: str, source: str, heard_s: float | None, t0: float, reply: str,
@@ -449,11 +462,11 @@ class Daemon:
         await self.say(reply)
 
     async def _think(self, text: str, source: str, heard_s: float | None = None, brain_text: str | None = None,
-                     keep_grants: bool = False, already: list[str] | None = None) -> None:
+                     same_task: bool = False, already: list[str] | None = None) -> None:
         """Ask the brain (the lock is held). text: what the user said; brain_text: what the brain gets, if not that."""
         t0 = time.perf_counter()
         # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
-        self.tools.new_turn(SESSION, keep_grants=keep_grants)     # once per user message, whichever brain answers
+        self.tools.new_turn(SESSION, same_task=same_task)         # once per user message, whichever brain answers
         earlier, self._earlier = self._earlier, ()
         to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
         self.set_state("thinking", text, transcript=text)
@@ -499,6 +512,8 @@ class Daemon:
             reply = "Sorry, my brain hit an error: " + str(e)[:120]
             log.error("brain error: %s", e)
         think_s = time.perf_counter() - t0
+        if brain_text is None:                    # what the user asked, if this reply asked them something
+            self._request = text if self.tools.batch(SESSION) else ""
         log.info("reply (%.2fs, tools %s): %s", think_s, tools, reply)
         self._history({"at": time.time(), "source": source, "transcript": text, "reply": reply, "tools": tools,
                        "heard_s": heard_s, "think_s": round(think_s, 2),
@@ -531,7 +546,8 @@ class Daemon:
         them in `question`, since one answer covers them."""
         waiting = self.tools.batch(SESSION)
         if waiting:
-            question = waiting[0].question if len(waiting) == 1 else "\n".join("• " + p.question for p in waiting)
+            question = waiting[0].question if len(waiting) == 1 else (
+                f"{len(waiting)} things, one answer:\n" + "\n".join("• " + p.question for p in waiting))
             self.set_state("idle", detail, awaiting=True, question=question,
                            until=min(p.at for p in waiting) + TOKEN_TTL)
         else:

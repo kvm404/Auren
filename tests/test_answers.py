@@ -15,6 +15,10 @@ class _Brain:
 
     def __init__(self):
         self.asked = []
+        self.forgot = 0
+
+    def forget(self):
+        self.forgot += 1
 
     def ask(self, text):
         self.asked.append(text)
@@ -32,6 +36,7 @@ class _Harness(daemon.Daemon):
         self.vocab = []
         self.said, self.history, self.shown = [], [], []
         self.ran = []
+        self._request = "Close the calculator."          # what the user asked when the brain asked its question
 
     async def say(self, text):
         self.said.append(text)
@@ -219,7 +224,7 @@ def test_idle_shows_every_question_that_one_answer_covers(tmp_path):
     d = _run(tmp_path, scenario)
     first, last = d.shown[0], d.shown[-1]
     assert first[2]["awaiting"] and first[2]["question"] == "Close A?"
-    assert last[2]["question"] == "• Close A?\n• Close B?" and last[2]["until"] > 0
+    assert last[2]["question"] == "2 things, one answer:\n• Close A?\n• Close B?" and last[2]["until"] > 0
 
 
 def test_the_safety_command_sets_and_saves_the_level(tmp_path, monkeypatch):
@@ -232,3 +237,58 @@ def test_the_safety_command_sets_and_saves_the_level(tmp_path, monkeypatch):
     d = _run(tmp_path, scenario)
     assert d.tools.level == "free" and d.settings["safety"] == "free"
     assert settings.read((tmp_path / "config.toml").read_text())[0]["safety"] == "free"
+
+
+def test_a_request_with_more_parts_goes_back_to_the_brain_after_the_yes(tmp_path):
+    async def scenario(d):
+        d._request = "Close the calculator and then open Spotify."
+        d.ask("Close Calc?", {"window"}, say=lambda r: "Closed Calc.")
+        await d.respond("yes", source="voice")
+
+    d = _run(tmp_path, scenario)
+    assert d.ran == ["Close Calc?"] and d.said == ["ok"] and "The user said yes" in d.brain.asked[0]
+
+
+def test_a_second_click_on_yes_does_not_approve_what_was_asked_after_the_first(tmp_path):
+    async def scenario(d):
+        a = d.ask("Close A?", {"window"})
+        shown = {t for t, _ in d.tools.confirmations.batch(SESSION)}
+        assert shown == {a}
+        await d.answer(True, "button", shown)
+        d.ask("Close B?", {"window"})                     # the continuation asked something new
+        await d.answer(True, "button", shown)             # a queued second click, for A only
+        d.after = [p.question for p in d.tools.batch(SESSION)]
+
+    d = _run(tmp_path, scenario)
+    assert d.ran == ["Close A?"] and d.after == ["Close B?"]
+
+
+def test_two_quick_yes_commands_run_it_once(tmp_path):
+    async def scenario(d):
+        d.ask("Close A?", {"window"}, say=lambda r: "Closed A.")
+        assert await d.command("yes") == "approved 1"
+        assert await d.command("yes") == "approved 1"     # both saw the same question
+        await asyncio.sleep(0.1)
+
+    d = _run(tmp_path, scenario)
+    assert d.ran == ["Close A?"]
+
+
+def test_a_fresh_conversation_forgets_what_was_asked_in_the_old_one(tmp_path):
+    async def scenario(d):
+        d.ask("Run `rm a`?", {"files"})
+        await d.forget(say=False)
+        await d.respond("yes", source="voice")
+
+    d = _run(tmp_path, scenario)
+    assert d.ran == [] and d.brain.forgot == 1 and d.brain.asked == ["yes"] and d.tools.batch(SESSION) == []
+
+
+def test_the_replay_guard_survives_the_brain_going_on_after_a_yes(tmp_path):
+    async def scenario(d):
+        d.ask("Run `rm a`?", {"files"})
+        await d.respond("yes", source="voice")
+        d.acted = d.tools.acted(SESSION)
+
+    d = _run(tmp_path, scenario, level="task")
+    assert d.acted                                       # a backup brain must not start this request over
