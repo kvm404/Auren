@@ -15,8 +15,8 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - **Brain:** Claude Haiku 5.5 through a Claude Code process that stays running, with Codex
   (GPT-6.1 Sol) as an automatic backup.
 - **Hands:** about 40 tools over MCP, covering apps, windows, workspaces, media, volume, shell commands,
-  herdr agents and jobs, the browser (Open Browser Use), screen control (look, click, drag, type) and
-  saved routines.
+  herdr agents and jobs, the browser (Open Browser Use), screen control (look, click, drag, type),
+  whole drawings and diagrams in Excalidraw, and saved routines.
 - **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English. Speed, quality,
   volume and the pause between sentences are adjustable.
 - **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first, and one yes

@@ -39,7 +39,7 @@ from typing import Any
 
 from . import safety
 from .hands import browser as web
-from .hands import desktop, herdr, screen, shell
+from .hands import desktop, excalidraw, herdr, screen, shell
 from .integrations import active, hidden_tools
 from .profile import Profile
 
@@ -199,7 +199,8 @@ class Runtime:
                     if p.check:
                         p.check()
                     result = _run(p.run)
-                except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError) as e:
+                except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError,
+                        excalidraw.ExcalidrawError) as e:
                     result = f"error: {e}"
             ok = not _failed(result)
             outcomes.append(Outcome(p.question, ok, result, p.say(result) if ok and p.say else None))
@@ -294,7 +295,7 @@ def _run(fn, *args, **kwargs) -> str:
     try:
         out = fn(*args, **kwargs)
     except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, shell.ShellError,
-            PermissionError, ValueError) as e:
+            excalidraw.ExcalidrawError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
         return f"error: unexpected {type(e).__name__}: {e}\n{traceback.format_exc(limit=2)}"
@@ -743,6 +744,75 @@ def press_keys(keys: str) -> str:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
         return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
     return _run(screen.press_keys, keys)
+
+
+# --- Excalidraw: whole drawings at once ------------------------------------------------------------------
+
+@tool(lock=SCREEN)
+def excalidraw_draw(elements: list[dict] | None = None, mermaid: str = "", place: str = "beside",
+                    clear: bool = False) -> str:
+    """Draw in Excalidraw: a whole picture or diagram in one call, placed exactly (never draw it with
+    drag_at). Opens Excalidraw if it isn't open, and scrolls the drawing into view. Give one of:
+    - mermaid: a Mermaid definition, for anything made of boxes and arrows (flowchart, sequenceDiagram,
+      classDiagram, stateDiagram, erDiagram): Excalidraw lays it out itself. Other Mermaid types arrive as a
+      picture, not shapes. Colour flowchart nodes with classDef and class, fill light and stroke dark in the
+      same colour: blue fill:#a5d8ff,stroke:#1971c2; green #b2f2bb/#2f9e44; yellow #ffec99/#f08c00; red
+      #ffc9c9/#e03131; violet #d0bfff/#6741d9; orange #ffd8a8/#e8590c; gray #e9ecef/#343a40. (Rounded) nodes
+      look friendlier than [square] ones; keep {decision} labels to a word or two.
+    - elements: a list of elements in canvas pixels (x right, y down), for pictures, mind maps, layouts and
+      anything Mermaid can't do:
+      {"type": "rectangle"|"ellipse"|"diamond", "id": "a", "x": 0, "y": 0, "width": 160, "height": 80,
+       "label": "text inside"}  (without width and height it fits its label)
+      {"type": "text", "x": 0, "y": 0, "text": "words", "fontSize": 20}  (x, y: its top-left corner)
+      {"type": "arrow", "start": "a", "end": "b", "label": "optional"}: joins two shapes (or texts) edge to
+       edge and stays bound to them; "elbow": true for right angles; or "points": [[x, y], ...] for its path
+      {"type": "line", "points": [[x, y], ...]}: open, or closed (last point = first) to fill it like a
+       shape; "smooth": true turns the corners into curves
+      {"type": "freedraw", "points": [[x, y], ...]}, {"type": "frame", "name": "...", "children": [ids]}
+      Style, on any element: strokeColor, backgroundColor (black, white, transparent; red, pink, purple,
+      violet, blue, cyan, teal, green, yellow, orange, gray, brown, each also as light-<colour> and
+      dark-<colour>; or #rrggbb), fillStyle (solid, hachure, cross-hatch, zigzag), strokeWidth (1, 2, 4),
+      strokeStyle (solid, dashed, dotted), roughness (0 clean, 1 sketchy, 2 wild), opacity (0-100), font
+      (hand, normal, code), fontSize, rounded (corners; on by default for boxes with a label), rotate (degrees), group (the same name
+      on several elements makes them move as one), startArrowhead/endArrowhead (arrow, triangle, bar, dot,
+      or null).
+    place: "beside" puts a new drawing next to what's on the canvas already (never on top of it); "exact"
+    keeps your coordinates as canvas coordinates, to add to a drawing you read with excalidraw_read.
+    clear: empty the canvas first, to redraw your own drawing. If the canvas holds work you didn't draw,
+    the tool asks the user itself: just call it."""
+    if not clear:
+        return _run(excalidraw.draw, elements, mermaid, False, place)
+    try:
+        before = excalidraw.scene()
+    except (excalidraw.ExcalidrawError, screen.ScreenError, desktop.DesktopError):
+        before = []
+    if not before:
+        # empty, closed (opening it may bring back a drawing) or unreadable: clear nothing, draw beside
+        return _run(excalidraw.draw, elements, mermaid, False, place)
+    if excalidraw.drawn_by_auren(before):
+        return _run(excalidraw.draw, elements, mermaid, True, place)
+    seen = excalidraw.fingerprint(before)
+
+    def check() -> None:
+        if excalidraw.fingerprint(excalidraw.scene()) != seen:
+            raise PermissionError("the canvas changed since you asked: ask the user again")
+    n = f"{len(before)} element{'s' if len(before) != 1 else ''}"
+    return _gate({safety.FILES}, f"Clear the Excalidraw canvas ({n}; Excalidraw's undo brings them back) and draw "
+                 "the new drawing?", lambda: excalidraw.draw(elements, mermaid, True, place), check)
+
+
+@tool(repeatable=True, lock=SCREEN)
+def excalidraw_read() -> str:
+    """What's on the open Excalidraw canvas: every element (ids, positions, sizes, labels, colours, arrow
+    ends), in the form excalidraw_draw takes, and whether you drew all of it. Read before changing or adding
+    to a drawing that's already there."""
+    try:
+        elements = excalidraw.scene()
+    except (excalidraw.ExcalidrawError, screen.ScreenError, desktop.DesktopError) as e:
+        return f"error: {e}"
+    if not elements:
+        return "The Excalidraw canvas is empty."
+    return safety.untrusted(json.dumps(excalidraw.summary(elements), ensure_ascii=False), "Excalidraw canvas")
 
 
 # --- confirmations -------------------------------------------------------------------------------------

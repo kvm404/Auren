@@ -20,6 +20,9 @@ no command line.
   releases its keys when it exits, so it can't hold one across a drag.
 - type_text() / press_keys(): `wtype` (Wayland virtual keyboard), into the window
   that was last clicked (focused again first if focus has moved since).
+- press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
+  uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
+  typed see the wrong key: Excalidraw's Shift+2 is one.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ IMAGE_WIDTH = 1024
 
 _lock = threading.Lock()
 _mouse = None
-_keyboard = None
+_keyboard = None                     # modifiers and digits (drag holds, press_code)
 _last_view: dict | None = None       # geometry of the last look(), to map image coords back
 _clicked: dict | None = None         # the window the last click landed in, for typing into it
 
@@ -173,12 +176,32 @@ def _refocus() -> None:
         time.sleep(0.1)
 
 
+def focus(address: str) -> None:
+    """Bring a window to the front and make it where typed text and keys go."""
+    global _clicked
+    _sh(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'])
+    _clicked = {"address": address, "at": time.time()}
+    time.sleep(0.15)
+
+
+def hover(lx: int, ly: int) -> None:
+    """Put the pointer at layout (lx, ly) without clicking."""
+    _move(round(lx), round(ly))
+    time.sleep(0.12)
+
+
 def click(x: float, y: float, button: str = "left", double: bool = False, restore: bool = False) -> str:
+    lx, ly = _to_layout(x, y)
+    return click_layout(lx, ly, button, double, restore)
+
+
+def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, restore: bool = False) -> str:
+    """Click at layout (screen) coordinates: for callers that know where a window is, not a screenshot."""
     from evdev import ecodes as e
     btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
     if btn is None:
         raise ScreenError("button must be left, right or middle")
-    lx, ly = _to_layout(x, y)
+    lx, ly = round(lx), round(ly)
     with _lock:
         dev = _device()
         before = _cursor()
@@ -202,15 +225,19 @@ _HOLD = {"shift": "KEY_LEFTSHIFT", "ctrl": "KEY_LEFTCTRL", "control": "KEY_LEFTC
          "super": "KEY_LEFTMETA"}
 
 
-def _modifiers():
-    """A virtual keyboard with only the modifier keys, for holding them during a drag."""
+_DIGITS = {str(d): f"KEY_{d}" for d in range(10)}
+
+
+def _keys():
+    """A virtual keyboard with the modifier and digit keys: for holding modifiers during a drag, and for
+    shortcuts by physical key (press_code)."""
     global _keyboard
     if _keyboard is None:
         from evdev import UInput
         from evdev import ecodes as e
         try:
-            _keyboard = UInput({e.EV_KEY: [getattr(e, k) for k in sorted(set(_HOLD.values()))]},
-                               name="auren-virtual-modifiers")
+            _keyboard = UInput({e.EV_KEY: [getattr(e, k) for k in sorted({*_HOLD.values(), *_DIGITS.values()})]},
+                               name="auren-virtual-keys")
         except (OSError, PermissionError) as err:
             raise ScreenError(f"can't create a virtual keyboard via /dev/uinput: {err}") from None
         time.sleep(0.6)
@@ -244,23 +271,36 @@ def _glide(dev, tx: int, ty: int, steps: int, duration: float) -> None:
         time.sleep(0.01)
 
 
-def drag(x1: float, y1: float, x2: float, y2: float, hold: str = "", button: str = "left",
-         duration: float = 0.5) -> str:
-    """Press at image (x1, y1), move to (x2, y2), release. hold: '', 'shift', 'ctrl', 'alt' or 'super'
-    (several with '+'), held during the whole drag."""
-    from evdev import ecodes as e
-    btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
-    if btn is None:
-        raise ScreenError("button must be left, right or middle")
+def _hold_keys(hold: str) -> list[str]:
     keys = [p.strip().lower() for p in hold.split("+") if p.strip()]
     unknown = [k for k in keys if k not in _HOLD]
     if unknown:
         raise ScreenError(f"can only hold shift, ctrl, alt or super, not {', '.join(unknown)}")
+    return keys
+
+
+def drag(x1: float, y1: float, x2: float, y2: float, hold: str = "", button: str = "left",
+         duration: float = 0.5) -> str:
+    """Press at image (x1, y1), move to (x2, y2), release. hold: '', 'shift', 'ctrl', 'alt' or 'super'
+    (several with '+'), held during the whole drag."""
+    _hold_keys(hold)
     lx1, ly1 = _to_layout(x1, y1)
     lx2, ly2 = _to_layout(x2, y2)
+    return drag_layout(lx1, ly1, lx2, ly2, hold, button, duration)
+
+
+def drag_layout(lx1: int, ly1: int, lx2: int, ly2: int, hold: str = "", button: str = "left",
+                duration: float = 0.5) -> str:
+    """drag() in layout (screen) coordinates."""
+    from evdev import ecodes as e
+    btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
+    if btn is None:
+        raise ScreenError("button must be left, right or middle")
+    keys = _hold_keys(hold)
+    lx1, ly1, lx2, ly2 = round(lx1), round(ly1), round(lx2), round(ly2)
     with _lock:
         dev = _device()
-        kb = _modifiers() if keys else None
+        kb = _keys() if keys else None
         codes = [getattr(e, _HOLD[k]) for k in keys]
         _move(lx1, ly1)
         time.sleep(0.12)
@@ -296,6 +336,28 @@ def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
             dev.write(e.EV_REL, e.REL_WHEEL, step); dev.syn()
             time.sleep(0.03)
     return f"scrolled {direction} {amount} at screen ({lx}, {ly})"
+
+
+def press_code(combo: str) -> str:
+    """A shortcut by physical key position, such as 'shift+2', from the virtual keyboard (modifiers and
+    digits only). Digits sit on the same keys in every layout, so this is safe whatever the user's layout."""
+    from evdev import ecodes as e
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    if not parts or parts[-1] not in _DIGITS or any(p not in _HOLD for p in parts[:-1]):
+        raise ScreenError(f"press_code takes modifiers and a digit, like shift+2, not {combo!r}")
+    mods, key = [getattr(e, _HOLD[p]) for p in parts[:-1]], getattr(e, _DIGITS[parts[-1]])
+    _refocus()
+    with _lock:
+        kb = _keys()
+        try:
+            for c in mods:
+                kb.write(e.EV_KEY, c, 1); kb.syn()
+            kb.write(e.EV_KEY, key, 1); kb.syn()
+            time.sleep(0.04)
+        finally:                               # never leave the digit or a modifier held down
+            for c in (key, *reversed(mods)):
+                kb.write(e.EV_KEY, c, 0); kb.syn()
+    return f"pressed {combo}"
 
 
 def type_text(text: str) -> str:
