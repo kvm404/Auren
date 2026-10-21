@@ -332,9 +332,9 @@ def pin(target: str, is_field: bool = False, tab: int | None = None) -> str | No
 
 
 def page() -> dict:
-    """The auren tab now: browser, tab id and address (what a confirmation is bound to)."""
+    """The auren tab now: browser, tab id and address (what a confirmation is bound to), and its title."""
     b, t = _current(), _tab(None)
-    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href")}
+    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href"), "title": _eval(b, t, "document.title")}
 
 
 def field_of(target: str, tab: int | None = None) -> dict | None:

@@ -1,14 +1,19 @@
 """Which actions need the user's OK, and how that OK is proven.
 
-Every risky action has a kind (window, files, send, system, secrets, money). What happens to it
-depends on the approval level (`safety.level` in config.toml, like Claude Code's permission modes):
+Every risky action has a kind (window, files, send, system, secrets, money, wipe, auren). What
+happens to it depends on the approval level (`safety.level` in config.toml, like Claude Code's
+permission modes):
 
 - ask:  every risky action asks first.
 - task: the first risky action asks; a yes also covers the rest of that task for the same kinds.
-- free: nothing asks, except the kinds in FLOOR.
+- free: full access. Windows, files and the system just run; only the kinds in FREE_ASKS ask
+        (sending and publishing, money, secrets, wiping, Auren's own controls).
 
-The floor (system, secrets, money) asks at every level, every time: root, power, services,
-packages, publishing, secrets, buying and paying.
+The floor (system, secrets, money, wipe, auren) is never covered by an earlier yes.
+
+Before anything asks, the judge (brain/judge.py, in tools.py) reads the user's own last few messages:
+if they already asked for this very action ("send it to Priya"), it runs without the question.
+Auren's own controls never go to the judge: they always ask.
 
 When a risky action asks, the tool returns a token and a question instead of acting. Several can
 wait at once (the brain is told to request the independent steps of a task together); one yes
@@ -45,44 +50,67 @@ LEVELS = ("ask", "task", "free")
 
 WINDOW = "window"      # closing windows and apps, locking the screen
 FILES = "files"        # deleting, moving, overwriting, permissions, losing local git work
-SEND = "send"          # send, post, submit, delete clicks and Enter in a form field
-SYSTEM = "system"      # root, killing, services, power, packages, publishing, disks, scheduled jobs
+SEND = "send"          # send, post, submit, delete clicks, Enter in a form field, git push and other publishing
+SYSTEM = "system"      # root, killing, services, power, packages, scheduled jobs
 SECRETS = "secrets"    # keys, passwords, tokens, ~/.ssh
 MONEY = "money"        # buy, pay, check out, transfer, book
+WIPE = "wipe"          # disk tools, deleting your home or the root, running a downloaded script, deleting a repo
+AUREN = "auren"        # Auren's own controls: answering for the user, or changing how much it asks
 
-FLOOR = frozenset({SYSTEM, SECRETS, MONEY})     # asked at every level, every time
+FLOOR = frozenset({SYSTEM, SECRETS, MONEY, WIPE, AUREN})    # never covered by an earlier yes (level "task")
+FREE_ASKS = frozenset({SEND, SECRETS, MONEY, WIPE, AUREN})  # what still asks at level "free"
 
 
 def needs_ask(level: str, kinds: Iterable[str], granted: Iterable[str] = ()) -> bool:
     """Does an action of these kinds have to ask at this level? `granted`: the kinds a yes already covers."""
     kinds = set(kinds)
-    if not kinds or kinds & FLOOR:
+    if not kinds:
         return True
     if level == "free":
-        return False
+        return bool(kinds & FREE_ASKS)
     if level == "task":
-        return not kinds <= set(granted)
+        return bool(kinds & FLOOR) or not kinds <= set(granted)
     return True                                  # ask, or a level we don't know
+
+
+def judged(kinds: Iterable[str]) -> bool:
+    """May the user's own words (the judge) stand in for the question? Not for Auren's own controls."""
+    return AUREN not in kinds
 
 
 # Shell commands that change the system, lose data, need root, publish, or touch secrets, by kind.
 _COMMAND_KINDS: dict[str, re.Pattern] = {
     SYSTEM: re.compile(r"""
         (^|[;&|`(]\s*|\$\(\s*)(sudo|doas|pkexec|su)\b               # root
-      | \bdd\b|\bmkfs|\bfdisk\b|\bparted\b|\bwipefs\b                # disks
       | \bkill(all)?\b|\bpkill\b|\bxkill\b
       | \bsystemctl\s+(--user\s+)?(start|stop|restart|reload|enable|disable|mask|kill)\b
       | \b(shutdown|reboot|poweroff|halt|suspend|hibernate)\b|\bloginctl\b
       | \b(pacman|yay|paru|omarchy[-\s]pkg|omarchy[-\s](install|remove|update|reinstall|refresh))\b
-      | \bgit\s+push\b
-      | \bgh\s+(pr\s+(merge|close)|repo\s+delete|release\s+create)\b
-      | \b(curl|wget)\b.*\|\s*(ba|z)?sh\b                              # pipe to shell
       | \bcrontab\b|\bhyprctl\s+keyword\b
-      | \bauren-ctl\s+(?!status\b)|\bauren\s+(config|update)\b            # Auren's own controls: answering for the
-      | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren/config\.toml     # user, or changing how much it asks
+    """, re.X | re.I),
+    SEND: re.compile(r"""
+        \bgit(\s+(-[Cc]|--git-dir|--work-tree|--namespace)\s+\S+|\s+-\S+)*\s+push\b      # git -C repo push
+      | \bgh(\s+(-R|--repo)\s+\S+|\s+-\S+)*\s+(pr\s+(create|merge|close|comment|review)|issue\s+(create|comment|close)|release\s+create)\b
+      | \bnpm\s+publish\b|\b(uv|twine)\s+publish\b|\bcargo\s+publish\b
+      | \b(sendmail|msmtp|mutt)\b
+    """, re.X | re.I),
+    WIPE: re.compile(r"""
+        \bdd\b|\bmkfs|\bfdisk\b|\bparted\b|\bwipefs\b|\bshred\b             # disks
+      | \brm\s(.*\s)?["']?(/|(~|\$\{?HOME\}?|/home(/[^/\s"']+)?)["']?/?)\.?\*?["']?(?=[\s;&|)]|$)   # rm of the root or a home
+      | \bshutil\.rmtree\(\s*(Path\.home\(\)|os\.path\.expanduser\(|["'](/|~)/?["'])
+      | \bfind\s+["']?(/|~|\$\{?HOME\}?)["']?/?\s.*-delete\b
+      | \b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z|da)?sh\b                  # a download run by a shell
+      | (\b(ba|z|da)?sh|\bsource|(^|[;&|]\s*)\.)\s+<\(\s*(curl|wget)\b
+      | \b(ba|z|da)?sh\s+-c\s+["']?\$\(\s*(curl|wget)\b
+      | \bgh\s+repo\s+delete\b
+    """, re.X | re.I),
+    AUREN: re.compile(r"""
+        \bauren-ctl\s+(?!status\b)|\bauren\s+(ask|chat|config|update)\b   # answering for the user, speaking as
+      | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren/config\.toml     # them, or changing how much
+      | -m\s+auren\b|\b(from|import)\s+auren\b                          # it asks
     """, re.X | re.I),
     FILES: re.compile(r"""
-        \brm\s|\brmdir\b|\bshred\b|\bunlink\b|\btruncate\b           # deleting
+        \brm\s|\brmdir\b|\bunlink\b|\btruncate\b                      # deleting
       | \bmv\s
       | \bchmod\b|\bchown\b|\bchattr\b
       | \bgit\s+(reset\s+--hard|clean|checkout\s+--|branch\s+-D|rebase|filter-branch)\b

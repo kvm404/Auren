@@ -31,3 +31,10 @@ def _no_notices(monkeypatch):
     monkeypatch.setattr(notice, "_mascot_running", lambda: False)
     monkeypatch.setattr(notice, "shown", shown, raising=False)
     return shown
+
+
+@pytest.fixture(autouse=True)
+def _no_judge(monkeypatch):
+    """No real Claude Code judge starts in tests: with none, every gated action asks (test_judge covers it)."""
+    from auren.brain import judge
+    monkeypatch.setattr(judge.Judge, "_spawn", lambda self: None)

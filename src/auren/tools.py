@@ -14,7 +14,8 @@ something that shouldn't be repeated has run in this turn (then a backup brain m
 
 Every tool returns plain text (or JSON text). Errors come back as text starting with "error:" so the
 brain can tell the user what went wrong. Risky tools go through auren.safety: by the approval level
-(`Runtime.level`) they run, or return a question and a token. A yes runs the questions waiting: the
+(`Runtime.level`) they run, or return a question and a token, unless the user's own last few messages
+already ask for that very action (the judge, auren.brain.judge, decides from those words alone). A yes runs the questions waiting: the
 daemon's, for a plain answer it read itself (`Runtime.answer`), or the brain's `confirm_action` in a later
 user turn. Text that comes from panes, the screen or the web is wrapped as untrusted.
 """
@@ -33,11 +34,12 @@ import socketserver
 import threading
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import safety
+from .brain.judge import Judge
 from .hands import browser as web
 from .hands import desktop, excalidraw, herdr, screen, shell
 from .integrations import active, hidden_tools
@@ -81,6 +83,10 @@ class Session:
     turn: int = 0
     cancelled: bool = False
     acted: bool = False
+    said: list[tuple[str, str]] = field(default_factory=list)   # the last few lines, ("user" | "auren", text), for the judge
+
+
+SAID = 6        # how many lines of the conversation the judge sees
 
 
 @dataclass
@@ -109,6 +115,7 @@ class Runtime:
         self.profile = Profile()
         self.confirmations = safety.Confirmations()
         self.level = "ask"                  # the approval level (safety.LEVELS); the daemon keeps it in step with config.toml
+        self.judge = Judge()
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._server: socketserver.ThreadingUnixStreamServer | None = None
@@ -117,20 +124,35 @@ class Runtime:
         with self._lock:
             return self._sessions.setdefault(sid, Session())
 
-    def new_turn(self, sid: str, same_task: bool = False) -> int:
+    def new_turn(self, sid: str, same_task: bool = False, said: str = "") -> int:
         """A new user message in this session. It ends the previous task, so a yes that covered it
         (level "task") stops covering anything; same_task: this continues that task (an answer to its
-        question, or the brain going on after one), so what it covered and what already ran still count."""
+        question, or the brain going on after one), so what it covered and what already ran still count.
+        said: what the user said, which the judge reads (empty for text the user didn't say)."""
         s = self._session(sid)
         s.turn, s.cancelled = s.turn + 1, False
+        if said.strip():
+            self._heard(s, "user", said)
+            self.judge.warm()
         if not same_task:
             s.acted = False
             self.confirmations.revoke(sid)
         return s.turn
 
+    def replied(self, sid: str, text: str) -> None:
+        """What Auren said back. The judge reads it only to know what a following "yes" answers."""
+        if text.strip():
+            self._heard(self._session(sid), "auren", text)
+
+    def _heard(self, s: Session, who: str, text: str) -> None:
+        with self._lock:
+            s.said = [*s.said, (who, text.strip())][-SAID:]
+
     def forget(self, sid: str) -> None:
-        """A fresh conversation: nothing asked in the old one can be answered any more."""
+        """A fresh conversation: nothing asked in the old one can be answered any more, and nothing said
+        in it counts as the go-ahead."""
         self.confirmations.clear(sid)
+        self._session(sid).said = []
 
     def set_level(self, level: str) -> None:
         if level not in safety.LEVELS:
@@ -280,6 +302,7 @@ class Runtime:
         threading.Thread(target=self._server.serve_forever, daemon=True, name="tools").start()
 
     def stop(self) -> None:
+        self.judge.stop()
         if self._server:
             self._server.shutdown()
             self._server.server_close()
@@ -325,17 +348,32 @@ def _failed(result: str) -> bool:
 
 
 def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], None] | None = None,
-          *, say: Callable[[str], str | None] | None = None) -> str:
+          *, say: Callable[[str], str | None] | None = None, detail: str = "") -> str:
     """A risky action of these kinds (safety.WINDOW, FILES, ...). Depending on the approval level it runs
     now, or asks the user first: `run` then happens only after a yes in their next message, and only if
     `check` (the target is still what the question was about) passes then. say: given the result, what to
-    say if nothing is left for the brain to do (None: the brain should see the result)."""
+    say if nothing is left for the brain to do (None: the brain should see the result). detail: more about
+    the target, for the judge only (the page it's on, the whole text)."""
     c = _call.get()
     rt = c.runtime
     if not safety.needs_ask(rt.level, kinds, rt.confirmations.granted(c.session)):
         log.info("safety %s: ran without asking: %s", rt.level, question)
         return _run(run)
-    turn = rt._session(c.session).turn
+    s = rt._session(c.session)
+    turn, epoch = s.turn, rt.confirmations.epoch(c.session)
+    if safety.judged(kinds) and rt.judge.allows(s.said, question + (f" ({detail})" if detail else "")):
+        # The verdict took a moment: run only if this is still the request it was about, and the target hasn't changed.
+        if s.cancelled:
+            return "error: the user cancelled this request. Stop now: don't call more tools."
+        if s.turn != turn or rt.confirmations.epoch(c.session) != epoch:
+            return "error: the request changed while this was being checked: don't do it"
+        try:
+            if check:
+                check()
+        except PermissionError as e:
+            return f"error: {e}"
+        log.info("safety: the user's words cover it: %s", question)
+        return _run(run)
     if sum(p.turn == turn for p in rt.batch(c.session)) >= safety.MAX_BATCH:
         return (f"error: {safety.MAX_BATCH} questions are already waiting for the user's answer. Don't ask more "
                 "now: ask about those, and do the rest after they answer.")
@@ -537,7 +575,8 @@ def run_command(command: str, folder: str = "~", name: str = "", wait: bool = Tr
     make the tool ask the user itself (needs_confirmation): just call it, don't ask in words first."""
     risk = safety.assess_command(command)
     if risk:
-        return _gate(risk.kinds, f"Run `{command}`? {risk.reason[0].upper() + risk.reason[1:]}.",
+        where = f" in {folder}" if folder.strip() not in ("", "~") else ""        # the judge reads it too
+        return _gate(risk.kinds, f"Run `{command}`{where}? {risk.reason[0].upper() + risk.reason[1:]}.",
                      lambda: _run_command(command, folder, name, wait, timeout_s))
     return _run_command(command, folder, name, wait, timeout_s)
 
@@ -574,6 +613,11 @@ def show_agent(agent: str, hint: str = "") -> str:
 
 
 # --- browser (the user's real, logged-in Chromium browser) ---------------------------------------------
+
+def _on(page: dict) -> str:
+    """Which page an action is on, for the judge (the title often names the chat or the person)."""
+    return f"on the page “{page.get('title') or ''}” at {page['url']}"
+
 
 def _same_page(before: dict) -> Callable[[], None]:
     def check() -> None:
@@ -618,7 +662,8 @@ def browser_click(target: str, expect_download: bool = False) -> str:
             if not pinned or web.label_of(pinned) != label:
                 raise PermissionError(f"“{label}” isn't there any more: read the page again and ask the user again")
         return _gate({safety.click_kind(label)}, f"Click “{label}”? That could buy, send, post or delete something.",
-                     lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check)
+                     lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check,
+                     detail=_on(here))
     return _web(_run(web.browser_click, target, None, expect_download))
 
 
@@ -649,7 +694,8 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
                                           "again and ask the user again")
             short = text if len(text) <= 60 else text[:57] + "…"
             return _gate({safety.SEND}, f"Type “{short}” into “{f['label'] or 'the field'}” and press Enter? That could send or post it.",
-                         lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check)
+                         lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check,
+                         detail=_on(here) + (f", the whole text: “{text}”" if short != text else ""))
     return _web(_run(web.browser_type, target, text, submit))
 
 

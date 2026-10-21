@@ -469,15 +469,15 @@ Panel {
     { value: "high", label: "High", tip: "Harder requests; noticeably slower" },
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the ChatGPT allowance" }
   ]
-  // How much Auren asks before a risky action (like Claude Code's permission modes). Root, power, packages,
-  // secrets and buying ask at every level.
+  // How much Auren asks before a risky action (like Claude Code's permission modes). Sending, buying,
+  // secrets and wiping ask at every level, unless the user's own words already ask for them.
   readonly property var safeties: [
     { value: "ask", label: "Ask first", icon: "󰒃", tip: "Asks before every risky action; one yes answers everything waiting (the default)" },
     { value: "task", label: "Once per task", icon: "󰒓", tip: "Asks the first time; a yes covers the rest of that task" },
-    { value: "free", label: "Don't ask", icon: "󰒙", tip: "Never asks, except for root, power, packages, secrets and buying" }
+    { value: "free", label: "Full access", icon: "󰒙", tip: "Commands, files and the system just run; sending, buying, secrets and wiping still ask unless you said to" }
   ]
   readonly property string safetyText: safety === "task" ? "Asks the first time; a yes covers the rest of that task."
-                                     : safety === "free" ? "Never asks. Root, power, packages, secrets and buying still ask."
+                                     : safety === "free" ? "Full access. Only sending, buying, secrets and wiping ask, unless you said to."
                                      : "Asks before every risky action. One yes answers everything waiting."
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },

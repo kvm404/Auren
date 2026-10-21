@@ -61,10 +61,10 @@ def test_the_approval_level_is_only_mentioned_when_it_changes_what_the_brain_sho
     assert "<approvals>" not in prompt.user_message("hi", "time: now", level="ask")
     assert "after the user's yes" in prompt.user_message("hi", "time: now", level="task")
     free = prompt.user_message("hi", "time: now", level="free")
-    assert "switched asking off" in free and free.index("<approvals>") < free.index("Transcript: hi")
+    assert "full access" in free and free.index("<approvals>") < free.index("Transcript: hi")
 
 
 def test_the_brain_is_told_to_ask_once_for_a_whole_task():
     rules = prompt.rules(set())
-    assert "Don't ask the user for permission in words before using a tool" in rules
+    assert "Never ask for permission in words before using a tool" in rules
     assert "ask the user once about everything waiting" in rules and "all the tokens" in rules
