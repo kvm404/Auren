@@ -32,6 +32,7 @@ Always present:
 | `brain` | Who answers right now: `claude` or `codex` |
 | `mode` | Brain mode: `auto`, `claude` or `codex` |
 | `effort` | Claude's effort |
+| `codexModel` | Codex's model (`brain.codex_model`), for the panel's labels |
 | `voice` | Spoken replies on |
 | `voiceName` | Supertonic voice (`F2`, `M3`, …) |
 | `voices` | Voices available |

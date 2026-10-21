@@ -26,8 +26,9 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import tomlkit
@@ -164,6 +165,13 @@ KEYS = [
 BY_PATH = {k.path: k for k in KEYS}
 BY_FLAT = {k.flat: k for k in KEYS}
 
+# Defaults that changed. A config.toml writes every value out, so one from before a change names the old
+# default although the user never picked it: it's moved to the new default, once per change (the names
+# done are kept in .config.migrated), so a user who sets the old value again afterwards keeps it.
+DEFAULT_CHANGES = {
+    "codex-luna": ("brain.codex_model", "gpt-6.1-sol"),     # 2026-10-21: the backup brain is GPT-6 Luna
+}
+
 HEADER = """Auren's settings. Edit them here or with `auren config set KEY VALUE`; the bar panel and
 auren-ctl change some of them too (comments and order are kept)."""
 
@@ -271,9 +279,25 @@ def _write(doc: tomlkit.TOMLDocument) -> None:
 
 
 def ensure() -> None:
-    """Create config.toml if missing and remove the retired language setting from older installs."""
+    """Create config.toml if missing; on older installs remove the retired language setting and move
+    defaults that changed (DEFAULT_CHANGES)."""
     with _locked():
         _ensure()
+
+
+def _migrated() -> Path:
+    return CONFIG_FILE.with_name(".config.migrated")
+
+
+def _done() -> set[str]:
+    try:
+        return set(_migrated().read_text().split())
+    except OSError:
+        return set()
+
+
+def _mark_done(names: Iterable[str]) -> None:
+    _migrated().write_text("".join(f"{name}\n" for name in sorted(names)))
 
 
 def _ensure() -> None:
@@ -282,9 +306,26 @@ def _ensure() -> None:
             doc = tomlkit.parse(CONFIG_FILE.read_text())
         except (OSError, tomlkit.exceptions.TOMLKitError):
             return                    # leave unreadable files alone, as save() does
-        if "language" in doc:
+        changed = "language" in doc
+        if changed:
             del doc["language"]
+        done = _done()
+        todo = DEFAULT_CHANGES.keys() - done
+        for name in todo:
+            path, old = DEFAULT_CHANGES[name]
+            try:
+                value = _plain(_lookup(doc, path))
+            except KeyError:
+                continue
+            if value == old:
+                k = BY_PATH[path]
+                _update(doc, {k.flat: k.default})
+                changed = True
+                log.info("%s: %s %s is now the default %s", CONFIG_FILE, path, old, k.default)
+        if changed:
             _write(doc)
+        if todo:
+            _mark_done(done | todo)   # after the write: a failed one is tried again next time
         return
     values = defaults()
     if LEGACY.exists():
@@ -299,6 +340,7 @@ def _ensure() -> None:
                 except ValueError:
                     pass
     _write(_template(values))
+    _mark_done(DEFAULT_CHANGES)       # a new file already has the new defaults
     if LEGACY.exists():
         LEGACY.replace(LEGACY.with_name(LEGACY.name + ".bak"))
         log.info("moved %s into %s", LEGACY, CONFIG_FILE)

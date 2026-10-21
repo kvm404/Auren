@@ -66,6 +66,12 @@ Panel {
   readonly property bool voiceOn: st.voice !== false
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
+  // Codex's model as people say it: gpt-6-luna → GPT-6 Luna; other names as they are ("" from an older daemon)
+  readonly property string codexName: {
+    const parts = (st.codexModel || "").split("-")
+    if (parts.length < 3 || parts[0] !== "gpt") return st.codexModel || ""
+    return "GPT-" + parts[1] + " " + parts.slice(2).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+  }
   readonly property string safety: st.safety || "ask"
   readonly property string voiceName: st.voiceName || "F2"
   readonly property var tts: st.tts || ({ speed: 1.05, steps: 5, volume: 1.0, pause: 0.0 })
@@ -430,7 +436,7 @@ Panel {
                                    : root.mood === "listening" ? "Press Super+A again to send"
                                    : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
                                    : "Super+A to talk · Shift+Super+A for a fresh start"
-  readonly property string brainText: brainMode === "codex" ? "Codex (GPT-6 Luna)"
+  readonly property string brainText: brainMode === "codex" ? (codexName ? "Codex (" + codexName + ")" : "Codex")
                                     : (brainMode === "claude" ? "Claude Haiku only" : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
                                       + (st.brain === "codex" ? "" : ", " + effort + " effort")
 
@@ -461,7 +467,7 @@ Panel {
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
     { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
-    { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6 Luna via Codex (saves Claude's allowance)" }
+    { value: "codex", label: "Codex", icon: "󰘦", tip: (root.codexName ? root.codexName + " via Codex" : "Codex") + " (saves Claude's allowance)" }
   ]
   readonly property string sample: "Hi, this is how I sound now. Does this pace work for you?"
 
