@@ -63,6 +63,7 @@ COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|ne
 
 class Daemon:
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
+    _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
 
     def __init__(self, speak: bool = True):
@@ -91,7 +92,7 @@ class Daemon:
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
                                    "brain": "codex" if self.brain.using_backup else "claude",
                                    "mode": self.brain.mode, "effort": self.brain.primary.effort, "codexModel": self.brain.backup.model,
-                                   "voice": self.voice_on,
+                                   "codexEffort": self.brain.backup.effort, "voice": self.voice_on,
                                    "safety": self.tools.level,
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
@@ -99,6 +100,16 @@ class Daemon:
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
+        self._watch_handover()
+
+    def _watch_handover(self) -> None:
+        """Codex answers for Claude only until Brain.RETRY_AFTER is up: rewrite the state then, or an idle
+        daemon leaves the panel showing Codex (and its effort) while Claude would answer."""
+        until = self.brain.backup_until
+        if until is None or until == self._handover_until or self.loop is None:
+            return
+        self._handover_until = until
+        self.loop.call_later(max(0.0, until - time.time()) + 0.5, self._refresh_state)
 
     @property
     def voice_on(self) -> bool:
@@ -108,8 +119,8 @@ class Daemon:
         """A setting changed: rewrite the state file so the mascot and the bar see it."""
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
-                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "codexModel", "voice",
-                                  "voiceName", "voices", "tts", "safety")}
+                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "codexModel", "codexEffort",
+                                  "voice", "voiceName", "voices", "tts", "safety")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)
@@ -212,6 +223,14 @@ class Daemon:
             self._save({"effort": level})
             asyncio.create_task(self._set_claude(effort=level))
             return "effort " + level
+        if cmd == "codex-effort":
+            level = arg.strip()
+            if level not in Brain.CODEX_EFFORTS:
+                return "usage: codex-effort " + "|".join(Brain.CODEX_EFFORTS)
+            self.brain.set_codex(self.brain.backup.model, level)      # from the next request, no fresh start
+            self._save({"brain.codex_effort": level})
+            self._refresh_state()
+            return "codex-effort " + level
         if cmd == "safety":
             level = arg.strip()
             if level not in LEVELS:

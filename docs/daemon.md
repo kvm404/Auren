@@ -14,6 +14,7 @@
 | Interrupting | Pressing Super+A while Auren is speaking stops the voice and starts listening. While it thinks or works, Super+A (or Super+Shift+A) stops it instead, keeping the conversation ([safety.md](safety.md#stopping)) | `Daemon.command()` |
 | Voice choice | `auren-ctl voice-name F2 [sample]` (also from the bar panel: F2, M3, F1, M1, the voices picked in decision 0001); saved in `~/.config/auren/config.toml`, says the sample (or "Hi, this is voice F2") when idle. Picking a mascot in the panel uses this to switch to its voice and say hello | `Voice.set_voice()` |
 | Claude's effort | `auren-ctl effort low\|medium\|high\|xhigh\|max` (also the panel's Brain page). Claude Code's `--effort` is fixed when its process starts, so this restarts the brain (warm, ~1 s), which starts a fresh conversation; it waits for an answer in progress. Saved in `config.toml`, shown in `state.json` as `effort`. Low is decision 0003's default | `Brain.set_claude()`, `Daemon._set_claude()` |
+| Codex's effort | `auren-ctl codex-effort minimal\|low\|medium\|high\|xhigh` (also the panel's Brain page while Codex answers). Codex starts a process per request, so it applies from the next one: nothing restarts. Saved in `config.toml` as `brain.codex_effort`, shown in `state.json` as `codexEffort`. Low is the default | `Brain.set_codex()` |
 | Approval level | `auren-ctl safety ask\|task\|free` (also the panel's Brain page, or `safety.level` in `config.toml`): how much it asks before risky actions, see [safety.md](safety.md#approval-levels). Takes effect at once and ends what an earlier yes covered; shown in `state.json` as `safety` | `Daemon.command()`, `Runtime.set_level()` |
 | Answering | A plain yes or no right after it asked is read by the daemon itself and runs what was asked without the brain; anything more goes to the brain. `auren-ctl yes\|no` (and the bubble's buttons) answer whatever the bubble shows ([safety.md](safety.md#who-reads-the-answer)) | `Daemon.respond()`, `Daemon._answer()` |
 | Voice tuning | `auren-ctl tts speed 1.1 steps 5 volume 0.8 pause 0.2` (any of them, in any order) or `tts reset`. Ranges: speed 0.7–1.6, steps 2–12 (quality; 8 costs ~45% more CPU than 5), volume 0.1–1 (scales the samples, so it's relative to the system volume), pause 0–1 s of silence between sentences. Saved in `config.toml`, shown in `state.json` as `tts`; the panel's Voice page sets them | `voice.tuning()`, `Voice.tune()`, `Daemon._tts()` |
@@ -53,6 +54,7 @@ auren-ctl cancel                    # stop listening, thinking, working or speak
 auren-ctl forget                    # fresh conversation (same as saying "start fresh")
 auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the defaults
 auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
+auren-ctl codex-effort medium       # the same for Codex, from its next answer
 auren-ctl safety task               # ask once per task; ask | task | free
 auren-ctl yes                       # answer what it is asking (no: drop it)
 ```

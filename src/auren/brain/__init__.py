@@ -359,6 +359,11 @@ class Brain:
             return self.mode == "codex"
         return self.limited_since is not None and time.time() - self.limited_since < self.RETRY_AFTER
 
+    @property
+    def backup_until(self) -> float | None:
+        """When Codex stops answering for Claude (auto mode after a usage limit), else None."""
+        return self.limited_since + self.RETRY_AFTER if self.mode == "auto" and self.using_backup else None
+
     def ask(self, transcript: str) -> Iterator[tuple]:
         if self.mode == "claude":
             try:

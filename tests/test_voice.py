@@ -59,7 +59,7 @@ def test_tts_command_rejects_bad_input(tmp_path, monkeypatch):
 
 class _FakeBrain:
     EFFORTS = daemon.Brain.EFFORTS
-    mode, using_backup = "auto", False
+    mode, using_backup, backup_until = "auto", False, None
 
     def __init__(self):
         self.efforts, self.codex, self.warmed = [], None, 0
@@ -95,6 +95,25 @@ def test_effort_command_saves_and_restarts_the_brain(tmp_path, monkeypatch):
     assert _saved(tmp_path)["effort"] == "high"
 
 
+def test_codex_effort_command_saves_without_a_fresh_start(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    _config_in(tmp_path, monkeypatch)
+
+    async def run():
+        d = _Quiet()
+        d.brain, d.busy = _FakeBrain(), asyncio.Lock()
+        d.brain.backup = SimpleNamespace(model="gpt-6-luna", effort="low")
+        assert (await d.command("codex-effort max")).startswith("usage: codex-effort minimal|low")
+        assert await d.command("codex-effort high") == "codex-effort high"
+        return d
+
+    d = asyncio.run(run())
+    assert d.brain.codex == ("gpt-6-luna", "high") and d.brain.efforts == []     # Claude isn't restarted
+    assert _saved(tmp_path)["brain.codex_effort"] == "high" and d.refreshed == 1
+
+
 def test_settings_ignore_an_unknown_effort(tmp_path, monkeypatch):
     _config_in(tmp_path, monkeypatch)
     (tmp_path / "config.toml").write_text('[brain]\neffort = "ludicrous"\n')
@@ -120,13 +139,47 @@ def test_daemon_state_and_status_have_no_language_field(tmp_path, monkeypatch):
     d = _Quiet()
     d.brain = _FakeBrain()
     d.brain.primary = SimpleNamespace(effort="low")
-    d.brain.backup = SimpleNamespace(model="gpt-6.1-sol")
+    d.brain.backup = SimpleNamespace(model="gpt-6.1-sol", effort="medium")
     d.set_state("idle")
     state = json.loads((tmp_path / "state.json").read_text())
     status = json.loads(asyncio.run(d.command("status")))
     assert state["state"] == status["state"] == "idle"
-    assert state["voiceName"] == "F2" and state["codexModel"] == "gpt-6.1-sol"
+    assert state["voiceName"] == "F2" and state["codexModel"] == "gpt-6.1-sol" and state["codexEffort"] == "medium"
     assert "language" not in state and "language" not in status
+
+
+def test_state_goes_back_to_claude_when_codex_handover_ends(tmp_path, monkeypatch):
+    """After Claude's limit, Codex answers for Brain.RETRY_AFTER; an idle daemon still rewrites the state then."""
+    import asyncio
+    import json
+    import time
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(daemon, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(daemon, "STATE_FILE", tmp_path / "state.json")
+    until = time.time() + 0.2
+
+    class Handover(_FakeBrain):
+        @property
+        def using_backup(self):
+            return time.time() < until
+
+        @property
+        def backup_until(self):
+            return until if self.using_backup else None
+
+    async def run():
+        d = daemon.Daemon.__new__(daemon.Daemon)
+        d.settings, d.voice, d.speak_enabled = {"voice": True, "voiceName": "F2", **tuning()}, None, False
+        d.tools, d.loop = SimpleNamespace(level="ask"), asyncio.get_running_loop()
+        d.brain = Handover()
+        d.brain.primary, d.brain.backup = SimpleNamespace(effort="low"), SimpleNamespace(model="m", effort="low")
+        d.set_state("idle")
+        first = json.loads((tmp_path / "state.json").read_text())["brain"]
+        await asyncio.sleep(1)
+        return first, json.loads((tmp_path / "state.json").read_text())["brain"]
+
+    assert asyncio.run(run()) == ("codex", "claude")
 
 
 def test_voice_synthesizes_every_sentence_in_english(monkeypatch):
