@@ -33,6 +33,7 @@ Always present:
 | `mode` | Brain mode: `auto`, `claude` or `codex` |
 | `effort` | Claude's effort |
 | `codexModel` | Codex's model (`brain.codex_model`), for the panel's labels |
+| `codexEffort` | Codex's effort (`brain.codex_effort`) |
 | `voice` | Spoken replies on |
 | `voiceName` | Supertonic voice (`F2`, `M3`, …) |
 | `voices` | Voices available |
@@ -67,6 +68,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `tts speed X steps N volume X pause X` / `tts reset` | Voice tuning |
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
+| `codex-effort minimal\|low\|medium\|high\|xhigh` | Codex's effort (from its next answer) |
 | `safety ask\|task\|free` | How much Auren asks before risky actions (saved in `config.toml`) |
 | `yes` / `no` | Answer the question(s) it is waiting on (the bubble's and the panel's buttons send these; bind them to keys if you like). The reply says how many were approved or dropped, or that nothing is waiting |
 | `status` | JSON: state, brain, mode, effort, voice, safety |

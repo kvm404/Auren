@@ -66,6 +66,9 @@ Panel {
   readonly property bool voiceOn: st.voice !== false
   readonly property string brainMode: st.mode || "auto"
   readonly property string effort: st.effort || "low"
+  readonly property string codexEffort: st.codexEffort || "low"
+  // Codex answers now (Codex only, or Auto after Claude's limit): the effort row is Codex's then
+  readonly property bool codexAnswers: brainMode === "codex" || st.brain === "codex"
   // Codex's model as people say it: gpt-6-luna → GPT-6 Luna; other names as they are ("" from an older daemon)
   readonly property string codexName: {
     const parts = (st.codexModel || "").split("-")
@@ -370,6 +373,8 @@ Panel {
   function toggleMascot() { systemctl(root.mascotActive ? "stop" : "start", "auren-mascot") }
   function setBrain(mode) { ctlRun(["brain", mode]) }
   function setEffort(level) { if (level !== root.effort) ctlRun(["effort", level]) }
+  function setCodexEffort(level) { if (level !== root.codexEffort) ctlRun(["codex-effort", level]) }
+  function pickEffort(i) { if (codexAnswers) setCodexEffort(codexEfforts[i].value); else setEffort(efforts[i].value) }
   function setSafety(level) { if (level !== root.safety) ctlRun(["safety", level]) }
   function answer(yes) { ctlRun([yes ? "yes" : "no"]) }
   function setVoiceName(name) { ctlRun(["voice-name", name]) }
@@ -436,9 +441,10 @@ Panel {
                                    : root.mood === "listening" ? "Press Super+A again to send"
                                    : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
                                    : "Super+A to talk · Shift+Super+A for a fresh start"
-  readonly property string brainText: brainMode === "codex" ? (codexName ? "Codex (" + codexName + ")" : "Codex")
-                                    : (brainMode === "claude" ? "Claude Haiku only" : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
-                                      + (st.brain === "codex" ? "" : ", " + effort + " effort")
+  readonly property string brainText: (brainMode === "codex" ? (codexName ? "Codex (" + codexName + ")" : "Codex")
+                                       : brainMode === "claude" ? "Claude Haiku only"
+                                       : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
+                                      + ", " + (codexAnswers ? codexEffort : effort) + " effort"
 
   readonly property var qualities: [
     { value: "3", label: "Fast", tip: "3 steps: least CPU" },
@@ -453,6 +459,15 @@ Panel {
     { value: "high", label: "High", tip: "Harder requests; noticeably slower" },
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the Claude allowance" },
     { value: "max", label: "Max", tip: "Slowest and most expensive" }
+  ]
+  // Codex's reasoning effort (brain.codex_effort; low is decision 0003's). It applies from the next
+  // request: Codex starts a process per request, so nothing restarts.
+  readonly property var codexEfforts: [
+    { value: "minimal", label: "Minimal", tip: "Fastest; barely thinks" },
+    { value: "low", label: "Low", tip: "Quick; fine for most requests (the default)" },
+    { value: "medium", label: "Medium", tip: "A bit more care, a bit slower" },
+    { value: "high", label: "High", tip: "Harder requests; noticeably slower" },
+    { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the ChatGPT allowance" }
   ]
   // How much Auren asks before a risky action (like Claude Code's permission modes). Root, power, packages,
   // secrets and buying ask at every level.
@@ -542,7 +557,7 @@ Panel {
       { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } }]
     if (page === 3) return [
       { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
-      { n: 5, act: function(c) { root.setEffort(root.efforts[c].value) } },
+      { n: (root.codexAnswers ? root.codexEfforts : root.efforts).length, act: function(c) { root.pickEffort(c) } },
       { n: 3, act: function(c) { root.setSafety(root.safeties[c].value) } }]
     if (page === 4) return [
       { n: 2, act: function(c) { if (c === 0) vocabField.forceActiveFocus(); else root.addVocab() } }
@@ -1182,17 +1197,18 @@ Panel {
 
             Choice {
               width: parent.width
-              title: "CLAUDE EFFORT"
-              enabled: root.daemonAlive && root.brainMode !== "codex"
-              options: root.efforts
-              value: root.effort
+              title: root.codexAnswers ? "CODEX EFFORT" : "CLAUDE EFFORT"
+              enabled: root.daemonAlive
+              options: root.codexAnswers ? root.codexEfforts : root.efforts
+              value: root.codexAnswers ? root.codexEffort : root.effort
               foreground: root.fg; fontFamily: root.font
               cursorIndex: root.has(1) ? root.cursorCol : -1
-              onPicked: function(v) { root.setEffort(v) }
+              onPicked: function(v) { if (root.codexAnswers) root.setCodexEffort(v); else root.setEffort(v) }
               onHoveredIndex: function(i) { root.hover(1, i) }
             }
             Caption {
-              text: root.brainMode === "codex" ? "Codex only: Claude isn't used"
+              text: root.brainMode === "codex" ? "Codex only: Claude isn't used. Higher thinks harder but answers slower."
+                    : root.codexAnswers ? "Codex answers until Claude's limit resets. Higher thinks harder but answers slower."
                     : "Higher thinks harder but answers slower. Changing it starts a fresh conversation."
             }
 
