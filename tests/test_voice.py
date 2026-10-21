@@ -59,7 +59,7 @@ def test_tts_command_rejects_bad_input(tmp_path, monkeypatch):
 
 class _FakeBrain:
     EFFORTS = daemon.Brain.EFFORTS
-    mode, using_backup = "auto", False
+    mode, using_backup, backup_until = "auto", False, None
 
     def __init__(self):
         self.efforts, self.codex, self.warmed = [], None, 0
@@ -146,6 +146,40 @@ def test_daemon_state_and_status_have_no_language_field(tmp_path, monkeypatch):
     assert state["state"] == status["state"] == "idle"
     assert state["voiceName"] == "F2" and state["codexModel"] == "gpt-6.1-sol" and state["codexEffort"] == "medium"
     assert "language" not in state and "language" not in status
+
+
+def test_state_goes_back_to_claude_when_codex_handover_ends(tmp_path, monkeypatch):
+    """After Claude's limit, Codex answers for Brain.RETRY_AFTER; an idle daemon still rewrites the state then."""
+    import asyncio
+    import json
+    import time
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(daemon, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(daemon, "STATE_FILE", tmp_path / "state.json")
+    until = time.time() + 0.2
+
+    class Handover(_FakeBrain):
+        @property
+        def using_backup(self):
+            return time.time() < until
+
+        @property
+        def backup_until(self):
+            return until if self.using_backup else None
+
+    async def run():
+        d = daemon.Daemon.__new__(daemon.Daemon)
+        d.settings, d.voice, d.speak_enabled = {"voice": True, "voiceName": "F2", **tuning()}, None, False
+        d.tools, d.loop = SimpleNamespace(level="ask"), asyncio.get_running_loop()
+        d.brain = Handover()
+        d.brain.primary, d.brain.backup = SimpleNamespace(effort="low"), SimpleNamespace(model="m", effort="low")
+        d.set_state("idle")
+        first = json.loads((tmp_path / "state.json").read_text())["brain"]
+        await asyncio.sleep(1)
+        return first, json.loads((tmp_path / "state.json").read_text())["brain"]
+
+    assert asyncio.run(run()) == ("codex", "claude")
 
 
 def test_voice_synthesizes_every_sentence_in_english(monkeypatch):

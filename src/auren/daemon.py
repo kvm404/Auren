@@ -63,6 +63,7 @@ COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|ne
 
 class Daemon:
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
+    _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
 
     def __init__(self, speak: bool = True):
@@ -99,6 +100,16 @@ class Daemon:
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
+        self._watch_handover()
+
+    def _watch_handover(self) -> None:
+        """Codex answers for Claude only until Brain.RETRY_AFTER is up: rewrite the state then, or an idle
+        daemon leaves the panel showing Codex (and its effort) while Claude would answer."""
+        until = self.brain.backup_until
+        if until is None or until == self._handover_until or self.loop is None:
+            return
+        self._handover_until = until
+        self.loop.call_later(max(0.0, until - time.time()) + 0.5, self._refresh_state)
 
     @property
     def voice_on(self) -> bool:
