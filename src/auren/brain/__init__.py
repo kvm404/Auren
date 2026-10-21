@@ -249,14 +249,14 @@ def _env_toml(env: dict) -> str:
 
 
 class CodexBrain:
-    """Backup brain (decision 0003): GPT-6.1 Sol at low effort through `codex exec`, with auren's tools.
+    """Backup brain (decision 0003): GPT-6 Luna at low effort through `codex exec`, with auren's tools.
 
     Each request is a separate `codex exec` run (Codex's own system prompt can't be replaced, so auren's
     instructions go in the message, with the last few exchanges for context). Slower than Claude
     (~10-15 s) but on a separate allowance.
     """
 
-    def __init__(self, runtime, session: str = "daemon", model: str = "gpt-6.1-sol", effort: str = "low"):
+    def __init__(self, runtime, session: str = "daemon", model: str = "gpt-6-luna", effort: str = "low"):
         self.runtime, self.session = runtime, session
         self.model, self.effort = model, effort
         self.profile = Profile()
@@ -343,7 +343,7 @@ class Brain:
     CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 
     def __init__(self, runtime, session: str = "daemon", mode: str = "auto", effort: str = "low",
-                 claude_model: str = "haiku", codex_model: str = "gpt-6.1-sol", codex_effort: str = "low",
+                 claude_model: str = "haiku", codex_model: str = "gpt-6-luna", codex_effort: str = "low",
                  think: bool = True):
         self.runtime, self.session = runtime, session
         self.primary = ClaudeBrain(runtime, session, model=claude_model, think=think,

@@ -90,7 +90,8 @@ class Daemon:
         tmp = STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps({"state": state, "detail": detail, "since": time.time(), "pid": os.getpid(),
                                    "brain": "codex" if self.brain.using_backup else "claude",
-                                   "mode": self.brain.mode, "effort": self.brain.primary.effort, "voice": self.voice_on,
+                                   "mode": self.brain.mode, "effort": self.brain.primary.effort, "codexModel": self.brain.backup.model,
+                                   "voice": self.voice_on,
                                    "safety": self.tools.level,
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
@@ -107,8 +108,8 @@ class Daemon:
         """A setting changed: rewrite the state file so the mascot and the bar see it."""
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
-                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "voice", "voiceName",
-                                  "voices", "tts", "safety")}
+                     if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "codexModel", "voice",
+                                  "voiceName", "voices", "tts", "safety")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)

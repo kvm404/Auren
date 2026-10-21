@@ -90,6 +90,43 @@ def test_old_language_setting_is_removed_without_changing_other_preferences(cfg,
         settings.set_value("language", language)
 
 
+def _old_install(cfg, codex_model: str) -> None:
+    """A config.toml written before the Codex default changed: every value out, comments and all."""
+    values = settings.defaults() | {"brain.codex_model": codex_model, "speed": 1.2}
+    (cfg / "config.toml").write_text(settings.tomlkit.dumps(settings._template(values)) + "# mine\n")
+
+
+def test_an_old_default_moves_to_the_new_one_once(cfg):
+    _old_install(cfg, "gpt-6.1-sol")
+    values = settings.load()
+    assert values["brain.codex_model"] == "gpt-6-luna" and values["speed"] == 1.2
+    assert "# mine" in (cfg / "config.toml").read_text()
+    # Picking the old value again is a choice: it stays.
+    settings.set_value("brain.codex_model", "gpt-6.1-sol")
+    assert settings.load()["brain.codex_model"] == "gpt-6.1-sol"
+
+
+def test_a_model_the_user_picked_is_not_moved(cfg):
+    _old_install(cfg, "gpt-6.2-sol")
+    assert settings.load()["brain.codex_model"] == "gpt-6.2-sol"
+    assert "codex-luna" in (cfg / ".config.migrated").read_text()
+
+
+def test_a_new_config_needs_no_moving(cfg):
+    settings.load()
+    assert set((cfg / ".config.migrated").read_text().split()) == set(settings.DEFAULT_CHANGES)
+    settings.set_value("brain.codex_model", "gpt-6.1-sol")
+    assert settings.load()["brain.codex_model"] == "gpt-6.1-sol"
+
+
+def test_an_unreadable_config_is_moved_once_it_is_fixed(cfg):
+    (cfg / "config.toml").write_text("this is = not toml [")
+    settings.load()
+    assert not (cfg / ".config.migrated").exists()
+    _old_install(cfg, "gpt-6.1-sol")
+    assert settings.load()["brain.codex_model"] == "gpt-6-luna"
+
+
 def test_bad_values_fall_back_and_are_reported(cfg):
     values, problems = settings.read('[voice]\nspeed = 9\nname = "Z9"\n[extra]\nx = 1\n')
     assert values["speed"] == 1.05 and values["voiceName"] == "F2"

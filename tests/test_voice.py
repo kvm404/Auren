@@ -120,11 +120,12 @@ def test_daemon_state_and_status_have_no_language_field(tmp_path, monkeypatch):
     d = _Quiet()
     d.brain = _FakeBrain()
     d.brain.primary = SimpleNamespace(effort="low")
+    d.brain.backup = SimpleNamespace(model="gpt-6.1-sol")
     d.set_state("idle")
     state = json.loads((tmp_path / "state.json").read_text())
     status = json.loads(asyncio.run(d.command("status")))
     assert state["state"] == status["state"] == "idle"
-    assert state["voiceName"] == "F2"
+    assert state["voiceName"] == "F2" and state["codexModel"] == "gpt-6.1-sol"
     assert "language" not in state and "language" not in status
 
 
@@ -207,7 +208,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     d = asyncio.run(run())
     assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
     assert d.brain.mode == "codex" and efforts == [("high", "sonnet")]
-    assert d.brain.codex == ("gpt-6.1-sol", "medium")
+    assert d.brain.codex == ("gpt-6-luna", "medium")
     assert d.refreshed == 1
 
 

@@ -13,7 +13,7 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - **Ears:** AssemblyAI streaming speech-to-text, biased toward your own vocabulary (app names,
   projects, tools).
 - **Brain:** Claude Haiku 5.5 through a Claude Code process that stays running, with Codex
-  (GPT-6.1 Sol) as an automatic backup.
+  (GPT-6 Luna) as an automatic backup.
 - **Hands:** about 40 tools over MCP, covering apps, windows, workspaces, media, volume, shell commands,
   herdr agents and jobs, the browser (Open Browser Use), screen control (look, click, drag, type),
   whole drawings and diagrams in Excalidraw, and saved routines.
