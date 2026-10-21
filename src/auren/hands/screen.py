@@ -121,6 +121,13 @@ def _to_layout(x: float, y: float) -> tuple[int, int]:
     return round(v["x"] + x * v["lw"] / v["iw"]), round(v["y"] + y * v["lh"] / v["ih"])
 
 
+def _to_image(lx: int, ly: int) -> tuple[int, int]:
+    """Layout coordinates back to the last screenshot's pixels: what tools report, so the brain compares
+    like with like (layout numbers look 1.9x off next to the image)."""
+    v = _last_view
+    return round((lx - v["x"]) * v["iw"] / v["lw"]), round((ly - v["y"]) * v["ih"] / v["lh"])
+
+
 def _device():
     """A virtual mouse (buttons + wheel). Kept open: a new input device takes a moment to be picked up."""
     global _mouse
@@ -197,10 +204,11 @@ def hover(lx: int, ly: int) -> None:
 
 def click(x: float, y: float, button: str = "left", double: bool = False, restore: bool = False) -> str:
     lx, ly = _to_layout(x, y)
-    return click_layout(lx, ly, button, double, restore)
+    click_layout(lx, ly, button, double, restore)
+    return f"{'double-' if double else ''}{button}-clicked at ({round(x)}, {round(y)}) in the screenshot"
 
 
-def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, restore: bool = False) -> str:
+def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, restore: bool = False) -> None:
     """Click at layout (screen) coordinates: for callers that know where a window is, not a screenshot."""
     from evdev import ecodes as e
     btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
@@ -223,7 +231,6 @@ def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, r
         if restore:
             time.sleep(0.25)
             _move(*before)
-    return f"{'double-' if double else ''}{button}-clicked at screen ({lx}, {ly})"
 
 
 _HOLD = {"shift": "KEY_LEFTSHIFT", "ctrl": "KEY_LEFTCTRL", "control": "KEY_LEFTCTRL", "alt": "KEY_LEFTALT",
@@ -291,12 +298,14 @@ def drag(x1: float, y1: float, x2: float, y2: float, hold: str = "", button: str
     _hold_keys(hold)
     lx1, ly1 = _to_layout(x1, y1)
     lx2, ly2 = _to_layout(x2, y2)
-    return drag_layout(lx1, ly1, lx2, ly2, hold, button, duration)
+    end = _to_image(*drag_layout(lx1, ly1, lx2, ly2, hold, button, duration))
+    held = f" holding {hold}" if hold.strip() else ""
+    return f"dragged from ({round(x1)}, {round(y1)}) to ({end[0]}, {end[1]}) in the screenshot{held}"
 
 
 def drag_layout(lx1: int, ly1: int, lx2: int, ly2: int, hold: str = "", button: str = "left",
-                duration: float = 0.5) -> str:
-    """drag() in layout (screen) coordinates."""
+                duration: float = 0.5) -> tuple[int, int]:
+    """drag() in layout (screen) coordinates. Returns where the pointer let go."""
     from evdev import ecodes as e
     btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
     if btn is None:
@@ -324,9 +333,7 @@ def drag_layout(lx1: int, ly1: int, lx2: int, ly2: int, hold: str = "", button: 
         time.sleep(0.1)
         global _clicked
         _clicked = {"address": _active_window(), "at": time.time()}
-        end = _cursor()
-    held = f" holding {hold}" if keys else ""
-    return f"dragged from screen ({lx1}, {ly1}) to ({end[0]}, {end[1]}){held}"
+        return _cursor()
 
 
 def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
@@ -340,7 +347,7 @@ def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
         for _ in range(max(1, min(amount, 20))):
             dev.write(e.EV_REL, e.REL_WHEEL, step); dev.syn()
             time.sleep(0.03)
-    return f"scrolled {direction} {amount} at screen ({lx}, {ly})"
+    return f"scrolled {direction} {amount} at ({round(x)}, {round(y)}) in the screenshot"
 
 
 TERMINALS = re.compile(r"alacritty|kitty|ghostty|foot|wezterm|konsole|terminal", re.I)

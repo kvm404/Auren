@@ -314,3 +314,11 @@ yet in that call ("n.", "e.") drop, because each new key swaps the virtual keyma
 key that comes with it. `wl-copy` + Ctrl+V came out exact, so `type_text` now pastes (and puts the old
 clipboard back after 0.4 s). Terminals still get `wtype`. A pasted newline is a line break, so text can't
 press Enter (which sends in a chat) behind the gate on Enter.
+
+The same session's "clicks are 1.87x off" was the report, not the click: `click_at` answered in layout
+coordinates (1920 wide) next to a 1024-wide image. Clicks, drags and scrolls now report image pixels.
+
+That report's first version broke `click_at` and `drag_at` (and Excalidraw's canvas click and pan), from
+2026-10-20 to 10-21: they clicked, then failed with `NameError: name 'x' is not defined`, so Auren said its
+clicks were broken and clicked again (Spotify, YouTube, a Google Sheet's links). Tests now run clicks,
+drags and the layout calls Excalidraw uses through a stand-in mouse.

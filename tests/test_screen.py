@@ -39,6 +39,55 @@ def test_typing_goes_back_to_the_clicked_window(monkeypatch):
     assert len(calls) == 1 and calls[0][0] == "wtype"
 
 
+class _Mouse:
+    """The virtual mouse: buttons pressed, and relative motion that moves the cursor."""
+
+    def __init__(self, at):
+        self.at, self.buttons = at, []
+
+    def write(self, kind, code, value):
+        from evdev import ecodes as e
+        if kind == e.EV_KEY:
+            self.buttons.append((code, value))
+        elif kind == e.EV_REL and code in (e.REL_X, e.REL_Y):
+            self.at[code == e.REL_Y] += value
+
+    def syn(self):
+        pass
+
+
+def _mouse_env(monkeypatch):
+    at = [0, 0]
+    mouse = _Mouse(at)
+    monkeypatch.setattr(screen, "_device", lambda: mouse)
+    monkeypatch.setattr(screen, "_cursor", lambda: tuple(at))
+    monkeypatch.setattr(screen, "_move", lambda x, y: at.__setitem__(slice(None), [x, y]))
+    monkeypatch.setattr(screen, "_active_window", lambda: "0xabc")
+    monkeypatch.setattr(screen.time, "sleep", lambda s: None)
+    monkeypatch.setattr(screen, "_last_view", {"x": 0, "y": 0, "lw": 1920, "lh": 1080, "iw": 1024, "ih": 576,
+                                               "at": screen.time.time()})
+    return mouse
+
+
+def test_click_and_drag_report_screenshot_pixels(monkeypatch):
+    # every click_at clicked, then failed with "NameError: name 'x' is not defined", so the brain said its
+    # clicks were broken and clicked again
+    mouse = _mouse_env(monkeypatch)
+    assert screen.click(512, 288) == "left-clicked at (512, 288) in the screenshot"
+    assert mouse.at == [960, 540] and len(mouse.buttons) == 2
+    assert screen.click(100, 50, double=True) == "double-left-clicked at (100, 50) in the screenshot"
+    assert screen.drag(10, 10, 100, 50) == "dragged from (10, 10) to (100, 50) in the screenshot"
+
+
+def test_layout_clicks_and_drags_work_without_a_screenshot(monkeypatch):
+    # Excalidraw focuses its canvas and pans with these, in screen coordinates
+    mouse = _mouse_env(monkeypatch)
+    monkeypatch.setattr(screen, "_last_view", None)
+    screen.click_layout(700, 400)
+    screen.drag_layout(700, 400, 900, 500, button="middle")
+    assert mouse.at == [900, 500] and len(mouse.buttons) == 4
+
+
 def test_drag_rejects_unknown_hold_keys():
     with pytest.raises(screen.ScreenError, match="can only hold"):
         screen.drag(1, 2, 3, 4, hold="shift+banana")
@@ -104,3 +153,12 @@ def test_terminals_are_typed_into(monkeypatch):
     assert screen.type_text("ls") == "typed 2 characters"
     assert keys == [["wtype", "--", "ls"]] and board.pasted == []
 
+
+def test_tools_report_screenshot_pixels_not_layout(monkeypatch):
+    # the brain saw "clicked at screen (1594, 506)" next to a 1024-wide image and thought clicks were 1.87x off
+    monkeypatch.setattr(screen, "_last_view", {"x": 0, "y": 0, "lw": 1920, "lh": 1080, "iw": 1024, "ih": 576,
+                                               "at": screen.time.time()})
+    assert screen._to_image(*screen._to_layout(850, 270)) == (850, 270)
+    monkeypatch.setattr(screen, "_last_view", {"x": 1920, "y": 0, "lw": 1536, "lh": 960, "iw": 1024, "ih": 640,
+                                               "at": screen.time.time()})
+    assert screen._to_image(*screen._to_layout(100, 600)) == (100, 600)
