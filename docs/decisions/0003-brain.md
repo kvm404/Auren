@@ -2,6 +2,9 @@
 
 Date: 2026-10-10 · Status: accepted
 
+Update 2026-10-21: the backup is now **GPT-6 Luna** (`gpt-6-luna`), effort low. Sol stays available
+through `brain.codex_model` in `config.toml`. The comparison below is from the original decision.
+
 ## Decision
 
 | Order | Brain | Runs through | Paid by | Used when |

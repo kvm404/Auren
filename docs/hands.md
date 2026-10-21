@@ -156,7 +156,7 @@ herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). H
 
 ## Backup brain
 
-`Brain` (used by `auren chat`) runs Claude first. On a usage-limit error it switches to `CodexBrain`, which runs GPT-6.1 Sol at low effort with the same tool server through `codex exec`, and it retries Claude after 30 minutes.
+`Brain` (used by `auren chat`) runs Claude first. On a usage-limit error it switches to `CodexBrain`, which runs GPT-6 Luna at low effort with the same tool server through `codex exec`, and it retries Claude after 30 minutes.
 - Codex can't replace its own system prompt, so Auren's instructions go in the message with the last 4 exchanges.
 - Its MCP adapter only needs the runtime's socket and the session (`AUREN_TOOLS`, `AUREN_SESSION` via `mcp_servers.auren.env`): the tools themselves run in the daemon, with the desktop session's environment.
 - Pending confirmations live in the runtime, and each message lists them in `<awaiting_confirmation>`, so a "yes" works even though every Codex run is fresh.

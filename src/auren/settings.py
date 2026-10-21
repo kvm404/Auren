@@ -94,7 +94,7 @@ def _name(v: Any) -> str:
 
 def _model(v: Any) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][\w.:\[\]/-]{0,80}", str(v)):
-        raise ValueError("a model name like haiku or gpt-6.1-sol")
+        raise ValueError("a model name like haiku or gpt-6-luna")
     return str(v)
 
 
@@ -138,7 +138,7 @@ KEYS = [
     Key("brain.effort", "effort", "low", _choice(*EFFORTS), "Claude's effort: low, medium, high, xhigh or max"),
     Key("brain.claude_model", "brain.claude_model", "haiku", _model,
         "Claude Code's --model: haiku, sonnet, opus, or a full model id"),
-    Key("brain.codex_model", "brain.codex_model", "gpt-6.1-sol", _model, "Codex's model (codex exec -m)"),
+    Key("brain.codex_model", "brain.codex_model", "gpt-6-luna", _model, "Codex's model (codex exec -m)"),
     Key("brain.codex_effort", "brain.codex_effort", "low", _choice(*CODEX_EFFORTS),
         "Codex's reasoning effort: minimal, low, medium, high or xhigh"),
     Key("safety.level", "safety", "ask", _choice(*SAFETY_LEVELS),

@@ -430,7 +430,7 @@ Panel {
                                    : root.mood === "listening" ? "Press Super+A again to send"
                                    : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
                                    : "Super+A to talk · Shift+Super+A for a fresh start"
-  readonly property string brainText: brainMode === "codex" ? "Codex (GPT-6.1 Sol)"
+  readonly property string brainText: brainMode === "codex" ? "Codex (GPT-6 Luna)"
                                     : (brainMode === "claude" ? "Claude Haiku only" : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
                                       + (st.brain === "codex" ? "" : ", " + effort + " effort")
 
@@ -461,7 +461,7 @@ Panel {
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
     { value: "claude", label: "Claude", icon: "󰚩", tip: "Claude Haiku only" },
-    { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6.1 Sol via Codex (saves Claude's allowance)" }
+    { value: "codex", label: "Codex", icon: "󰘦", tip: "GPT-6 Luna via Codex (saves Claude's allowance)" }
   ]
   readonly property string sample: "Hi, this is how I sound now. Does this pace work for you?"
 

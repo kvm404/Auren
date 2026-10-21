@@ -10,7 +10,7 @@ overlay shows what it's doing.
 |---|---|---|
 | 1 | **Voice (TTS):** Supertonic 3, voice F2, local | ✅ decided, [0001](decisions/0001-assistant-voice.md) |
 | 2 | **Ears (STT):** AssemblyAI streaming 3.5 Pro + vocabulary; ElevenLabs backup | ✅ decided, [0002](decisions/0002-speech-to-text.md) |
-| 3 | **Brain:** Claude Haiku 5.5 via Claude Code (Pro); GPT-6.1 Sol via Codex as backup (wired, automatic switch); Groq Qwen as last resort (not wired) | ✅ [0003](decisions/0003-brain.md) |
+| 3 | **Brain:** Claude Haiku 5.5 via Claude Code (Pro); GPT-6 Luna via Codex as backup (wired, automatic switch); Groq Qwen as last resort (not wired) | ✅ [0003](decisions/0003-brain.md) |
 | 4 | **Hands (tools):** system profile, herdr, desktop and system, browser (Open Browser Use), routines ([hands.md](hands.md)); connected to the brain via MCP (`uv run auren chat`). Screen control (see the screen, mouse, keyboard) as a fallback | ✅ first version |
 | 5 | **Safety:** approval levels (ask, once per task, don't ask) with an always-ask floor; one yes for a batch, read by the daemon or clicked; screen and web text treated as untrusted | ✅ ([safety.md](safety.md)) |
 | 6 | **Daemon:** press to talk (Super+A; Super+Shift+A for a fresh conversation), ears → brain → voice, interrupting; systemd user service ([daemon.md](daemon.md)) | ✅ first version |

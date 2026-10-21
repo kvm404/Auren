@@ -207,7 +207,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
     d = asyncio.run(run())
     assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
     assert d.brain.mode == "codex" and efforts == [("high", "sonnet")]
-    assert d.brain.codex == ("gpt-6.1-sol", "medium")
+    assert d.brain.codex == ("gpt-6-luna", "medium")
     assert d.refreshed == 1
 
 
