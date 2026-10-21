@@ -178,7 +178,7 @@ The fallback for what no other tool reaches: browser permission popups, apps' ow
 |---|---|
 | `look_at_screen()` | `grim` captures the focused monitor at 1024 px wide, with a light labelled grid every 50 px (numbers along the top and left). Returned as an image the brain sees |
 | `click_at(x, y, target, button, double)` | Image pixels → layout coordinates (monitor position + scale). Moves with Hyprland (`hl.dsp.cursor.move`), clicks with a virtual mouse made through `/dev/uinput` (python-evdev; the user can write to `/dev/uinput`), then puts the cursor back. `target` says what is clicked. Labels like buy, pay, send, post, submit, delete need confirmation |
-| `scroll_at`, `type_text`, `press_keys` | Wheel via the virtual mouse; text and shortcuts via `wtype`. Alt+F4, Ctrl+Q, Ctrl+W and similar need confirmation |
+| `scroll_at`, `type_text`, `press_keys` | Wheel via the virtual mouse; shortcuts via `wtype`. Text is pasted (`wl-copy`, Ctrl+V, then the old clipboard is put back), except in terminals, which get `wtype`. Alt+F4, Ctrl+Q, Ctrl+W and similar need confirmation |
 
 **Brain rules.** Use these only as a fallback, or when the user asks; look first; click by the grid numbers; look again to verify; say what was clicked.
 
@@ -304,3 +304,13 @@ deleted: then Ctrl+A, Delete, and the same paste again, so a drawing that won't 
 - "Add a box called Mascot below the brain": `excalidraw_read`, then `place="exact"`. The box landed
   centred under Brain. Exact placement lands within 2 px (wanted 764,560, got 764,558). Placing a paste
   1959 px away took two pans.
+
+## Typing into Discord (user test, 2026-10-20)
+
+"Write that this is from Auren … and send it" in the Discord web app: `wtype` came out as "This is from
+Aure The permissions … usable than befor", so Auren cleared the box and didn't send. Reproduced in a
+plain Chrome `--app` textarea, with and without `wtype -d 5`: letters next to a key wtype hasn't used
+yet in that call ("n.", "e.") drop, because each new key swaps the virtual keymap and Chrome misses the
+key that comes with it. `wl-copy` + Ctrl+V came out exact, so `type_text` now pastes (and puts the old
+clipboard back after 0.4 s). Terminals still get `wtype`. A pasted newline is a line break, so text can't
+press Enter (which sends in a chat) behind the gate on Enter.

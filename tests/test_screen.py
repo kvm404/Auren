@@ -27,12 +27,12 @@ def test_must_look_first(monkeypatch):
 
 def test_typing_goes_back_to_the_clicked_window(monkeypatch):
     calls = []
-    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: calls.append(cmd) or "")
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: calls.append(cmd) or '{"class": "foot"}')
     monkeypatch.setattr(screen.time, "sleep", lambda s: None)
     monkeypatch.setattr(screen, "_clicked", {"address": "0xabc", "at": screen.time.time()})
     monkeypatch.setattr(screen, "_active_window", lambda: "0xother")      # focus followed the mouse away
-    screen.type_text("hi")
-    assert 'address:0xabc' in calls[0][-1] and calls[1] == ["wtype", "--", "hi"]
+    screen.type_text("hi")                                                # a terminal: typed, not pasted
+    assert 'address:0xabc' in calls[0][-1] and calls[-1] == ["wtype", "--", "hi"]
     calls.clear()
     monkeypatch.setattr(screen, "_active_window", lambda: "0xabc")        # still focused: no refocus
     screen.press_keys("Enter")
@@ -42,3 +42,65 @@ def test_typing_goes_back_to_the_clicked_window(monkeypatch):
 def test_drag_rejects_unknown_hold_keys():
     with pytest.raises(screen.ScreenError, match="can only hold"):
         screen.drag(1, 2, 3, 4, hold="shift+banana")
+
+
+class _Clipboard:
+    """wl-copy / wl-paste stand-ins: one clipboard, a log of what was pasted."""
+
+    def __init__(self, content=None):
+        self.content, self.pasted, self.cleared = content, [], False
+
+    def run(self, cmd, input=None, **kw):
+        out = b"" if "text" not in kw else ""
+        if cmd[:2] == ["wl-paste", "--list-types"]:
+            out = "" if self.content is None else f"{self.content[0]}\ntext/plain\n"
+        elif cmd[0] == "wl-paste":
+            out = self.content[1]
+        elif cmd == ["wl-copy", "--clear"]:
+            self.content, self.cleared = None, True
+        elif cmd[0] == "wl-copy":
+            self.content = (cmd[cmd.index("--type") + 1], input)
+        return screen.subprocess.CompletedProcess(cmd, 0, out, "")
+
+
+def _paste_env(monkeypatch, board, window="chrome-discord.com__channels_@me-Default"):
+    keys = []
+
+    def sh(cmd, timeout=10):
+        if cmd[:2] == ["hyprctl", "activewindow"]:
+            return screen.json.dumps({"class": window, "address": "0xabc"})
+        if cmd[0] == "wtype":
+            keys.append(cmd)
+            if cmd[1] == "-M":
+                board.pasted.append(board.content[1].decode())
+        return ""
+    monkeypatch.setattr(screen, "_sh", sh)
+    monkeypatch.setattr(screen.subprocess, "run", board.run)
+    monkeypatch.setattr(screen.time, "sleep", lambda s: None)
+    monkeypatch.setattr(screen, "_clicked", None)
+    return keys
+
+
+def test_text_is_pasted_in_one_go_and_the_clipboard_put_back(monkeypatch):
+    board = _Clipboard(("text/plain;charset=utf-8", b"what the user had copied"))
+    keys = _paste_env(monkeypatch, board)
+    text = "This is from Auren.\nThe permissions are updated."
+    assert screen.type_text(text) == f"pasted {len(text)} characters"
+    assert board.pasted == [text]                                         # whole, newline included: no Enter key
+    assert keys == [["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]]
+    assert board.content == ("text/plain;charset=utf-8", b"what the user had copied")
+
+
+def test_an_empty_clipboard_is_left_empty(monkeypatch):
+    board = _Clipboard()
+    _paste_env(monkeypatch, board)
+    screen.type_text("hi")
+    assert board.pasted == ["hi"] and board.cleared and board.content is None
+
+
+def test_terminals_are_typed_into(monkeypatch):
+    board = _Clipboard(("text/plain", b"x"))
+    keys = _paste_env(monkeypatch, board, window="Alacritty")
+    assert screen.type_text("ls") == "typed 2 characters"
+    assert keys == [["wtype", "--", "ls"]] and board.pasted == []
+

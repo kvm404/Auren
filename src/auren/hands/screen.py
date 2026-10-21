@@ -18,8 +18,12 @@ no command line.
   relative motion from the virtual mouse, steered by reading the cursor back (pointer
   acceleration applies to it too). Held keys come from a small virtual keyboard: `wtype`
   releases its keys when it exits, so it can't hold one across a drag.
-- type_text() / press_keys(): `wtype` (Wayland virtual keyboard), into the window
-  that was last clicked (focused again first if focus has moved since).
+- type_text(): into the window that was last clicked (focused again first if focus has moved
+  since). Pasted through the clipboard (`wl-copy`, Ctrl+V), then the clipboard is put back: `wtype`
+  drops letters in Chrome and Electron apps (Discord typed "This is from Aure The permissions"), and
+  a typed newline would press Enter, which sends in a chat. Terminals still get `wtype`, since Ctrl+V
+  isn't paste there. A clipboard history keeps the pasted text.
+- press_keys(): `wtype` (Wayland virtual keyboard), into the same window.
 - press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
   uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
   typed see the wrong key: Excalidraw's Shift+2 is one.
@@ -28,6 +32,7 @@ no command line.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import threading
@@ -338,6 +343,29 @@ def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
     return f"scrolled {direction} {amount} at screen ({lx}, {ly})"
 
 
+TERMINALS = re.compile(r"alacritty|kitty|ghostty|foot|wezterm|konsole|terminal", re.I)
+_KEEP = ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "image/png")     # what a clipboard save keeps
+
+
+def _clipboard() -> tuple[str, bytes] | None:
+    """The clipboard's content in its most useful type, to put back after a paste (None: empty)."""
+    try:
+        types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=3).stdout.split()
+        kind = next((t for t in _KEEP if t in types), None)
+        if kind is None:
+            return None
+        p = subprocess.run(["wl-paste", "--no-newline", "--type", kind], capture_output=True, timeout=3)
+        return (kind, p.stdout) if p.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _copy(data: bytes, kind: str = "text/plain;charset=utf-8") -> None:
+    # wl-copy forks a server that holds the clipboard; it mustn't keep our pipes open
+    subprocess.run(["wl-copy", "--type", kind], input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=5, check=True)
+
+
 def press_code(combo: str) -> str:
     """A shortcut by physical key position, such as 'shift+2', from the virtual keyboard (modifiers and
     digits only). Digits sit on the same keys in every layout, so this is safe whatever the user's layout."""
@@ -362,8 +390,32 @@ def press_code(combo: str) -> str:
 
 def type_text(text: str) -> str:
     _refocus()
-    _sh(["wtype", "--", text])
-    return f"typed {len(text)} characters"
+    try:
+        window = json.loads(_sh(["hyprctl", "activewindow", "-j"])).get("class", "")
+    except (ScreenError, json.JSONDecodeError):
+        window = ""
+    if TERMINALS.search(window):
+        _sh(["wtype", "--", text])
+        return f"typed {len(text)} characters"
+    saved = _clipboard()
+    try:
+        _copy(text.encode())
+    except (OSError, subprocess.SubprocessError):
+        _sh(["wtype", "--", text])            # no wl-copy: type it, letters may drop
+        return f"typed {len(text)} characters (no wl-copy, so check it came out right)"
+    try:
+        time.sleep(0.05)
+        _sh(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"])
+        time.sleep(0.4)                       # the app reads the clipboard after the key: don't swap it out yet
+    finally:
+        try:
+            if saved:
+                _copy(saved[1], saved[0])
+            else:
+                subprocess.run(["wl-copy", "--clear"], timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return f"pasted {len(text)} characters"
 
 
 _KEY_NAMES = {"enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape", "tab": "Tab",
