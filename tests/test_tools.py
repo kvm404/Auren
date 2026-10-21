@@ -184,6 +184,19 @@ def test_bad_calls_come_back_as_errors(rt):
     assert _ask(rt, "notify", wrong=1).startswith("error: wrong arguments")
 
 
+def test_a_failed_tool_is_logged_with_why(rt, monkeypatch, caplog):
+    # the brain only said "my clicks keep failing": the log has to keep the error and what was asked
+    from auren.hands import screen
+
+    def broken(*a):
+        return undefined_name  # noqa: F821
+    monkeypatch.setattr(screen, "click", broken)
+    with caplog.at_level("INFO", logger="auren.tools"):
+        assert _ask(rt, "click_at", x=10, y=20, target="the search box").startswith("error: unexpected NameError")
+    assert "NameError" in caplog.text and '"x": 10' in caplog.text and "the search box" in caplog.text
+    assert "Traceback" in caplog.text
+
+
 def test_the_mcp_adapter_forwards_text_and_images(rt, monkeypatch):
     from auren import server
     from auren.hands import screen

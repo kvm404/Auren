@@ -235,6 +235,9 @@ class Runtime:
             out = f"error: unexpected {type(e).__name__}: {e}"
         finally:
             _call.reset(token)
+        first = out[0] if isinstance(out, list) and out else out
+        if isinstance(first, str) and first.startswith("error:"):     # the brain only says "it failed": keep why
+            log.warning("tool %s %s: %s", name, json.dumps(args, ensure_ascii=False)[:200], first.splitlines()[0][:300])
         if not t.repeatable and not c.asked:
             s.acted = True
         return out if isinstance(out, list) else [out]
@@ -298,6 +301,7 @@ def _run(fn, *args, **kwargs) -> str:
             excalidraw.ExcalidrawError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
+        log.exception("%s failed", getattr(fn, "__name__", fn))
         return f"error: unexpected {type(e).__name__}: {e}\n{traceback.format_exc(limit=2)}"
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
