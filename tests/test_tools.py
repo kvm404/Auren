@@ -291,17 +291,18 @@ def test_ask_level_asks_every_time(rt, shell_log):
     assert shell_log == [] and not rt.acted("daemon")
 
 
-def test_free_level_is_full_access_but_sending_secrets_and_wiping_ask(rt, shell_log, monkeypatch):
+def test_free_level_is_full_access_but_sending_and_the_floor_ask(rt, shell_log, monkeypatch):
     rt.set_level("free")
     locked = []
     monkeypatch.setattr(desktop, "lock_screen", lambda: locked.append(1) or "locked")
     assert _ask(rt, "run_command", command="rm a") == "ran rm a"
-    assert _ask(rt, "run_command", command="sudo pacman -S foo") == "ran sudo pacman -S foo"
     assert _ask(rt, "lock_screen") == "locked" and locked == [1]
     assert rt.acted("daemon")                                     # it ran: a backup brain mustn't redo it
-    for asks in ("cat ~/.ssh/id_rsa", "git push origin main", "rm .env", "rm -rf ~", "auren-ctl yes"):
+    for asks in ("sudo pacman -Rns linux", "cat ~/.ssh/id_rsa", "git push origin main", "rm -rf ~",
+                 "rm -rf *", "auren-ctl yes"):                    # run_command's folder is ~ unless given
         assert _asked(_ask(rt, "run_command", command=asks)), asks
-    assert shell_log == ["rm a", "sudo pacman -S foo"]
+    assert _ask(rt, "run_command", command="rm -rf *", folder="~/Projects/x/build") == "ran rm -rf *"
+    assert shell_log == ["rm a", "rm -rf *"]
 
 
 def test_free_level_still_asks_before_buying_and_sending(rt, monkeypatch):

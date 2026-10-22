@@ -27,7 +27,7 @@ def _short(value, n: int = 160) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
-def handle(brain, text: str, replied=lambda text: None) -> None:
+def handle(brain, text: str) -> None:
     try:
         for ev in brain.ask(text):
             if ev[0] == "tool":
@@ -38,7 +38,6 @@ def handle(brain, text: str, replied=lambda text: None) -> None:
                 print(f"{RED}  {ev[1]}{END}")
             elif ev[0] == "say":
                 print(f"{BOLD}Auren: {ev[1]}{END}")
-                replied(ev[1])
             elif ev[0] == "done":
                 info = ev[1]
                 print(f"{DIM}  ({info['seconds']}s" + (f", context {info['context_tokens']} tokens" if info.get('context_tokens') else "")
@@ -108,8 +107,8 @@ def main() -> None:
                       codex_effort=s["brain.codex_effort"], think=not a.no_think)
     try:
         if a.cmd == "ask":
-            runtime.new_turn(session, said=" ".join(a.text))
-            handle(brain, " ".join(a.text), lambda t: runtime.replied(session, t))
+            runtime.new_turn(session)
+            handle(brain, " ".join(a.text))
         else:
             print(f"{DIM}auren chat: type a request (Ctrl-D to quit){END}")
             while True:
@@ -118,8 +117,8 @@ def main() -> None:
                 except EOFError:
                     break
                 if text:
-                    runtime.new_turn(session, said=text)
-                    handle(brain, text, lambda t: runtime.replied(session, t))
+                    runtime.new_turn(session)
+                    handle(brain, text)
     finally:
         brain.stop()
         runtime.stop()

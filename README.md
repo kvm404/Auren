@@ -20,11 +20,10 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 - **Voice:** Supertonic 3, running locally on the CPU, voice F2. Replies in English. Speed, quality,
   volume and the pause between sentences are adjustable.
 - **Safety:** risky actions (buying, sending, deleting, `sudo` and the like) ask first, and one yes
-  answers everything waiting, by voice or with a click. What you already told it to do doesn't ask: a
-  separate judge reads only your own words ("send hi to Priya") and lets that very action through.
-  `auren-ctl safety ask|task|free` (or the bar panel) picks how much it asks, like Claude Code's modes;
-  `free` is full access, where only sending, buying, secrets and wiping ask. Text from screens and web
-  pages is treated as untrusted.
+  answers everything waiting, by voice or with a click. `auren-ctl safety ask|task|free` (or the bar
+  panel) picks how much it asks, like Claude Code's modes; publishing (`git push`, posts), root, power,
+  packages, secrets, buying and wiping always ask, and `free` (full access) still asks before sending.
+  Text from screens and web pages is treated as untrusted.
 - **Mascot:** Auren (a hover-bot) or Veyra (a fox spirit). It floats over every workspace, listens, thinks, works, reacts to the voice and shows
   captions in a speech bubble. Drag it anywhere; it fades and falls asleep when idle.
 - **Bar plugin:** the mascot in pixels in the Omarchy bar. Its panel has six pages: Home (talk, last

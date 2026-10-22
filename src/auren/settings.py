@@ -144,7 +144,7 @@ KEYS = [
         "Codex's reasoning effort: minimal, low, medium, high or xhigh"),
     Key("safety.level", "safety", "ask", _choice(*SAFETY_LEVELS),
         "How much Auren asks before a risky action: ask (every time), task (once per task: a yes covers the rest of it) "
-        "or free (full access: only sending, buying, secrets and wiping ask, and not when you said to)"),
+        "or free (full access: windows and files just run; sending, publishing, root, packages, secrets, buying and wiping still ask)"),
     Key("integrations.herdr", "integrations.herdr", "auto", _switch,
         "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
     Key("integrations.browser", "integrations.browser", "auto", _switch,

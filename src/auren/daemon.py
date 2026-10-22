@@ -450,8 +450,8 @@ class Daemon:
         said = text or ("yes" if yes else "no")
         t0 = time.perf_counter()
         # The user's answer is a message, which is what lets the tokens run; it goes on with the task, so what an
-        # earlier yes covered (level "task") stays covered. The judge reads it too: a "no" takes back what was asked.
-        self.tools.new_turn(SESSION, same_task=True, said=said)
+        # earlier yes covered (level "task") stays covered.
+        self.tools.new_turn(SESSION, same_task=True)
         asked = [p.question for p in batch]
         if not yes:
             self.tools.answer(SESSION, False, tokens)
@@ -477,7 +477,6 @@ class Daemon:
     async def _finish_answer(self, said: str, source: str, heard_s: float | None, t0: float, reply: str,
                              tools: list[str]) -> None:
         log.info("answered %r without the brain (%.2fs): %s", said, time.perf_counter() - t0, reply)
-        self.tools.replied(SESSION, reply)
         self._history({"at": time.time(), "source": source, "transcript": said, "reply": reply, "tools": tools,
                        "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2), "brain": "none"})
         await self.say(reply)
@@ -486,10 +485,8 @@ class Daemon:
                      same_task: bool = False, already: list[str] | None = None) -> None:
         """Ask the brain (the lock is held). text: what the user said; brain_text: what the brain gets, if not that."""
         t0 = time.perf_counter()
-        # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it). The judge
-        # reads what the user said once: an answer's follow-up (brain_text) was counted by _answer.
-        self.tools.new_turn(SESSION, same_task=same_task,          # once per user message, whichever brain answers
-                            said="" if brain_text is not None else text)
+        # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it).
+        self.tools.new_turn(SESSION, same_task=same_task)         # once per user message, whichever brain answers
         earlier, self._earlier = self._earlier, ()
         to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
         self.set_state("thinking", text, transcript=text)
@@ -538,7 +535,6 @@ class Daemon:
         if brain_text is None:                    # what the user asked, if this reply asked them something
             self._request = text if self.tools.batch(SESSION) else ""
         log.info("reply (%.2fs, tools %s): %s", think_s, tools, reply)
-        self.tools.replied(SESSION, reply)
         self._history({"at": time.time(), "source": source, "transcript": text, "reply": reply, "tools": tools,
                        "heard_s": heard_s, "think_s": round(think_s, 2),
                        "brain": "codex" if self.brain.using_backup else "claude"})

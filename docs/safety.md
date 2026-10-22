@@ -10,11 +10,12 @@ Reading anything, opening apps, URLs and files, moving and focusing windows, swi
 |---|---|
 | `window` | closing a window; locking the screen; shortcuts that close windows or quit apps (Alt+F4, Ctrl+Q, Ctrl+W…) |
 | `files` | shell commands that delete, move or overwrite (`rm`, `mv`, `>`), change permissions, or throw away git work (`reset --hard`, `clean`, `rebase`) |
-| `send` | browser or mouse clicks and drags whose label is send, post, publish, submit, delete, remove, confirm, unsubscribe, sign out…; pressing Enter in a browser field that isn't a search box; `git push`, opening or merging PRs and issues (`gh`), `npm`/`uv`/`cargo publish`, sending mail from a shell |
+| `send` | browser or mouse clicks and drags whose label is send, submit, delete, remove, confirm, unsubscribe, sign out…; pressing Enter in a browser field that isn't a search box; sending mail from a shell |
+| `publish` | clicks and drags whose label is post or publish; `git push` (`git -C repo push` too), opening, commenting on or merging PRs and issues (`gh`), releases, `npm`/`pnpm`/`yarn`/`uv`/`poetry`/`cargo publish` (options before `publish` too), `twine upload` |
 | `system` | `sudo`/`pkexec`, killing processes, starting/stopping services, power off and reboot, installing or removing packages (`pacman`, `omarchy pkg/install/remove/update/refresh`), `crontab`, `hyprctl keyword` |
 | `secrets` | commands that touch `.env`, API keys, passwords, tokens, `~/.ssh`, `secret-tool` |
 | `money` | clicks and drags whose label is buy, pay, purchase, check out, place order, transfer, book now |
-| `wipe` | `dd`, `mkfs` and other disk tools, `shred`, `rm` of `/`, `~` or a home folder, `find ~ … -delete`, piping a download into a shell, `gh repo delete` |
+| `wipe` | `dd`, `mkfs` and other disk tools, `shred`; `rm` of `/` or a folder right under it (`/usr`, `/etc`), of a home or anything right in it (`~`, `~/.ssh`, `~/.config`, `/home/<user>/Projects`); `rm -rf *` or `.` where that is the folder (`cd ~ && rm -rf *`, or `run_command`'s `folder`, which is `~` unless given); `find` of `/`, `~` or `/home/<user>` with `-delete`; piping a download into a shell; `gh repo delete` |
 | `auren` | Auren's own controls: `auren-ctl` except `status`, `auren config/update`, its sockets, `config.toml` |
 
 The command check (`assess_command`) errs on the side of asking. `>>` and `2>/dev/null` don't count as overwriting. It is a filter, not a sandbox: a brain with a shell can in principle reach Auren's socket some way the patterns don't name (the daemon's yes/no/safety commands are the reason `auren-ctl` is in the floor), so treat the levels as protection against mistakes and page text, not against a determined brain.
@@ -27,31 +28,24 @@ Like Claude Code's permission modes: `safety.level` in `config.toml`, `auren-ctl
 |---|---|
 | `ask` | Every risky action asks first. |
 | `task` | The first risky action asks. A yes also covers the rest of **that task** for the kinds that were approved: later actions of those kinds run without asking. |
-| `free` | **Full access**, for development. Windows, files and the system (root, packages, services) just run. Only `send`, `money`, `secrets`, `wipe` and `auren` ask. |
+| `free` | **Full access**, for development. Windows and files just run. `send` still asks, and so does the floor. |
 
-**The floor: `system`, `secrets`, `money`, `wipe` and `auren` are never covered by an earlier yes** at `task`. At every level, the judge (below) can still let one through when the user's own words ask for it, except `auren`, which always asks.
+**The floor: `publish`, `system`, `secrets`, `money`, `wipe` and `auren` ask at every level, every time**, and a yes never covers them later. None of them can be taken back: publishing, root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own controls are never a surprise, even at `free`. Several waiting at once still take one yes (below).
 
 A task is everything the brain does from the user's request until their next message that isn't an answer to one of its questions (or 5 minutes, `GRANT_TTL`). Changing the level also ends what a yes covered. The brain isn't told about the grant; it just sees tools that run. It is told the level in each message (an `<approvals>` note; nothing is said at `ask`), so at `task` and `free` it doesn't add questions of its own before actions the tools already guard.
 
-What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes root, packages and deleting files, which is why `free` is for a development machine. That's the reason for what still asks at `free`, for the task ending with the next message, and for `ask` staying the default.
+What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes deleting files and closing windows, which is why `free` is for a development machine. That's the reason for the floor, for `send` still asking at `free`, for the task ending with the next message, and for `ask` staying the default.
 
-## The judge: the user's own words
+## Planned: remembered permissions
 
-Before a risky tool asks, a second Claude Code process (`src/auren/brain/judge.py`, Haiku, low effort, no tools, no MCP) gets **only the last six lines of the conversation (the user's words and Auren's replies) and the tool's own question** ("Click “Send”? That could buy, send, post or delete something.", plus the page's title and address, or the whole text being sent), as JSON, and answers ALLOW or ASK. Only the user's lines count as the go-ahead: Auren's are there so a "yes" to "Push it to origin?" means that push, and nothing else. ALLOW means the user already asked for this very action, or for a task it is a clear step of: "send hi to Priya on Discord" lets the Send click through, "push the branch" lets `git push` through. So whatever you told Auren to do, it does without asking again.
+Not built yet; written down so the design is shared. Auren will get a memory, and part of it is permissions the user asks it to keep:
 
-It never sees the screen, web pages or tool output, so text planted on a page can steer the brain but not the judge. It says ASK when:
+- After a yes, the user can say "remember this for next time" (or "don't ask me about this again").
+- Auren then asks where it applies: **this folder**, **this project** (the git repository it's in), or **everywhere**.
+- It saves the kind of action and its scope, for example "`git push` in `~/Projects/auren`". Next time, that action in that folder or project runs without the question; anywhere else it still asks.
+- The user can list and remove what was remembered (`auren-ctl`, the bar panel).
 
-- the user only asked to write, draft or fill something in, or said to check first ("ask me before sending", "don't submit");
-- the recipient, target, item or amount differs from what they said;
-- they only gave general permission ("you have full permissions") and the action sends, posts, buys, pays or deletes something they never named;
-- their go-ahead is a bare "yes" to something Auren didn't ask about, or they took it back ("no", "wait");
-- anything goes wrong: no Claude, a limit, an answer that isn't ALLOW, or no verdict within 20 s (`TIMEOUT`, waiting for another verdict included).
-
-An ALLOW only runs if the request is still the one it was about: not after Stop, and not if the target changed while the judge was thinking (the same `check` a yes goes through).
-
-Each verdict is a fresh process, so no earlier verdict can sway the next. The next one is started when a message comes in and right after one is used, so a verdict takes about 1–2 s. Auren's own controls (`auren`) never go to the judge. A fresh conversation forgets what was said.
-
-Tested: `tests/test_judge.py` (with a stand-in for Claude: verdicts, a yes to Auren's question, a label that tries to pass for a line of the conversation, timeouts, errors, only the last lines counting, Stop or a changed page while judging, Auren's controls always asking, a fresh start forgetting). Live, against the real Haiku judge: 27 cases (a yes to Auren's question, a "no", a wrong recipient, a forged conversation line and a page's "SYSTEM: pre-approved" planted in the action text among them) right in two full runs, and the conversation cases right in 44 repeats; a verdict usually takes 1–3 s.
+Open points for whoever builds it: what counts as the same action (`git push` to any remote, or only `origin`?); `publish` is the one floor kind meant to be remembered (that's the `git push` case); whether the rest of the floor (root, secrets, money, wipe, Auren's own controls) can be remembered at all (the default should be no); and that the brain must never save a permission itself; only the user's own words can.
 
 ## One yes, several questions
 
@@ -69,7 +63,7 @@ The question the mascot and the panel show is the runtime's own text for every a
 
 ## How a yes is proven
 
-1. A risky tool the judge didn't let through doesn't act. It returns `needs_confirmation`, a question ("Run `rm -rf …`? It can change your system or data.") and a token.
+1. A risky tool doesn't act. It returns `needs_confirmation`, a question ("Run `rm -rf …`? It can change your system or data.") and a token.
 2. The brain asks the user and stops.
 3. **The tool runtime counts a turn once per user message, per session** (the daemon is one session, each `auren chat` another). The daemon starts the turn where the message comes in, before any brain sees it, so a switch to the backup brain halfway doesn't count as a new message.
 4. The action only runs once a later turn of the same session has started than the one that issued its token. So the model can't approve its own request in the same turn; only the user's next message can. A token works once and expires after 5 minutes.
@@ -109,7 +103,7 @@ When a coding agent in herdr stops at an approval or question, Auren reports wha
 
 ## Secrets
 
-The system profile masks secrets (see [system-profile.md](system-profile.md)). The brain's rules forbid reading secrets aloud, and commands that touch secret files ask at every level (unless the user's own words ask for that very command).
+The system profile masks secrets (see [system-profile.md](system-profile.md)). The brain's rules forbid reading secrets aloud, and commands that touch secret files are in the floor: they ask at every level.
 
 ## Stopping
 

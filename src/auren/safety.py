@@ -1,19 +1,16 @@
 """Which actions need the user's OK, and how that OK is proven.
 
-Every risky action has a kind (window, files, send, system, secrets, money, wipe, auren). What
+Every risky action has a kind (window, files, send, publish, system, secrets, money, wipe, auren). What
 happens to it depends on the approval level (`safety.level` in config.toml, like Claude Code's
 permission modes):
 
 - ask:  every risky action asks first.
 - task: the first risky action asks; a yes also covers the rest of that task for the same kinds.
-- free: full access. Windows, files and the system just run; only the kinds in FREE_ASKS ask
-        (sending and publishing, money, secrets, wiping, Auren's own controls).
+- free: full access. Windows and files just run; sending still asks, and so does the floor.
 
-The floor (system, secrets, money, wipe, auren) is never covered by an earlier yes.
-
-Before anything asks, the judge (brain/judge.py, in tools.py) reads the user's own last few messages:
-if they already asked for this very action ("send it to Priya"), it runs without the question.
-Auren's own controls never go to the judge: they always ask.
+The floor (publish, system, secrets, money, wipe, auren) asks at every level, every time: publishing,
+root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own
+controls. None of them can be taken back.
 
 When a risky action asks, the tool returns a token and a question instead of acting. Several can
 wait at once (the brain is told to request the independent steps of a task together); one yes
@@ -50,33 +47,32 @@ LEVELS = ("ask", "task", "free")
 
 WINDOW = "window"      # closing windows and apps, locking the screen
 FILES = "files"        # deleting, moving, overwriting, permissions, losing local git work
-SEND = "send"          # send, post, submit, delete clicks, Enter in a form field, git push and other publishing
+SEND = "send"          # send, submit, delete clicks, Enter in a form field, mail from a shell
+PUBLISH = "publish"    # post and publish clicks, git push, PRs and issues, releases, package uploads
 SYSTEM = "system"      # root, killing, services, power, packages, scheduled jobs
 SECRETS = "secrets"    # keys, passwords, tokens, ~/.ssh
 MONEY = "money"        # buy, pay, check out, transfer, book
 WIPE = "wipe"          # disk tools, deleting your home or the root, running a downloaded script, deleting a repo
 AUREN = "auren"        # Auren's own controls: answering for the user, or changing how much it asks
 
-FLOOR = frozenset({SYSTEM, SECRETS, MONEY, WIPE, AUREN})    # never covered by an earlier yes (level "task")
-FREE_ASKS = frozenset({SEND, SECRETS, MONEY, WIPE, AUREN})  # what still asks at level "free"
+FLOOR = frozenset({PUBLISH, SYSTEM, SECRETS, MONEY, WIPE, AUREN})    # asked at every level, every time
 
 
 def needs_ask(level: str, kinds: Iterable[str], granted: Iterable[str] = ()) -> bool:
     """Does an action of these kinds have to ask at this level? `granted`: the kinds a yes already covers."""
     kinds = set(kinds)
-    if not kinds:
+    if not kinds or kinds & FLOOR:
         return True
     if level == "free":
-        return bool(kinds & FREE_ASKS)
+        return SEND in kinds
     if level == "task":
-        return bool(kinds & FLOOR) or not kinds <= set(granted)
+        return not kinds <= set(granted)
     return True                                  # ask, or a level we don't know
 
 
-def judged(kinds: Iterable[str]) -> bool:
-    """May the user's own words (the judge) stand in for the question? Not for Auren's own controls."""
-    return AUREN not in kinds
-
+# A place whose loss is a wipe: the root or a folder right under it, or a home or anything right in it.
+_PLACE = r"""["']?(/[^/\s"';&|)]*|(~|\$\{?HOME\}?|/home/[^/\s"';&|)]+)(/[^/\s"';&|)]+)?)["']?/?"""
+_EVERYTHING_HERE = r"""["']?(\.|\.?\*|\./\*?)["']?(?=[\s;&|)]|$)"""       # rm's `.`, `*`, `./*`, `.*`
 
 # Shell commands that change the system, lose data, need root, publish, or touch secrets, by kind.
 _COMMAND_KINDS: dict[str, re.Pattern] = {
@@ -88,22 +84,24 @@ _COMMAND_KINDS: dict[str, re.Pattern] = {
       | \b(pacman|yay|paru|omarchy[-\s]pkg|omarchy[-\s](install|remove|update|reinstall|refresh))\b
       | \bcrontab\b|\bhyprctl\s+keyword\b
     """, re.X | re.I),
-    SEND: re.compile(r"""
+    PUBLISH: re.compile(r"""
         \bgit(\s+(-[Cc]|--git-dir|--work-tree|--namespace)\s+\S+|\s+-\S+)*\s+push\b      # git -C repo push
       | \bgh(\s+(-R|--repo)\s+\S+|\s+-\S+)*\s+(pr\s+(create|merge|close|comment|review)|issue\s+(create|comment|close)|release\s+create)\b
-      | \bnpm\s+publish\b|\b(uv|twine)\s+publish\b|\bcargo\s+publish\b
-      | \b(sendmail|msmtp|mutt)\b
+      | \b(npm|pnpm|yarn|uv|poetry|cargo)\b[^;&|\n]*\spublish(?=[\s;&|)]|$)     # options can come first
+      | \btwine\b[^;&|\n]*\supload\b
     """, re.X | re.I),
+    SEND: re.compile(r"\b(sendmail|msmtp|mutt)\b", re.I),
     WIPE: re.compile(r"""
         \bdd\b|\bmkfs|\bfdisk\b|\bparted\b|\bwipefs\b|\bshred\b             # disks
-      | \brm\s(.*\s)?["']?(/|(~|\$\{?HOME\}?|/home(/[^/\s"']+)?)["']?/?)\.?\*?["']?(?=[\s;&|)]|$)   # rm of the root or a home
+      | \brm\s([^;&|]*\s)?PLACE(\.?\*|\.)?["']?(?=[\s;&|)]|$)          # rm of such a place
+      | (^|[;&|]\s*)cd(\s+PLACE)?\s*(&&|;).*\brm\s([^;&|]*\s)?EVERYTHING    # cd ~ && rm -rf *
       | \bshutil\.rmtree\(\s*(Path\.home\(\)|os\.path\.expanduser\(|["'](/|~)/?["'])
-      | \bfind\s+["']?(/|~|\$\{?HOME\}?)["']?/?\s.*-delete\b
+      | \bfind\s+["']?(/|~|\$\{?HOME\}?|/home(/[^/\s"']+)?)["']?/?\s.*-delete\b
       | \b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z|da)?sh\b                  # a download run by a shell
       | (\b(ba|z|da)?sh|\bsource|(^|[;&|]\s*)\.)\s+<\(\s*(curl|wget)\b
       | \b(ba|z|da)?sh\s+-c\s+["']?\$\(\s*(curl|wget)\b
       | \bgh\s+repo\s+delete\b
-    """, re.X | re.I),
+    """.replace("PLACE", _PLACE).replace("EVERYTHING", _EVERYTHING_HERE), re.X | re.I),
     AUREN: re.compile(r"""
         \bauren-ctl\s+(?!status\b)|\bauren\s+(ask|chat|config|update)\b   # answering for the user, speaking as
       | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren/config\.toml     # them, or changing how much
@@ -122,6 +120,7 @@ _COMMAND_KINDS: dict[str, re.Pattern] = {
 }
 
 _MONEY_CLICK = re.compile(r"\b(buy|pay|purchase|place order|order now|checkout|check out|transfer|book now)\b", re.I)
+_PUBLISH_CLICK = re.compile(r"\b(post|publish)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -130,9 +129,16 @@ class Risk:
     reason: str
 
 
-def assess_command(command: str) -> Risk | None:
-    """What a shell command risks (its kinds and a reason to read out), or None if it can run straight away."""
+_RM_EVERYTHING_HERE = re.compile(r"\brm\s([^;&|]*\s)?" + _EVERYTHING_HERE)
+_WIPE_PLACE = re.compile(_PLACE)
+
+
+def assess_command(command: str, folder: str = "") -> Risk | None:
+    """What a shell command risks (its kinds and a reason to read out), or None if it can run straight away.
+    folder: where it runs, so `rm -rf *` in the home folder is a wipe."""
     hits = {kind: m for kind, rx in _COMMAND_KINDS.items() if (m := rx.search(command))}
+    if WIPE not in hits and _WIPE_PLACE.fullmatch(folder.strip()) and (m := _RM_EVERYTHING_HERE.search(command)):
+        hits[WIPE] = m
     if not hits:
         return None
     first = min(hits.values(), key=lambda m: m.start())
@@ -147,8 +153,8 @@ def command_risk(command: str) -> str | None:
 
 
 def click_kind(label: str) -> str:
-    """The kind of a risky click or drag (browser.RISKY_CLICK matched its label): money, or send."""
-    return MONEY if _MONEY_CLICK.search(label) else SEND
+    """The kind of a risky click or drag (browser.RISKY_CLICK matched its label): money, publish, or send."""
+    return MONEY if _MONEY_CLICK.search(label) else PUBLISH if _PUBLISH_CLICK.search(label) else SEND
 
 
 # --- a plain yes or no ---------------------------------------------------------------------------------
