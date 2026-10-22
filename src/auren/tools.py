@@ -205,6 +205,7 @@ class Runtime:
             ok = not _failed(result)
             outcomes.append(Outcome(p.question, ok, result, p.say(result) if ok and p.say else None))
             if not ok:
+                log.warning("approved action failed: %s %s", p.question[:200], result.splitlines()[0][:300])
                 self.confirmations.drop(sid, tokens[i + 1:])
                 break
             ran |= p.kinds
@@ -235,6 +236,9 @@ class Runtime:
             out = f"error: unexpected {type(e).__name__}: {e}"
         finally:
             _call.reset(token)
+        first = out[0] if isinstance(out, list) and out else out
+        if isinstance(first, str) and first.startswith("error:"):     # the brain only says "it failed": keep why
+            log.warning("tool %s %s: %s", name, _loggable(args), first.splitlines()[0][:300])
         if not t.repeatable and not c.asked:
             s.acted = True
         return out if isinstance(out, list) else [out]
@@ -298,8 +302,15 @@ def _run(fn, *args, **kwargs) -> str:
             excalidraw.ExcalidrawError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
+        log.exception("%s failed", getattr(fn, "__name__", fn))
         return f"error: unexpected {type(e).__name__}: {e}\n{traceback.format_exc(limit=2)}"
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+
+
+def _loggable(args: dict) -> str:
+    """A failed call's arguments for the log, without what was typed or sent (it can be a password): its length only."""
+    shown = {k: f"<{len(v)} characters>" if k == "text" and isinstance(v, str) else v for k, v in args.items()}
+    return json.dumps(shown, ensure_ascii=False)[:200]
 
 
 def _failed(result: str) -> bool:
