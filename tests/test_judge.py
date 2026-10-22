@@ -321,15 +321,20 @@ class _Screen:
                         "0xterm": {"class": "foot", "title": "arch: auren"}}
         self.target, self.box, self.sent, self.ran, self.events = "0xchat", "", [], [], []
         monkeypatch.setattr(tools.screen, "key_target", lambda: self.target)
-        monkeypatch.setattr(tools.screen, "active_window", lambda: self.target)
+        monkeypatch.setattr(tools.screen, "active_window", lambda: self.front or self.target)
         monkeypatch.setattr(tools.screen, "view_id", lambda: 1.0)
         monkeypatch.setattr(tools.screen, "window", lambda address: dict(self.windows.get(address, {})))
-        monkeypatch.setattr(tools.screen, "snapshot", lambda window: self.shots.append(window) or b"jpeg")
+        monkeypatch.setattr(tools.screen, "snapshot", self.snapshot)
         monkeypatch.setattr(tools.screen, "window_at", lambda x, y: self.under.get((x, y), self.target))
-        self.shots, self.under = [], {}
+        self.shots, self.under, self.front = [], {}, None
         monkeypatch.setattr(tools.screen, "type_text", self.type)
         monkeypatch.setattr(tools.screen, "press_keys", self.press)
         monkeypatch.setattr(tools.screen, "click", self.click)
+
+    def snapshot(self, window):                          # brings that window to the front, as the real one does
+        self.shots.append(window)
+        self.front = window
+        return b"jpeg"
 
     def type(self, text):
         self.box += text
@@ -647,3 +652,53 @@ def test_a_send_click_in_a_window_typed_into_earlier(desk):
     d.target, d.under[(900, 700)] = "0xterm", "0xchat"     # keys go to the terminal now; Send is in the chat
     assert "clicked" in rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0]
     assert d.sent == ["hi"] and d.shots == ["0xchat"]
+
+
+def test_a_yes_is_void_once_anything_was_pressed_there(desk):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    rt.call("daemon", "press_keys", {"keys": "BackSpace"})                   # "h" now, not what was asked about
+    assert "changed since asking" in _yes(rt, out)
+    _clean(rt, d)
+    d.target = "0xterm"
+    rt.new_turn("daemon", said="run it again")
+    out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]             # a line it can't read
+    rt.call("daemon", "press_keys", {"keys": "Up"})                          # and another one now
+    assert "changed since asking" in _yes(rt, out)
+    assert d.sent == [] and d.ran == []
+
+
+def test_ctrl_o_leaves_the_next_history_command_on_the_line(desk):
+    rt, d = desk
+    d.target = "0xterm"
+    rt.new_turn("daemon", said="list the files")
+    rt.call("daemon", "type_text", {"text": "ls"})
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "ctrl+o"})[0]
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+    rt.call("daemon", "type_text", {"text": "ls"})                           # Ctrl+J only runs it: the line is empty
+    _clean(rt, d)
+    rt.call("daemon", "type_text", {"text": "ls"})
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "ctrl+j"})[0]
+    rt.call("daemon", "type_text", {"text": "pwd"})
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+
+
+def test_after_a_send_click_went_ahead_clicks_in_that_chat_dont_ask_again(desk):
+    rt, d = desk
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    assert "clicked" in rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0]
+    assert "clicked" in rt.call("daemon", "click_at", {"x": 300, "y": 400, "target": "the last message"})[0]
+    d.windows["0xchat"]["title"] = "Bob - Discord"                           # another chat: hi stays with Priya's
+    assert "clicked" in rt.call("daemon", "click_at", {"x": 300, "y": 400, "target": "Bob's last message"})[0]
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    assert d.sent == ["hi", ""]
+    _clean(rt, d)
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    assert "clicked" in rt.call("daemon", "click_at", {"x": 300, "y": 700, "target": "the message box"})[0]
+    rt.call("daemon", "press_keys", {"keys": "BackSpace"})                   # an edit: what's there wasn't judged
+    assert _asks(rt.call("daemon", "click_at", {"x": 300, "y": 400, "target": "the last message"})[0])

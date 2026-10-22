@@ -108,6 +108,8 @@ class Keyed:
     text: str
     fresh: bool = False     # a click or a key moved on since: what's typed next goes somewhere new
     known: bool = True      # (a terminal) the line holds just `text`; a key or a click may have changed it
+    edits: int = 0          # keys, clicks and typing there since: a yes covers the text as it was asked about
+    allowed: tuple[int, str] | None = None     # a click went ahead with it (edits then, the window's title)
 
     @property
     def terminal(self) -> bool:
@@ -889,8 +891,7 @@ def _moved_on(window: str, changes: bool = True) -> None:
     s = _session_now()
     k = s.keyed.get(window)
     if k:
-        k.fresh = True
-        k.known = not k.terminal
+        k.fresh, k.known, k.edits = True, not k.terminal, k.edits + 1
     elif window and changes:
         app = screen.window(window).get("class", "")
         if app.lower() in screen.TERMINALS:
@@ -904,10 +905,10 @@ def _unreadable(text: str) -> safety.Risk:
 
 def _unchanged(k: Keyed) -> Callable[[], None]:
     """What the user is asked about is this text: nothing typed, pressed or clicked there since."""
-    s, text, known = _session_now(), k.text, k.known
+    s, edits = _session_now(), k.edits
 
     def check() -> None:
-        if s.keyed.get(k.window) is not k or k.text != text or k.known != known:
+        if s.keyed.get(k.window) is not k or k.edits != edits:
             raise PermissionError("what's typed there changed since asking: ask the user again")
     return check
 
@@ -924,7 +925,9 @@ def _run_line(k: Keyed, keys: str) -> str:
 
     def run() -> str:
         out = screen.press_keys(keys)
-        k.text, k.known, k.fresh = "", True, False      # it ran: the next line starts empty
+        # it ran: the next line starts empty, but Bash's Ctrl+O puts the next command from history there
+        k.text, k.fresh, k.edits = "", False, k.edits + 1
+        k.known = keys.replace(" ", "").lower().rsplit("+", 1)[-1] != "o"
         return out
     risk = safety.assess_command(k.text, None) if k.known else _unreadable(k.text)
     if not risk:
@@ -938,7 +941,8 @@ def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[]
     access the judge reads the user's words, the text and a screenshot of that very window, brought to the
     front. Before it goes, the text must be the same, and the window must still get it (the keys, or the
     click: `lands`), with the same title. After Enter the text is gone; after a click it may still be
-    there unsent (the click only put the cursor in the box), so a click or Enter there still counts."""
+    there unsent (the click only put the cursor in the box), so a click or Enter there still counts, unless
+    one went ahead with this very text in this chat already and nothing was pressed or typed since."""
     s = _session_now()
     title = screen.window(k.window).get("title", "")
     same = _unchanged(k)
@@ -961,8 +965,10 @@ def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[]
         if not lands:
             gone()
         else:
-            k.fresh = True
+            k.fresh, k.allowed = True, (k.edits, title)
         return out
+    if k.allowed == (k.edits, title):
+        return _run(run)
     short = k.text if len(k.text) <= 60 else k.text[:57] + "…"
     message = (f"Typed “{k.text}” in the app {k.app}, window “{title}”, and now {how} (a screenshot of the "
                "screen comes with this)")
@@ -970,6 +976,18 @@ def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[]
                 f"{how[0].upper() + how[1:]} in {k.app}? It may send “{short}”, which is typed there.")
     return _gate({safety.SEND}, question, run, check, message=message, image=lambda: screen.snapshot(k.window),
                  searched=gone)
+
+
+def _draft(window: str) -> Keyed | None:
+    """What the brain typed in this window and may still be sent there. Text a click already went ahead
+    with stays with its chat: once the window shows another one (and nothing was typed since), it's not
+    this chat's."""
+    s = _session_now()
+    k = s.keyed.get(window)
+    if k and k.allowed and k.allowed[0] == k.edits and screen.window(window).get("title", "") != k.allowed[1]:
+        del s.keyed[window]
+        return None
+    return k
 
 
 def _same_screen() -> Callable[[], None]:
@@ -1002,14 +1020,17 @@ def click_at(x: int, y: int, target: str, button: str = "left", double: bool = F
     (for example "Allow on Chrome's download popup"). Look again afterwards to check it worked. Clicks
     that buy, pay, send, post, submit or delete make the tool ask the user itself: just click, don't ask first."""
     window = screen.window_at(x, y) or screen.key_target()
-    k = _session_now().keyed.get(window)
+    k = _draft(window)
     risky = web.RISKY_CLICK.search(target)
     if k and not k.terminal and not (risky and safety.click_kind(target) != safety.SEND):
         # where a message waits unsent, any click may be its Send (the brain's words for it can't be trusted)
-        same = _same_screen()
+        view, front = screen.view_id(), screen.active_window()
 
-        def lands() -> None:
-            same()
+        def lands() -> None:        # the judge's screenshot may have brought that window to the front
+            if screen.view_id() != view:
+                raise PermissionError("you looked at the screen again since asking: ask the user again about what you see now")
+            if screen.active_window() not in (front, window):
+                raise PermissionError("a different window is in front now: look at the screen again and ask again")
             if screen.window_at(x, y) != window:
                 raise PermissionError("that spot shows another window now: look at the screen again and ask again")
         return _send_keyed(k, f"clicking “{target}”", lambda: screen.click(x, y, button, double), lands)
@@ -1058,7 +1079,7 @@ def type_text(text: str) -> str:
         k = s.keyed.get(window)
         if k and (k.terminal or not k.fresh):
             k.text += text                      # the box (a terminal's line) holds what was typed before it too
-            k.fresh = False
+            k.fresh, k.edits = False, k.edits + 1
         elif window:
             k = s.keyed[window] = Keyed(window, app, text)
         if k and k.terminal and re.search(r"[\r\n]", k.text):        # what ran is gone from the line
@@ -1096,7 +1117,7 @@ def press_keys(keys: str) -> str:
         return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
     s = _session_now()
     window = screen.key_target()
-    k = s.keyed.get(window)
+    k = _draft(window)
     if not k and window and _enter(keys, True) == "send":
         app = screen.window(window).get("class", "")
         if app.lower() in screen.TERMINALS:     # a line the brain didn't type: it can't be read
@@ -1106,7 +1127,7 @@ def press_keys(keys: str) -> str:
         return _run_line(k, keys) if k.terminal else _send_keyed(k, f"pressing {keys}", lambda: screen.press_keys(keys))
     out = _run(screen.press_keys, keys)
     if k and does == "line" and not out.startswith("error:"):
-        k.text += "\n"
+        k.text, k.edits = k.text + "\n", k.edits + 1
     else:
         _moved_on(window)
     return out
