@@ -56,7 +56,10 @@ class ScreenError(RuntimeError):
 
 
 def _sh(cmd: list[str], timeout: float = 10) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:          # not installed, or hung
+        raise ScreenError(f"{cmd[0]} failed: {e}") from None
     if p.returncode != 0:
         raise ScreenError(f"{cmd[0]} failed: {(p.stderr or p.stdout).strip()[:200]}")
     return p.stdout
@@ -84,6 +87,27 @@ def look() -> tuple[bytes, str]:
 
 
 GRID = 50
+
+
+def snapshot(window: str) -> bytes:
+    """A plain JPEG of the monitor showing `window`, brought to the front first, for the judge to read: what
+    it sees is where the keys will go. No grid, and the brain's click_at coordinates still refer to its own
+    last look."""
+    import io
+
+    from PIL import Image as PILImage
+    if _active_window() != window:
+        _sh(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{window}" }})'])
+        time.sleep(0.15)
+    if _active_window() != window:
+        raise ScreenError("that window can't be brought to the front")
+    m = _focused_monitor()
+    factor = IMAGE_WIDTH / round(m["width"] / m["scale"])
+    with tempfile.NamedTemporaryFile(suffix=".png") as f:
+        _sh(["grim", "-o", m["name"], "-s", f"{factor:.4f}", f.name])
+        buf = io.BytesIO()
+        PILImage.open(f.name).convert("RGB").save(buf, "JPEG", quality=80)
+    return buf.getvalue()
 
 
 def _with_grid(png: Path) -> tuple[bytes, int, int]:
@@ -170,6 +194,30 @@ def _active_window() -> str:
         return json.loads(_sh(["hyprctl", "activewindow", "-j"])).get("address", "")
     except (ScreenError, json.JSONDecodeError):
         return ""
+
+
+def window(address: str) -> dict:
+    """A window's class and title ({} if it's gone)."""
+    try:
+        wins = json.loads(_sh(["hyprctl", "clients", "-j"]))
+    except (ScreenError, json.JSONDecodeError):
+        return {}
+    w = next((w for w in wins if w.get("address") == address), None)
+    return {"class": w.get("class") or "", "title": w.get("title") or ""} if w else {}
+
+
+def window_at(x: float, y: float) -> str:
+    """The address of the window under pixel (x, y) of the last look ("" if that can't be told)."""
+    try:
+        lx, ly = _to_layout(x, y)
+        wins = json.loads(_sh(["hyprctl", "clients", "-j"]))
+        shown = {w["id"] for m in json.loads(_sh(["hyprctl", "monitors", "-j"]))
+                 for w in (m.get("activeWorkspace") or {}, m.get("specialWorkspace") or {}) if w.get("id")}
+    except (ScreenError, json.JSONDecodeError, KeyError, TypeError):
+        return ""
+    under = [w for w in wins if w.get("mapped", True) and not w.get("hidden") and w["workspace"]["id"] in shown
+             and w["at"][0] <= lx < w["at"][0] + w["size"][0] and w["at"][1] <= ly < w["at"][1] + w["size"][1]]
+    return min(under, key=lambda w: w.get("focusHistoryID", 99))["address"] if under else ""
 
 
 def key_target() -> str:

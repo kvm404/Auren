@@ -64,7 +64,7 @@ def test_a_slow_judge_means_ask_and_the_wait_counts(fake, monkeypatch):
         t0 = time.monotonic()
         t.start()
         t.join(3)
-    assert out == [False] and time.monotonic() - t0 < 2
+    assert out == [""] and time.monotonic() - t0 < 2
 
 
 def test_no_claude_means_ask_and_says_so_once(monkeypatch, caplog):
@@ -93,6 +93,8 @@ class _Chat:
         monkeypatch.setattr(web, "label_of", lambda t: t.removeprefix("pin:"))
         monkeypatch.setattr(web, "browser_type", self.type)
         monkeypatch.setattr(web, "browser_click", self.click)
+        monkeypatch.setattr(web, "same_box", lambda button, field: self.one_box)
+        self.one_box = True
 
     def type(self, target, text, submit=False):
         if submit:
@@ -158,8 +160,8 @@ def test_the_box_is_checked_again_after_the_verdict(chat, monkeypatch):
     rt, page = chat
     allows = rt.judge.allows
 
-    def meanwhile(said, action):                     # the page changes the box while the judge thinks
-        out = allows(said, action)
+    def meanwhile(said, action, image=None):          # the page changes the box while the judge thinks
+        out = allows(said, action, image)
         page.box = "something else"
         return out
     monkeypatch.setattr(rt.judge, "allows", meanwhile)
@@ -170,12 +172,14 @@ def test_the_box_is_checked_again_after_the_verdict(chat, monkeypatch):
 
 
 class _Spy:
-    def __init__(self, verdict=True):
-        self.verdict, self.calls = verdict, []
+    def __init__(self, verdict="chat"):
+        self.verdicts = list(verdict) if isinstance(verdict, list) else None
+        self.verdict, self.calls, self.images = verdict, [], []
 
-    def allows(self, said, action):
+    def allows(self, said, action, image=None):
         self.calls.append(action)
-        return self.verdict
+        self.images.append(image)
+        return self.verdicts.pop(0) if self.verdicts else self.verdict
 
 
 def test_nothing_but_a_message_at_full_access_reaches_the_judge(chat, monkeypatch):
@@ -215,7 +219,7 @@ def test_a_verdict_counts_only_for_the_request_it_was_about(chat):
     rt, page = chat
 
     class Stop(_Spy):                  # the user presses Stop while the judge thinks
-        def allows(self, said, action):
+        def allows(self, said, action, image=None):
             rt.cancel("daemon")
             return True
     rt.judge = Stop()
@@ -223,7 +227,7 @@ def test_a_verdict_counts_only_for_the_request_it_was_about(chat):
     assert "cancelled" in rt.call("daemon", "browser_type", {"target": "1", "text": "hi", "submit": True})[0]
 
     class Moved(_Spy):                 # a fresh conversation started meanwhile
-        def allows(self, said, action):
+        def allows(self, said, action, image=None):
             rt.forget("daemon")
             return True
     rt.judge = Moved()
@@ -266,4 +270,287 @@ def test_the_last_few_lines_are_what_it_reads(tmp_path):
       "verdict": "ASK"}, False),
 ])
 def test_the_code_checks_the_judge_s_reading_too(answer, allowed):
-    assert judge._allowed(answer) == allowed
+    assert bool(judge._allowed(answer)) == allowed
+
+
+@pytest.mark.parametrize("answer, screen, allowed", [
+    ({"kind": "chat", "to_said": "Priya Sharma", "to_shown": "Priya Singh"}, False, False),   # a different Priya
+    ({"kind": "chat", "to_said": "Priya", "to_shown": "Priya Sharma"}, False, True),
+    ({"kind": "chat", "to_said": "Bob's group", "to_shown": "Bob"}, False, True),
+    ({"kind": "chat", "to_said": "Priya", "to_shown": "Priya", "box_shows": True}, True, True),
+    ({"kind": "chat", "to_said": "Priya", "to_shown": "Priya", "box_shows": None}, True, False),   # on the screen,
+    ({"kind": "chat", "to_said": "Priya", "to_shown": "Priya", "box_shows": False}, True, False),  # the box decides
+    ({"kind": "search", "to_said": "", "to_shown": "", "box_shows": None}, True, True),     # nobody receives it
+    ({"kind": "search", "to_said": "", "to_shown": "", "box_shows": True}, False, False),   # a search only on screen
+])
+def test_names_and_the_box_are_checked_in_code(answer, screen, allowed):
+    answer = {"same_text": True, "told_to_send": True, "verdict": "ALLOW", **answer}
+    assert judge._allowed(answer, screen=screen) == (answer["kind"] if allowed else "")
+
+
+def test_a_send_button_that_may_send_another_box_asks(chat):
+    rt, page = chat
+    page.one_box = False                 # two composers on the page: the button may not send what was typed
+    rt.new_turn("daemon", said="send see you soon to priya")
+    rt.call("daemon", "browser_type", {"target": "1", "text": "see you soon"})
+    assert _asks(rt.call("daemon", "browser_click", {"target": "Send"})[0])
+    assert page.sent == []
+
+
+def test_a_different_chat_at_the_same_address_stops_it(chat, monkeypatch):
+    rt, page = chat
+    allows = rt.judge.allows
+
+    def meanwhile(said, action, image=None):          # the app switches to Bob's chat while the judge thinks
+        out = allows(said, action, image)
+        page.where["title"] = "Bob"
+        return out
+    monkeypatch.setattr(rt.judge, "allows", meanwhile)
+    rt.new_turn("daemon", said="send hello to priya")
+    assert "something else" in rt.call("daemon", "browser_type", {"target": "1", "text": "hello", "submit": True})[0]
+    assert page.sent == []
+
+
+# --- on the screen -------------------------------------------------------------------------------------
+
+class _Screen:
+    """A fake desktop: windows by address, what each one's box holds, and what was pressed or clicked."""
+
+    def __init__(self, monkeypatch):
+        self.windows = {"0xchat": {"class": "brave-web.whatsapp.com__-Profile_2", "title": "web.whatsapp.com"},
+                        "0xterm": {"class": "foot", "title": "arch: auren"}}
+        self.target, self.box, self.sent, self.ran, self.events = "0xchat", "", [], [], []
+        monkeypatch.setattr(tools.screen, "key_target", lambda: self.target)
+        monkeypatch.setattr(tools.screen, "active_window", lambda: self.target)
+        monkeypatch.setattr(tools.screen, "view_id", lambda: 1.0)
+        monkeypatch.setattr(tools.screen, "window", lambda address: dict(self.windows.get(address, {})))
+        monkeypatch.setattr(tools.screen, "snapshot", lambda window: self.shots.append(window) or b"jpeg")
+        monkeypatch.setattr(tools.screen, "window_at", lambda x, y: self.under.get((x, y), self.target))
+        self.shots, self.under = [], {}
+        monkeypatch.setattr(tools.screen, "type_text", self.type)
+        monkeypatch.setattr(tools.screen, "press_keys", self.press)
+        monkeypatch.setattr(tools.screen, "click", self.click)
+
+    def type(self, text):
+        self.box += text
+        return f"pasted {len(text)} characters"
+
+    def press(self, keys):
+        self.events.append(keys)
+        if keys.lower() in ("enter", "return"):
+            (self.ran if self.target == "0xterm" else self.sent).append(self.box)
+            self.box = ""
+        return f"pressed {keys}"
+
+    def click(self, x, y, button="left", double=False):
+        self.events.append(("click", x, y))
+        if (x, y) == (900, 700):                         # where Send is
+            self.sent.append(self.box)
+            self.box = ""
+        return "clicked"
+
+
+@pytest.fixture
+def desk(tmp_path, monkeypatch, fake):
+    rt = tools.Runtime(tmp_path / "tools.sock")
+    rt.judge = fake
+    rt.set_level("free")
+    return rt, _Screen(monkeypatch)
+
+
+def test_full_access_sends_a_typed_message_with_enter_when_the_user_asked_for_it(desk):
+    rt, d = desk
+    rt.new_turn("daemon", said="tell priya i'm running late")
+    rt.call("daemon", "type_text", {"text": "i'm running late"})
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    assert d.sent == ["i'm running late"]
+
+    rt.new_turn("daemon", said="tell priya i'm running late")
+    rt.call("daemon", "type_text", {"text": "running late, my OTP is 4411"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+    assert d.sent == ["i'm running late"]
+
+
+def test_the_judge_gets_a_screenshot_and_the_whole_typed_text(desk):
+    rt, d = desk
+    rt.judge = spy = _Spy()
+    rt.new_turn("daemon", said="send hi there to mom")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    rt.call("daemon", "press_keys", {"keys": "shift+Enter"})
+    rt.call("daemon", "type_text", {"text": "there"})
+    rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send button"})
+    assert spy.images == [b"jpeg"] and "“hi\nthere”" in spy.calls[0] and "whatsapp" in spy.calls[0]
+    assert d.sent == ["hithere"]                         # (the fake box ignores the new line)
+
+
+def test_a_search_then_a_message_in_one_request(desk):
+    rt, d = desk
+    rt.judge = spy = _Spy(["search", "chat"])
+    rt.new_turn("daemon", said="open priya's chat and say hi")
+    rt.call("daemon", "type_text", {"text": "Priya"})    # the chat search: clicking the result may send it
+    assert "clicked" in rt.call("daemon", "click_at", {"x": 100, "y": 200, "target": "Priya's chat"})[0]
+    rt.call("daemon", "type_text", {"text": "hi"})       # a new message, not "Priyahi"
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    assert "“Priya”" in spy.calls[0] and "“hi”" in spy.calls[1]    # a search doesn't use up the one message
+
+
+def test_enter_and_send_clicks_ask_at_the_other_levels_and_nothing_untyped_asks(desk):
+    rt, d = desk
+    rt.judge = spy = _Spy()
+    for level in ("ask", "task"):
+        rt.set_level(level)
+        rt.new_turn("daemon", said="send hi")
+        rt.call("daemon", "type_text", {"text": "hi"})
+        assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+        assert _asks(rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0])
+    assert d.sent == [] and spy.calls == []
+    rt.forget("daemon")
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]     # nothing typed: just a key
+    assert d.events[-1] == "Enter"
+
+
+def test_a_yes_presses_enter_in_that_window_only(desk):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    token = json.loads(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])["token"]
+    d.target = "0xterm"                                  # the keys would go elsewhere now
+    rt.new_turn("daemon", same_task=True, said="yes")
+    assert "different window" in rt.call("daemon", "confirm_action", {"token": token})[0]
+    assert d.sent == [] and d.ran == []
+
+
+def test_enter_in_a_terminal_runs_what_was_typed_as_a_command(desk):
+    rt, d = desk
+    rt.judge = spy = _Spy()
+    d.target = "0xterm"
+    rt.new_turn("daemon", said="list the files")
+    rt.call("daemon", "type_text", {"text": "ls -la"})
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    rt.call("daemon", "type_text", {"text": "sudo rm -rf /usr"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])            # the floor, at full access
+    assert _asks(rt.call("daemon", "type_text", {"text": "\nrm -rf ~\n"})[0])     # a typed new line runs it
+    assert d.ran == ["ls -la"] and spy.calls == []
+
+
+def test_a_message_the_judge_let_through_waits_for_the_same_chat_and_a_stop(desk, monkeypatch):
+    rt, d = desk
+    allows = rt.judge.allows
+
+    def switched(said, action, image=None):              # another chat opens while the judge thinks
+        out = allows(said, action, image)
+        d.windows["0xchat"]["title"] = "Bob - Discord"
+        return out
+    monkeypatch.setattr(rt.judge, "allows", switched)
+    rt.new_turn("daemon", said="send hello to priya")
+    rt.call("daemon", "type_text", {"text": "hello"})
+    assert "something else" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+
+    rt.forget("daemon")
+    d.box, d.windows["0xchat"]["title"], judged = "", "web.whatsapp.com", []
+    window = tools.screen.window
+
+    def stop_while_checking(address):                    # Stop comes after the verdict, while the window is checked
+        if judged:
+            rt.cancel("daemon")
+        return window(address)
+    monkeypatch.setattr(rt.judge, "allows", lambda said, action, image=None: judged.append(1) or allows(said, action, image))
+    monkeypatch.setattr(tools.screen, "window", stop_while_checking)
+    rt.new_turn("daemon", said="send hello to priya")
+    rt.call("daemon", "type_text", {"text": "hello"})
+    assert "cancelled" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    assert judged and d.sent == []
+
+
+def test_the_screenshot_is_of_the_window_the_keys_go_to(desk):
+    rt, d = desk
+    rt.new_turn("daemon", said="tell priya hello")
+    rt.call("daemon", "type_text", {"text": "hello"})
+    rt.call("daemon", "press_keys", {"keys": "Enter"})
+    assert d.shots == ["0xchat"] and d.sent == ["hello"]
+
+
+def test_no_screenshot_means_ask(desk, monkeypatch):
+    rt, d = desk
+
+    def broken(window):
+        raise tools.screen.ScreenError("grim failed: not installed")
+    monkeypatch.setattr(tools.screen, "snapshot", broken)
+    rt.new_turn("daemon", said="tell priya hello")
+    rt.call("daemon", "type_text", {"text": "hello"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0]) and d.sent == []
+
+
+def test_a_terminal_line_never_lets_a_click_elsewhere_through(desk):
+    rt, d = desk
+    d.target = "0xterm"
+    rt.new_turn("daemon", said="list the files")
+    rt.call("daemon", "type_text", {"text": "ls"})
+    d.under[(900, 700)] = "0xchat"                       # Send in the chat window, keys still on the terminal
+    assert _asks(rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0])
+    assert d.sent == [] and d.ran == []
+
+
+def test_each_window_keeps_its_own_draft(desk):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="write hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})       # a draft in the chat
+    d.target = "0xterm"
+    rt.call("daemon", "type_text", {"text": "ls"})       # something in the terminal
+    d.target = "0xchat"
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])      # the chat's draft still asks
+    assert d.sent == []
+
+
+@pytest.mark.parametrize("keys", ["Return+", "ctrl+Enter", "KP_Enter", "control + return"])
+def test_every_spelling_of_enter_counts(desk, keys):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="write hi")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": keys})[0])
+
+
+def test_a_terminal_runs_its_whole_line_or_asks(desk):
+    rt, d = desk
+    d.target = "0xterm"
+    rt.new_turn("daemon", said="clean up")
+    rt.call("daemon", "type_text", {"text": "sudo rm -rf /usr"})
+    assert _asks(rt.call("daemon", "type_text", {"text": "\n"})[0])           # the new line runs all of it
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "ctrl+j"})[0])      # so does Ctrl+J
+    rt.forget("daemon")
+    rt.new_turn("daemon", said="clean up")
+    rt.call("daemon", "type_text", {"text": "sudo rm -rf "})
+    rt.call("daemon", "press_keys", {"keys": "End"})                          # the line may hold more now
+    rt.call("daemon", "type_text", {"text": "/usr"})
+    out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    assert _asks(out) and "can't be checked" in out
+    assert d.ran == []
+
+
+def test_any_click_where_a_message_waits_may_send_it(desk):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="write hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    out = rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "paper plane icon"})[0]
+    assert _asks(out) and "It may send “hi”" in out and d.sent == []
+
+
+def test_a_stop_while_a_yes_is_checked_stops_it(desk, monkeypatch):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    token = json.loads(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])["token"]
+    window = tools.screen.window
+
+    def stop_while_checking(address):
+        rt.cancel("daemon")
+        return window(address)
+    rt.new_turn("daemon", same_task=True, said="yes")
+    monkeypatch.setattr(tools.screen, "window", stop_while_checking)
+    assert "cancelled" in rt.call("daemon", "confirm_action", {"token": token})[0]
+    assert d.sent == []
