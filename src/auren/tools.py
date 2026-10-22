@@ -178,10 +178,10 @@ class Runtime:
 
     def forget(self, sid: str) -> None:
         """A fresh conversation: nothing asked in the old one can be answered any more, and nothing said
-        in it lets a message through."""
+        in it lets a message through. What was typed on the screen is still there, so it's still known."""
         self.confirmations.clear(sid)
         s = self._session(sid)
-        s.said, s.typed, s.keyed, s.spoke = [], None, {}, 0
+        s.said, s.typed, s.spoke = [], None, 0
 
     def set_level(self, level: str) -> None:
         if level not in safety.LEVELS:
@@ -383,14 +383,16 @@ def _failed(result: str) -> bool:
 
 def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], None] | None = None,
           *, say: Callable[[str], str | None] | None = None, message: str = "",
-          image: Callable[[], bytes] | None = None, same: Callable[[], None] | None = None) -> str:
+          image: Callable[[], bytes] | None = None, same: Callable[[], None] | None = None,
+          searched: Callable[[], None] | None = None) -> str:
     """A risky action of these kinds (safety.WINDOW, FILES, ...). Depending on the approval level it runs
     now, or asks the user first: `run` then happens only after a yes in their next message, and only if
     `check` (the target is still what the question was about) passes then. say: given the result, what to
     say if nothing is left for the brain to do (None: the brain should see the result). message: this sends
     a chat message, described for the judge (its whole text, where, the page): at full access the judge may
     find that the user's words already asked for it. image: a screenshot for the judge (a message on the
-    screen). same: checked too before a message the judge let through goes (the same chat still shows)."""
+    screen). same: checked too before a message the judge let through goes (the same chat still shows).
+    searched: called after it ran, if the judge found the text was a search, not a message."""
     c = _call.get()
     rt = c.runtime
     if not safety.needs_ask(rt.level, kinds, rt.confirmations.granted(c.session)):
@@ -398,7 +400,8 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
         return _run(run)
     s = rt._session(c.session)
     turn, epoch = s.turn, rt.confirmations.epoch(c.session)
-    if message and _judged(rt, s, kinds, message, image):
+    verdict = _judged(rt, s, kinds, message, image) if message else ""
+    if verdict:
         # A verdict takes seconds: it counts only for the request it was about, and only if the message,
         # field and page are the same still.
         try:
@@ -412,7 +415,10 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
         if s.turn != turn or rt.confirmations.epoch(c.session) != epoch:
             return "error: the request changed while this was being checked: don't do it"
         log.info("safety: the user's words ask for it: %s", question)
-        return _run(run)
+        out = _run(run)
+        if verdict == "search" and searched and not out.startswith("error:"):
+            searched()
+        return out
     if sum(p.turn == turn for p in rt.batch(c.session)) >= safety.MAX_BATCH:
         return (f"error: {safety.MAX_BATCH} questions are already waiting for the user's answer. Don't ask more "
                 "now: ask about those, and do the rest after they answer.")
@@ -422,24 +428,25 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
 
 
 def _judged(rt: Runtime, s: Session, kinds: set[str], message: str,
-            image: Callable[[], bytes] | None = None) -> bool:
-    """Does the judge let this message through? Only at full access, only a message (nothing of the floor
-    rides along), only right after the user said something, and once per thing they say."""
+            image: Callable[[], bytes] | None = None) -> str:
+    """Does the judge let this message through ("chat", "search"; "" if not)? Only at full access, only a
+    message (nothing of the floor rides along), only right after the user said something, and once per
+    thing they say."""
     with rt._lock:                  # one per thing the user says, even with a browser and a screen send at once
         if rt.level != "free" or kinds != {safety.SEND} or s.spoke != s.turn or s.allowed == s.turn:
-            return False
+            return ""
         before, s.allowed = s.allowed, s.turn
     try:
         shot = image() if image else None
     except screen.ScreenError as e:
         log.info("judge: no screenshot (%s), so it asks", e)
-        return False
+        return ""
     verdict = rt.judge.allows(s.said, message, shot)
     if verdict == "search":                  # nobody receives a search: it doesn't use up the message
         with rt._lock:
             if s.allowed == s.turn:
                 s.allowed = before
-    return bool(verdict)
+    return verdict
 
 
 def _profile() -> Profile:
@@ -859,7 +866,7 @@ _MOD_NAMES = {"control": "ctrl", "win": "super"}
 
 def _enter(keys: str, terminal: bool) -> str:
     """What a key press does to typed text, read as screen.press_keys reads it: "send" (Enter, Ctrl+Enter;
-    in a terminal also Ctrl+J or Ctrl+M, which run the line), "line" (Shift+Enter: a new line in a chat),
+    in a terminal also Ctrl+J, Ctrl+M or Ctrl+O, which run the line), "line" (Shift+Enter: a new line in a chat),
     or "" (anything else)."""
     parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
     if not parts:
@@ -867,7 +874,7 @@ def _enter(keys: str, terminal: bool) -> str:
     mods, key = {_MOD_NAMES.get(m, m) for m in parts[:-1]}, parts[-1]
     if key in ENTER:
         return "line" if mods == {"shift"} and not terminal else "send"
-    return "send" if terminal and mods == {"ctrl"} and key in ("j", "m") else ""
+    return "send" if terminal and mods == {"ctrl"} and key in ("j", "m", "o") else ""
 
 
 def _session_now() -> Session:
@@ -875,32 +882,49 @@ def _session_now() -> Session:
     return c.runtime._session(c.session)
 
 
-def _moved_on(window: str) -> None:
-    """A click or a key in a window the brain typed into: what it types next may go to another box, and a
-    terminal's line may not be just what it typed any more."""
-    k = _session_now().keyed.get(window)
+def _moved_on(window: str, changes: bool = True) -> None:
+    """A click or a key in a window: what the brain types next may go to another box, and a terminal's line
+    may not be just what it typed any more. changes: it may change a terminal's line (a key, a paste) even
+    where the brain typed nothing: then Enter there can't be checked either."""
+    s = _session_now()
+    k = s.keyed.get(window)
     if k:
         k.fresh = True
         k.known = not k.terminal
+    elif window and changes:
+        app = screen.window(window).get("class", "")
+        if app.lower() in screen.TERMINALS:
+            s.keyed[window] = Keyed(window, app, "", fresh=True, known=False)
 
 
 def _unreadable(text: str) -> safety.Risk:
-    return safety.Risk(frozenset({safety.WIPE}), f"the line may hold more than “{text[-40:]}”, so it can't be checked")
+    what = f"the line may hold more than “{text[-40:]}”" if text.strip() else "the line can't be read"
+    return safety.Risk(frozenset({safety.WIPE}), f"{what}, so it can't be checked")
+
+
+def _unchanged(k: Keyed) -> Callable[[], None]:
+    """What the user is asked about is this text: nothing typed, pressed or clicked there since."""
+    s, text, known = _session_now(), k.text, k.known
+
+    def check() -> None:
+        if s.keyed.get(k.window) is not k or k.text != text or k.known != known:
+            raise PermissionError("what's typed there changed since asking: ask the user again")
+    return check
 
 
 def _run_line(k: Keyed, keys: str) -> str:
     """Enter in a terminal runs its line: the command decides, as run_command's does (from a folder that
     isn't known), and a line Auren can't read in full asks."""
-    s = _session_now()
+    same = _unchanged(k)
 
     def check() -> None:
+        same()
         if screen.key_target() != k.window:
             raise PermissionError("the keys would go to a different window now: look at the screen again and ask again")
 
     def run() -> str:
         out = screen.press_keys(keys)
-        if s.keyed.get(k.window) is k:
-            del s.keyed[k.window]
+        k.text, k.known, k.fresh = "", True, False      # it ran: the next line starts empty
         return out
     risk = safety.assess_command(k.text, None) if k.known else _unreadable(k.text)
     if not risk:
@@ -909,32 +933,43 @@ def _run_line(k: Keyed, keys: str) -> str:
     return _gate(risk.kinds, f"Run `{short}` in {k.app}? {risk.reason[0].upper() + risk.reason[1:]}.", run, check)
 
 
-def _send_keyed(k: Keyed, how: str, press: Callable[[], str], also: Callable[[], None] | None = None) -> str:
+def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[], None] | None = None) -> str:
     """Enter or a click where the brain typed a message: it may send it. Asked like any send; at full
     access the judge reads the user's words, the text and a screenshot of that very window, brought to the
-    front. Before it goes, the window must still get it, with the same title."""
+    front. Before it goes, the text must be the same, and the window must still get it (the keys, or the
+    click: `lands`), with the same title. After Enter the text is gone; after a click it may still be
+    there unsent (the click only put the cursor in the box), so a click or Enter there still counts."""
     s = _session_now()
     title = screen.window(k.window).get("title", "")
+    same = _unchanged(k)
 
     def check() -> None:
-        if screen.key_target() != k.window:
+        same()
+        if lands:
+            lands()
+        elif screen.key_target() != k.window:
             raise PermissionError("the keys would go to a different window now: look at the screen again and ask again")
         if screen.window(k.window).get("title", "") != title:
             raise PermissionError("that window shows something else now: look at the screen again and ask again")
-        if also:
-            also()
+
+    def gone() -> None:
+        if s.keyed.get(k.window) is k:
+            del s.keyed[k.window]
 
     def run() -> str:
         out = press()
-        if s.keyed.get(k.window) is k:
-            del s.keyed[k.window]
+        if not lands:
+            gone()
+        else:
+            k.fresh = True
         return out
     short = k.text if len(k.text) <= 60 else k.text[:57] + "…"
     message = (f"Typed “{k.text}” in the app {k.app}, window “{title}”, and now {how} (a screenshot of the "
                "screen comes with this)")
     question = (f"Send “{short}” in {k.app}?" if how.startswith("pressing") else
                 f"{how[0].upper() + how[1:]} in {k.app}? It may send “{short}”, which is typed there.")
-    return _gate({safety.SEND}, question, run, check, message=message, image=lambda: screen.snapshot(k.window))
+    return _gate({safety.SEND}, question, run, check, message=message, image=lambda: screen.snapshot(k.window),
+                 searched=gone)
 
 
 def _same_screen() -> Callable[[], None]:
@@ -966,21 +1001,23 @@ def click_at(x: int, y: int, target: str, button: str = "left", double: bool = F
     """Click at pixel (x, y) of the latest look_at_screen image. target: what you are clicking, in words
     (for example "Allow on Chrome's download popup"). Look again afterwards to check it worked. Clicks
     that buy, pay, send, post, submit or delete make the tool ask the user itself: just click, don't ask first."""
-    window = screen.window_at(x, y)
-    k = _session_now().keyed.get(window or screen.key_target())
+    window = screen.window_at(x, y) or screen.key_target()
+    k = _session_now().keyed.get(window)
     risky = web.RISKY_CLICK.search(target)
-    if k and not k.terminal and not k.fresh and not (risky and safety.click_kind(target) != safety.SEND):
+    if k and not k.terminal and not (risky and safety.click_kind(target) != safety.SEND):
         # where a message waits unsent, any click may be its Send (the brain's words for it can't be trusted)
+        same = _same_screen()
+
         def lands() -> None:
-            _same_screen()()
-            if window and screen.window_at(x, y) != window:
+            same()
+            if screen.window_at(x, y) != window:
                 raise PermissionError("that spot shows another window now: look at the screen again and ask again")
         return _send_keyed(k, f"clicking “{target}”", lambda: screen.click(x, y, button, double), lands)
     if risky:
         return _gate({safety.click_kind(target)}, f"Click “{target}”?", lambda: screen.click(x, y, button, double),
                      _same_screen())
     out = _run(screen.click, x, y, button, double)
-    _moved_on(window or screen.key_target())
+    _moved_on(window, changes=button != "left")          # a middle click pastes into a terminal
     return out
 
 
@@ -996,7 +1033,7 @@ def drag_at(x1: int, y1: int, x2: int, y2: int, target: str, hold: str = "") -> 
                      _same_screen())
     window = screen.window_at(x1, y1)
     out = _run(screen.drag, x1, y1, x2, y2, hold)
-    _moved_on(window or screen.key_target())
+    _moved_on(window or screen.key_target(), changes=False)
     return out
 
 
@@ -1031,7 +1068,13 @@ def type_text(text: str) -> str:
         line = (before.text if before else "") + text           # with what's on the line already
         risk = safety.assess_command(line, None) if not before or before.known else _unreadable(line)
         if risk:
+            same = _unchanged(before) if before else None
+
             def check() -> None:
+                if same:
+                    same()
+                elif s.keyed.get(window):
+                    raise PermissionError("what's typed there changed since asking: ask the user again")
                 if screen.key_target() != window:
                     raise PermissionError("the keys would go to a different window now: ask the user again")
             short = line if len(line) <= 60 else line[:57] + "…"
@@ -1051,15 +1094,20 @@ def press_keys(keys: str) -> str:
             if screen.key_target() != window:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
         return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
+    s = _session_now()
     window = screen.key_target()
-    k = _session_now().keyed.get(window)
+    k = s.keyed.get(window)
+    if not k and window and _enter(keys, True) == "send":
+        app = screen.window(window).get("class", "")
+        if app.lower() in screen.TERMINALS:     # a line the brain didn't type: it can't be read
+            k = s.keyed[window] = Keyed(window, app, "", fresh=True, known=False)
     does = _enter(keys, bool(k and k.terminal))
     if k and does == "send":                    # Enter where the brain typed: it runs or sends that text
         return _run_line(k, keys) if k.terminal else _send_keyed(k, f"pressing {keys}", lambda: screen.press_keys(keys))
     out = _run(screen.press_keys, keys)
     if k and does == "line" and not out.startswith("error:"):
         k.text += "\n"
-    elif k:
+    else:
         _moved_on(window)
     return out
 

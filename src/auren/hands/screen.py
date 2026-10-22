@@ -33,6 +33,7 @@ no command line.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import threading
@@ -444,6 +445,8 @@ def type_text(text: str) -> str:
     try:
         clipboard.copy(text.encode(), clipboard.TEXT)    # sensitive: a clipboard history doesn't keep what Auren types
     except clipboard.ClipboardError:
+        if re.search(r"[\r\n]", text):      # typed, a line break is Enter: it could send what's above it
+            raise ScreenError("can't paste (no wl-copy), and typing a line break would press Enter: type one line at a time") from None
         _sh(["wtype", "--", text])            # no wl-copy: type it, letters may drop
         return f"typed {len(text)} characters (no wl-copy, so check it came out right)"
     try:
