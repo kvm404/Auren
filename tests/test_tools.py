@@ -197,6 +197,27 @@ def test_a_failed_tool_is_logged_with_why(rt, monkeypatch, caplog):
     assert "Traceback" in caplog.text
 
 
+def test_what_was_typed_stays_out_of_the_log(rt, monkeypatch, caplog):
+    # a password typed into a field that's gone must not end up in daemon.log
+    from auren.hands import screen
+    monkeypatch.setattr(screen, "type_text", lambda text: (_ for _ in ()).throw(screen.ScreenError("no window")))
+    with caplog.at_level("INFO", logger="auren.tools"):
+        assert _ask(rt, "type_text", text="hunter2-secret").startswith("error: no window")
+    assert "no window" in caplog.text and "<14 characters>" in caplog.text and "hunter2" not in caplog.text
+
+
+def test_an_approved_action_that_fails_is_logged(rt, monkeypatch, caplog):
+    def broken():
+        raise desktop.DesktopError("no screen locker")
+    monkeypatch.setattr(desktop, "lock_screen", broken)
+    asked = json.loads(_ask(rt, "lock_screen"))
+    rt.new_turn("daemon", same_task=True)
+    with caplog.at_level("INFO", logger="auren.tools"):
+        [outcome] = rt.answer("daemon", True)
+    assert not outcome.ok and asked["token"]
+    assert "approved action failed" in caplog.text and "no screen locker" in caplog.text
+
+
 def test_the_mcp_adapter_forwards_text_and_images(rt, monkeypatch):
     from auren import server
     from auren.hands import screen
