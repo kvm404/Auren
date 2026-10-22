@@ -332,9 +332,17 @@ def pin(target: str, is_field: bool = False, tab: int | None = None) -> str | No
 
 
 def page() -> dict:
-    """The auren tab now: browser, tab id and address (what a confirmation is bound to)."""
+    """The auren tab now: browser, tab id and address (what a confirmation is bound to), and its title."""
     b, t = _current(), _tab(None)
-    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href")}
+    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href"), "title": _eval(b, t, "document.title")}
+
+
+def value_of(target: str, tab: int | None = None) -> str | None:
+    """The text a field holds now (what a Send click would send), or None if it's gone."""
+    b, t = _current(), _tab(tab)
+    js = _FIND_JS + """((target) => { const el = field(target);
+      return el ? (el.isContentEditable ? el.innerText : String(el.value ?? '')) : null; })(%s)""" % json.dumps(str(target))
+    return _eval(b, t, js)
 
 
 def field_of(target: str, tab: int | None = None) -> dict | None:

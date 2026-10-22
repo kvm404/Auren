@@ -14,7 +14,9 @@ something that shouldn't be repeated has run in this turn (then a backup brain m
 
 Every tool returns plain text (or JSON text). Errors come back as text starting with "error:" so the
 brain can tell the user what went wrong. Risky tools go through auren.safety: by the approval level
-(`Runtime.level`) they run, or return a question and a token. A yes runs the questions waiting: the
+(`Runtime.level`) they run, or return a question and a token. At full access a chat message the user's
+own words already asked to send goes without the question (the judge, auren.brain.judge, decides from
+those words alone). A yes runs the questions waiting: the
 daemon's, for a plain answer it read itself (`Runtime.answer`), or the brain's `confirm_action` in a later
 user turn. Text that comes from panes, the screen or the web is wrapped as untrusted.
 """
@@ -33,11 +35,12 @@ import socketserver
 import threading
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import safety
+from .brain.judge import Judge
 from .hands import browser as web
 from .hands import desktop, excalidraw, herdr, screen, shell
 from .integrations import active, hidden_tools
@@ -81,6 +84,22 @@ class Session:
     turn: int = 0
     cancelled: bool = False
     acted: bool = False
+    said: list[tuple[str, str]] = field(default_factory=list)   # the last few lines, ("user" | "auren", text), for the judge
+    spoke: int = 0          # the turn the user last said something in (an answer's follow-up isn't theirs)
+    allowed: int = 0        # the turn the judge last let a message through: at most one per thing the user says
+    typed: Typed | None = None      # the message the brain last typed (full access), which a Send click sends
+
+
+@dataclass
+class Typed:
+    turn: int
+    page: dict              # web.page() when it was typed
+    field: str              # the pinned field
+    label: str
+    text: str
+
+
+SAID = 6        # how many lines of the conversation the judge sees
 
 
 @dataclass
@@ -109,6 +128,7 @@ class Runtime:
         self.profile = Profile()
         self.confirmations = safety.Confirmations()
         self.level = "ask"                  # the approval level (safety.LEVELS); the daemon keeps it in step with config.toml
+        self.judge = Judge()
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._server: socketserver.ThreadingUnixStreamServer | None = None
@@ -117,20 +137,36 @@ class Runtime:
         with self._lock:
             return self._sessions.setdefault(sid, Session())
 
-    def new_turn(self, sid: str, same_task: bool = False) -> int:
+    def new_turn(self, sid: str, same_task: bool = False, said: str = "") -> int:
         """A new user message in this session. It ends the previous task, so a yes that covered it
         (level "task") stops covering anything; same_task: this continues that task (an answer to its
-        question, or the brain going on after one), so what it covered and what already ran still count."""
+        question, or the brain going on after one), so what it covered and what already ran still count.
+        said: what the user said, which the judge reads (empty for text the user didn't say)."""
         s = self._session(sid)
         s.turn, s.cancelled = s.turn + 1, False
+        if said.strip():
+            self._heard(s, "user", said)
+            s.spoke = s.turn
         if not same_task:
             s.acted = False
             self.confirmations.revoke(sid)
         return s.turn
 
+    def replied(self, sid: str, text: str) -> None:
+        """What Auren said back. The judge reads it only to know what a following "yes" answers."""
+        if text.strip():
+            self._heard(self._session(sid), "auren", text)
+
+    def _heard(self, s: Session, who: str, text: str) -> None:
+        with self._lock:
+            s.said = [*s.said, (who, text.strip())][-SAID:]
+
     def forget(self, sid: str) -> None:
-        """A fresh conversation: nothing asked in the old one can be answered any more."""
+        """A fresh conversation: nothing asked in the old one can be answered any more, and nothing said
+        in it lets a message through."""
         self.confirmations.clear(sid)
+        s = self._session(sid)
+        s.said, s.typed, s.spoke = [], None, 0
 
     def set_level(self, level: str) -> None:
         if level not in safety.LEVELS:
@@ -199,8 +235,7 @@ class Runtime:
                     if p.check:
                         p.check()
                     result = _run(p.run)
-                except (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError,
-                        excalidraw.ExcalidrawError) as e:
+                except _TARGET_ERRORS as e:
                     result = f"error: {e}"
             ok = not _failed(result)
             outcomes.append(Outcome(p.question, ok, result, p.say(result) if ok and p.say else None))
@@ -313,6 +348,11 @@ def _loggable(args: dict) -> str:
     return json.dumps(shown, ensure_ascii=False)[:200]
 
 
+# What a check (is the target still what was asked about?) can raise.
+_TARGET_ERRORS = (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError,
+                  excalidraw.ExcalidrawError)
+
+
 def _failed(result: str) -> bool:
     """Did an approved action fail? Errors say so, and so does a command that finished with a non-zero exit."""
     if result.startswith("error:"):
@@ -325,23 +365,48 @@ def _failed(result: str) -> bool:
 
 
 def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], None] | None = None,
-          *, say: Callable[[str], str | None] | None = None) -> str:
+          *, say: Callable[[str], str | None] | None = None, message: str = "") -> str:
     """A risky action of these kinds (safety.WINDOW, FILES, ...). Depending on the approval level it runs
     now, or asks the user first: `run` then happens only after a yes in their next message, and only if
     `check` (the target is still what the question was about) passes then. say: given the result, what to
-    say if nothing is left for the brain to do (None: the brain should see the result)."""
+    say if nothing is left for the brain to do (None: the brain should see the result). message: this sends
+    a chat message, described for the judge (its whole text, where, the page): at full access the judge may
+    find that the user's words already asked for it."""
     c = _call.get()
     rt = c.runtime
     if not safety.needs_ask(rt.level, kinds, rt.confirmations.granted(c.session)):
         log.info("safety %s: ran without asking: %s", rt.level, question)
         return _run(run)
-    turn = rt._session(c.session).turn
+    s = rt._session(c.session)
+    turn, epoch = s.turn, rt.confirmations.epoch(c.session)
+    if message and _judged(rt, s, kinds, message):
+        # A verdict takes seconds: it counts only for the request it was about.
+        if s.cancelled:
+            return "error: the user cancelled this request. Stop now: don't call more tools."
+        if s.turn != turn or rt.confirmations.epoch(c.session) != epoch:
+            return "error: the request changed while this was being checked: don't do it"
+        try:
+            if check:
+                check()         # the verdict took a moment: the message, field and page must be the same still
+        except _TARGET_ERRORS as e:
+            return f"error: {e}"
+        s.allowed = turn
+        log.info("safety: the user's words ask for it: %s", question)
+        return _run(run)
     if sum(p.turn == turn for p in rt.batch(c.session)) >= safety.MAX_BATCH:
         return (f"error: {safety.MAX_BATCH} questions are already waiting for the user's answer. Don't ask more "
                 "now: ask about those, and do the rest after they answer.")
     c.asked = True
     return json.dumps(rt.confirmations.request(c.session, turn, question, run, check, c.lock,
                                                kinds=kinds, say=say), ensure_ascii=False)
+
+
+def _judged(rt: Runtime, s: Session, kinds: set[str], message: str) -> bool:
+    """Does the judge let this message through? Only at full access, only a message (nothing of the floor
+    rides along), only right after the user said something, and once per thing they say."""
+    if rt.level != "free" or kinds != {safety.SEND} or s.spoke != s.turn or s.allowed == s.turn:
+        return False
+    return rt.judge.allows(s.said, message)
 
 
 def _profile() -> Profile:
@@ -582,9 +647,60 @@ def _same_page(before: dict) -> Callable[[], None]:
             now = web.page()
         except web.BrowserError as e:
             raise PermissionError(f"the page is gone ({e}): read it again and ask the user again") from None
-        if (now["browser"], now["tab"], now["url"]) != (before["browser"], before["tab"], before["url"]):
+        if _where(now) != _where(before):
             raise PermissionError("the page changed since you asked: read it again and ask the user again")
     return check
+
+
+def _where(page: dict) -> tuple:
+    return page["browser"], page["tab"], page["url"]
+
+
+def _message(text: str, box: str, page: dict, how: str) -> str:
+    """A chat message about to go, for the judge: the whole text, the box it's in, and the page."""
+    return (f"Send the message “{text}” {how}, from the box “{box or 'unnamed'}”, on the page "
+            f"“{page.get('title') or ''}” at {page['url']}")
+
+
+def _remember_typed(target: str, text: str) -> None:
+    """At full access, the message the brain just typed, so a Send click after it can tell the judge what
+    it sends. Anything else typed (or a search box) forgets it."""
+    c = _call.get()
+    s = c.runtime._session(c.session)
+    s.typed = None
+    if c.runtime.level != "free" or not text.strip():
+        return
+    with contextlib.suppress(web.BrowserError):
+        f = web.field_of(target)
+        pinned = web.pin(target, is_field=True) if f and not f["search"] else None
+        if pinned:
+            s.typed = Typed(s.turn, web.page(), pinned, f["label"], text)
+
+
+def _sent_by(label: str, here: dict) -> tuple[str, Callable[[], None] | None]:
+    """A Send click at full access: the message the brain typed on this page for what the user just said,
+    described for the judge, and a check that the box still holds it. ("", None) when that isn't known:
+    then it asks the user."""
+    c = _call.get()
+    s = c.runtime._session(c.session)
+    t = s.typed
+    if c.runtime.level != "free" or not safety.SEND_MESSAGE.fullmatch(label) or t is None \
+            or t.turn != s.turn or _where(t.page) != _where(here):
+        return "", None
+
+    def check() -> None:
+        try:
+            now = web.value_of(t.field)
+        except web.BrowserError:
+            now = None
+        if now is None or now.strip() != t.text.strip():
+            raise PermissionError("the message box doesn't hold what was typed any more: read the page again "
+                                  "and ask the user again")
+    try:
+        check()
+    except PermissionError:
+        return "", None
+    return _message(t.text, t.label, here, f"by clicking “{label}”"), check
 
 
 @tool(repeatable=True, lock=BROWSER)
@@ -614,12 +730,18 @@ def browser_click(target: str, expect_download: bool = False) -> str:
     except web.BrowserError as e:
         return f"error: {e}"
     if label and web.RISKY_CLICK.search(label):
+        kind = safety.click_kind(label)
+        message, holds = _sent_by(label, here) if kind == safety.SEND else ("", None)
+
         def check() -> None:
             _same_page(here)()
             if not pinned or web.label_of(pinned) != label:
                 raise PermissionError(f"“{label}” isn't there any more: read the page again and ask the user again")
-        return _gate({safety.click_kind(label)}, f"Click “{label}”? That could buy, send, post or delete something.",
-                     lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check)
+            if holds:
+                holds()
+        return _gate({kind}, f"Click “{label}”? That could buy, send, post or delete something.",
+                     lambda: safety.untrusted(web.browser_click(pinned, None, expect_download), "web page"), check,
+                     message=message)
     return _web(_run(web.browser_click, target, None, expect_download))
 
 
@@ -650,8 +772,12 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
                                           "again and ask the user again")
             short = text if len(text) <= 60 else text[:57] + "…"
             return _gate({safety.SEND}, f"Type “{short}” into “{f['label'] or 'the field'}” and press Enter? That could send or post it.",
-                         lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check)
-    return _web(_run(web.browser_type, target, text, submit))
+                         lambda: safety.untrusted(web.browser_type(pinned, text, True), "web page"), check,
+                         message=_message(text, f["label"], here, "by pressing Enter"))
+    out = _web(_run(web.browser_type, target, text, submit))
+    if not out.startswith("error:"):
+        _remember_typed(target, "" if submit else text)          # a search sends nothing
+    return out
 
 
 @tool(repeatable=True, lock=BROWSER)

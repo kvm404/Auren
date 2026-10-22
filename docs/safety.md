@@ -28,13 +28,27 @@ Like Claude Code's permission modes: `safety.level` in `config.toml`, `auren-ctl
 |---|---|
 | `ask` | Every risky action asks first. |
 | `task` | The first risky action asks. A yes also covers the rest of **that task** for the kinds that were approved: later actions of those kinds run without asking. |
-| `free` | **Full access**, for development. Windows and files just run. `send` still asks, and so does the floor. |
+| `free` | **Full access**, for development. Windows and files just run. `send` still asks, except a chat message your own words just asked for (see [The judge](#the-judge)), and the floor always asks. |
 
 **The floor: `publish`, `system`, `secrets`, `money`, `wipe` and `auren` ask at every level, every time**, and a yes never covers them later. None of them can be taken back: publishing, root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own controls are never a surprise, even at `free`. Several waiting at once still take one yes (below).
 
 A task is everything the brain does from the user's request until their next message that isn't an answer to one of its questions (or 5 minutes, `GRANT_TTL`). Changing the level also ends what a yes covered. The brain isn't told about the grant; it just sees tools that run. It is told the level in each message (an `<approvals>` note; nothing is said at `ask`), so at `task` and `free` it doesn't add questions of its own before actions the tools already guard.
 
 What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes deleting files and closing windows, which is why `free` is for a development machine. That's the reason for the floor, for `send` still asking at `free`, for the task ending with the next message, and for `ask` staying the default.
+
+## The judge
+
+At `free` only, "tell Priya I'm running late" shouldn't stop at the Send button to ask "Send it?". Code: `src/auren/brain/judge.py`, called from `_gate` in `tools.py`.
+
+**What reaches it:** only a chat message in the browser whose text is known, and nothing else. That is a Send click (labelled just "Send", "Send message" or "Send now") right after the brain typed the message on the same page in the same turn, or Enter in a field that isn't a search box. Screen clicks, the floor, other `send` clicks (submit, delete, sign out…), mail from a shell, and the `ask` and `task` levels never go to it: they ask as before.
+
+**What it sees:** the last six lines of the conversation (the user's words and Auren's replies, so it knows what a "yes" answers) and a description of the message: its whole text, the box, the page's title and address. It never sees the screen, the page's content or tool output, so text planted on a page can steer the brain but not the judge.
+
+**How it decides:** a fresh `claude -p` (Haiku, low effort, no tools, no MCP) per verdict, started only when needed. It answers with what it read: the kind of message (chat, post, other), who the user said it goes to, who the page shows it goes to, whether the text is what they asked to say, and whether they said to send it (not just to draft it, check first, a general "do whatever", a yes to something else, or a "wait, don't"). The code then also checks that reading: it lets the message go only if it's a chat message, the two names share a word, and both answers are yes. A different person, no name on the page, more text, links, a public post, a timeout (20 s), an error or an unreadable answer: it asks the user.
+
+**Bound to what was judged:** an ALLOW covers one message per thing the user says, and only right after they said it. Before sending, the box must still hold exactly the text that was judged, on the same tab and address; a Stop or a fresh conversation while it's judging cancels it. Without `claude` installed, it logs that once and every message asks.
+
+Measured against the real Haiku on 2026-10-22, 18 cases × 20 runs: 0 of 260 runs that should ask were let through (a wrong person, a similar name, the title and box naming different people, no name on the page, more text or a link, a draft, "let me see it first", a public post, general permission, a yes to something else, a taken-back request, a request to read a page); 97 of 100 that should go went (3 extra questions after "yes" to Auren's own question). A verdict takes about 2.5 s (p90 3.4 s).
 
 ## Planned: remembered permissions
 

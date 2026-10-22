@@ -137,6 +137,7 @@ _UNREAD: dict[str, re.Pattern] = {
 
 _MONEY_CLICK = re.compile(r"\b(buy|pay|purchase|place order|order now|checkout|check out|transfer|book now)\b", re.I)
 _PUBLISH_CLICK = re.compile(r"\b(post|publish)\b", re.I)
+SEND_MESSAGE = re.compile(r"\W*send(\s+(message|now))?\W*", re.I)    # the whole label of a chat's Send button
 
 
 @dataclass(frozen=True)
