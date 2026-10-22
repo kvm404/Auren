@@ -739,7 +739,8 @@ def scroll_at(x: int, y: int, direction: str = "down", amount: int = 3) -> str:
 
 @tool(lock=SCREEN)
 def type_text(text: str) -> str:
-    """Type text into whatever has keyboard focus (click the field first)."""
+    """Type text into whatever has keyboard focus (click the field first). It is pasted in one go, so a
+    newline is a line break, not Enter: press Enter with press_keys to send."""
     return _run(screen.type_text, text)
 
 

@@ -54,7 +54,7 @@ the desktop and shows what it's doing, and a bar plugin gives quick controls.
 ## Requirements
 
 - Omarchy (Hyprland, Wayland), PipeWire. Developed on an i3 with 8 GB RAM, so everything is light.
-- `uv`, `quickshell` (`qs`), `wtype`, `grim`, and write access to `/dev/uinput` for screen
+- `uv`, `quickshell` (`qs`), `wtype`, `wl-clipboard`, `grim`, and write access to `/dev/uinput` for screen
   control.
 - Claude Code (`claude`, logged in) for the brain; Codex (`codex`) for the backup brain.
 - Optional: `herdr` for coding agents (without it, commands run in the background), Open Browser Use

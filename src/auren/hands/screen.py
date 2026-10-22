@@ -18,8 +18,13 @@ no command line.
   relative motion from the virtual mouse, steered by reading the cursor back (pointer
   acceleration applies to it too). Held keys come from a small virtual keyboard: `wtype`
   releases its keys when it exits, so it can't hold one across a drag.
-- type_text() / press_keys(): `wtype` (Wayland virtual keyboard), into the window
-  that was last clicked (focused again first if focus has moved since).
+- type_text(): into the window that was last clicked (focused again first if focus has moved
+  since). Pasted through the clipboard (`wl-copy`, Ctrl+V), then the clipboard is put back: `wtype`
+  drops letters in Chrome and Electron apps (Discord typed "This is from Aure The permissions"), and
+  a typed newline would press Enter, which sends in a chat. Terminals still get `wtype`, since Ctrl+V
+  isn't paste there. The pasted text is marked sensitive, so a clipboard history doesn't keep it, and
+  the old clipboard isn't put back over something the user copied meanwhile.
+- press_keys(): `wtype` (Wayland virtual keyboard), into the same window.
 - press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
   uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
   typed see the wrong key: Excalidraw's Shift+2 is one.
@@ -35,6 +40,7 @@ import time
 from pathlib import Path
 
 from .. import notice
+from . import clipboard
 
 IMAGE_WIDTH = 1024
 
@@ -116,6 +122,13 @@ def _to_layout(x: float, y: float) -> tuple[int, int]:
     return round(v["x"] + x * v["lw"] / v["iw"]), round(v["y"] + y * v["lh"] / v["ih"])
 
 
+def _to_image(lx: int, ly: int) -> tuple[int, int]:
+    """Layout coordinates back to the last screenshot's pixels: what tools report, so the brain compares
+    like with like (layout numbers look 1.9x off next to the image)."""
+    v = _last_view
+    return round((lx - v["x"]) * v["iw"] / v["lw"]), round((ly - v["y"]) * v["ih"] / v["lh"])
+
+
 def _device():
     """A virtual mouse (buttons + wheel). Kept open: a new input device takes a moment to be picked up."""
     global _mouse
@@ -192,10 +205,11 @@ def hover(lx: int, ly: int) -> None:
 
 def click(x: float, y: float, button: str = "left", double: bool = False, restore: bool = False) -> str:
     lx, ly = _to_layout(x, y)
-    return click_layout(lx, ly, button, double, restore)
+    click_layout(lx, ly, button, double, restore)
+    return f"{'double-' if double else ''}{button}-clicked at ({round(x)}, {round(y)}) in the screenshot"
 
 
-def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, restore: bool = False) -> str:
+def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, restore: bool = False) -> None:
     """Click at layout (screen) coordinates: for callers that know where a window is, not a screenshot."""
     from evdev import ecodes as e
     btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
@@ -218,7 +232,6 @@ def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, r
         if restore:
             time.sleep(0.25)
             _move(*before)
-    return f"{'double-' if double else ''}{button}-clicked at screen ({lx}, {ly})"
 
 
 _HOLD = {"shift": "KEY_LEFTSHIFT", "ctrl": "KEY_LEFTCTRL", "control": "KEY_LEFTCTRL", "alt": "KEY_LEFTALT",
@@ -286,12 +299,14 @@ def drag(x1: float, y1: float, x2: float, y2: float, hold: str = "", button: str
     _hold_keys(hold)
     lx1, ly1 = _to_layout(x1, y1)
     lx2, ly2 = _to_layout(x2, y2)
-    return drag_layout(lx1, ly1, lx2, ly2, hold, button, duration)
+    end = _to_image(*drag_layout(lx1, ly1, lx2, ly2, hold, button, duration))
+    held = f" holding {hold}" if hold.strip() else ""
+    return f"dragged from ({round(x1)}, {round(y1)}) to ({end[0]}, {end[1]}) in the screenshot{held}"
 
 
 def drag_layout(lx1: int, ly1: int, lx2: int, ly2: int, hold: str = "", button: str = "left",
-                duration: float = 0.5) -> str:
-    """drag() in layout (screen) coordinates."""
+                duration: float = 0.5) -> tuple[int, int]:
+    """drag() in layout (screen) coordinates. Returns where the pointer let go."""
     from evdev import ecodes as e
     btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}.get(button)
     if btn is None:
@@ -319,9 +334,7 @@ def drag_layout(lx1: int, ly1: int, lx2: int, ly2: int, hold: str = "", button: 
         time.sleep(0.1)
         global _clicked
         _clicked = {"address": _active_window(), "at": time.time()}
-        end = _cursor()
-    held = f" holding {hold}" if keys else ""
-    return f"dragged from screen ({lx1}, {ly1}) to ({end[0]}, {end[1]}){held}"
+        return _cursor()
 
 
 def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
@@ -335,7 +348,17 @@ def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
         for _ in range(max(1, min(amount, 20))):
             dev.write(e.EV_REL, e.REL_WHEEL, step); dev.syn()
             time.sleep(0.03)
-    return f"scrolled {direction} {amount} at screen ({lx}, {ly})"
+    return f"scrolled {direction} {amount} at ({round(x)}, {round(y)}) in the screenshot"
+
+
+# Window classes of terminals, where Ctrl+V isn't paste. Whole names: a web app's class is its address
+# ("chrome-footlocker.com__-Default"), which can contain a terminal's name.
+TERMINALS = frozenset({
+    "alacritty", "kitty", "foot", "footclient", "com.mitchellh.ghostty", "ghostty", "org.wezfurlong.wezterm",
+    "wezterm", "org.kde.konsole", "konsole", "org.gnome.terminal", "gnome-terminal-server", "org.gnome.console",
+    "kgx", "com.gexperts.tilix", "tilix", "terminator", "xfce4-terminal", "xterm", "uxterm", "urxvt", "st",
+    "st-256color", "rio", "com.raggesilver.blackbox",
+})
 
 
 def press_code(combo: str) -> str:
@@ -362,8 +385,26 @@ def press_code(combo: str) -> str:
 
 def type_text(text: str) -> str:
     _refocus()
-    _sh(["wtype", "--", text])
-    return f"typed {len(text)} characters"
+    try:
+        window = json.loads(_sh(["hyprctl", "activewindow", "-j"])).get("class", "")
+    except (ScreenError, json.JSONDecodeError):
+        window = ""
+    if window.lower() in TERMINALS:
+        _sh(["wtype", "--", text])
+        return f"typed {len(text)} characters"
+    saved = clipboard.save()
+    try:
+        clipboard.copy(text.encode(), clipboard.TEXT)    # sensitive: a clipboard history doesn't keep what Auren types
+    except clipboard.ClipboardError:
+        _sh(["wtype", "--", text])            # no wl-copy: type it, letters may drop
+        return f"typed {len(text)} characters (no wl-copy, so check it came out right)"
+    try:
+        time.sleep(0.05)
+        _sh(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"])
+        time.sleep(0.4)                       # the app reads the clipboard after the key: don't swap it out yet
+    finally:
+        clipboard.restore(saved, ours=text.encode())    # unless the user copied something meanwhile
+    return f"pasted {len(text)} characters"
 
 
 _KEY_NAMES = {"enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape", "tab": "Tab",

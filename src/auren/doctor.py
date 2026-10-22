@@ -92,7 +92,7 @@ def checks() -> list[Check]:
                          "update Omarchy (omarchy update)"))
     else:
         out.append(Check(g, "Hyprland", OK, hv))
-    for cmd, why in (("wtype", "typing"), ("grim", "screenshots"), ("xdg-settings", "default browser"),
+    for cmd, why in (("wtype", "typing"), ("wl-copy", "pasting typed text"), ("grim", "screenshots"), ("xdg-settings", "default browser"),
                      ("qs", "the mascot")):
         out.append(_command(g, cmd, why, svc))
 
