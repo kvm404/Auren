@@ -29,8 +29,10 @@ Command classification is deliberately simple and errs on the side of asking.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
+import shlex
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -71,13 +73,19 @@ def needs_ask(level: str, kinds: Iterable[str], granted: Iterable[str] = ()) -> 
 
 
 # A place whose loss is a wipe: the root or a folder right under it, or a home or anything right in it.
+# `_lost` finds these by reading the command; these patterns are for a command it can't read.
 _PLACE = r"""["']?(/[^/\s"';&|)]*|(~|\$\{?HOME\}?|/home/[^/\s"';&|)]+)(/[^/\s"';&|)]+)?)["']?/?"""
 _EVERYTHING_HERE = r"""["']?(\.|\.?\*|\./\*?)["']?(?=[\s;&|)]|$)"""       # rm's `.`, `*`, `./*`, `.*`
+_WIPE_UNREAD = re.compile(r"""
+        \brm\s([^;&|]*\s)?PLACE(\.?\*|\.)?["']?(?=[\s;&|)]|$)            # rm of such a place
+      | (^|[;&|]\s*)cd(\s+PLACE)?\s*(&&|;).*\brm\s([^;&|]*\s)?EVERYTHING    # cd ~ && rm -rf *
+      | \bfind\s+["']?(/|~|\$\{?HOME\}?|/home(/[^/\s"']+)?)["']?/?\s.*-delete\b
+    """.replace("PLACE", _PLACE).replace("EVERYTHING", _EVERYTHING_HERE), re.X | re.I)
 
 # Shell commands that change the system, lose data, need root, publish, or touch secrets, by kind.
 _COMMAND_KINDS: dict[str, re.Pattern] = {
     SYSTEM: re.compile(r"""
-        (^|[;&|`(]\s*|\$\(\s*)(sudo|doas|pkexec|su)\b               # root
+        (?<![\w./-])(sudo|doas|pkexec)\b|(^|[;&|`(\n]\s*|\$\(\s*)su\b   # root, wherever it starts
       | \bkill(all)?\b|\bpkill\b|\bxkill\b
       | \bsystemctl\s+(--user\s+)?(start|stop|restart|reload|enable|disable|mask|kill)\b
       | \b(shutdown|reboot|poweroff|halt|suspend|hibernate)\b|\bloginctl\b
@@ -85,30 +93,31 @@ _COMMAND_KINDS: dict[str, re.Pattern] = {
       | \bcrontab\b|\bhyprctl\s+keyword\b
     """, re.X | re.I),
     PUBLISH: re.compile(r"""
-        \bgit(\s+(-[Cc]|--git-dir|--work-tree|--namespace)\s+\S+|\s+-\S+)*\s+push\b      # git -C repo push
-      | \bgh(\s+(-R|--repo)\s+\S+|\s+-\S+)*\s+(pr\s+(create|merge|close|comment|review)|issue\s+(create|comment|close)|release\s+create)\b
-      | \b(npm|pnpm|yarn|uv|poetry|cargo)\b[^;&|\n]*\spublish(?=[\s;&|)]|$)     # options can come first
-      | \btwine\b[^;&|\n]*\supload\b
+        \bgit(\s+(-[Cc]|--git-dir|--work-tree|--namespace)(\s+|=)("[^"]*"|'[^']*'|\S+)|\s+-\S+)*+\s+(subtree\s+)?push\b
+      | \bgh(\s+(-R|--repo)(\s+|=)("[^"]*"|'[^']*'|\S+)|\s+-\S+)*+\s+((pr|issue|release|gist|repo)\s+
+            (?!(view|list|status|diff|checks|clone|browse|download|checkout|search)\b)[a-z]
+          | api\b[^;&|\n]*\s(-X\s*(?!GET\b)|--method[\s=]+(?!GET\b)|-[fF]\s|--(raw-)?field\b|--input\b))
+      | \b(npm|pnpm|yarn|bun|uv|poetry|hatch|cargo)(\s+-\S+(\s+(?!publish\b)[^\s;&|-]\S*)?)*+\s+publish(?=[\s;&|)]|$)
+      | \btwine\b[^;&|\n]*\supload\b|\b(docker|podman|gem)\s+push\b
     """, re.X | re.I),
     SEND: re.compile(r"\b(sendmail|msmtp|mutt)\b", re.I),
     WIPE: re.compile(r"""
-        \bdd\b|\bmkfs|\bfdisk\b|\bparted\b|\bwipefs\b|\bshred\b             # disks
-      | \brm\s([^;&|]*\s)?PLACE(\.?\*|\.)?["']?(?=[\s;&|)]|$)          # rm of such a place
-      | (^|[;&|]\s*)cd(\s+PLACE)?\s*(&&|;).*\brm\s([^;&|]*\s)?EVERYTHING    # cd ~ && rm -rf *
+        \bdd\b[^;&|\n]*\bof=|\bmkfs|\b(s?fdisk|c?gdisk|sgdisk|parted|wipefs|blkdiscard|shred)\b   # disks
+      | >\s*/dev/(sd|nvme|hd|vd|mmcblk)
       | \bshutil\.rmtree\(\s*(Path\.home\(\)|os\.path\.expanduser\(|["'](/|~)/?["'])
-      | \bfind\s+["']?(/|~|\$\{?HOME\}?|/home(/[^/\s"']+)?)["']?/?\s.*-delete\b
-      | \b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z|da)?sh\b                  # a download run by a shell
+      | \b(curl|wget)\b.*\|\s*(sudo\s+)?((ba|z|da)?sh|python3?|perl|ruby|node)\b   # a download run by a shell
       | (\b(ba|z|da)?sh|\bsource|(^|[;&|]\s*)\.)\s+<\(\s*(curl|wget)\b
-      | \b(ba|z|da)?sh\s+-c\s+["']?\$\(\s*(curl|wget)\b
+      | (\b(ba|z|da)?sh\s+-c|\beval)\s+["']?\$\(\s*(curl|wget)\b
       | \bgh\s+repo\s+delete\b
-    """.replace("PLACE", _PLACE).replace("EVERYTHING", _EVERYTHING_HERE), re.X | re.I),
+    """, re.X | re.I),
     AUREN: re.compile(r"""
         \bauren-ctl\s+(?!status\b)|\bauren\s+(ask|chat|config|update)\b   # answering for the user, speaking as
-      | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren/config\.toml     # them, or changing how much
+      | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren\b             # them, or changing how much
       | -m\s+auren\b|\b(from|import)\s+auren\b                          # it asks
     """, re.X | re.I),
     FILES: re.compile(r"""
         \brm\s|\brmdir\b|\bunlink\b|\btruncate\b                      # deleting
+      | \bfind\b[^;&|\n]*\s-(delete|exec(dir)?\s+rm)\b
       | \bmv\s
       | \bchmod\b|\bchown\b|\bchattr\b
       | \bgit\s+(reset\s+--hard|clean|checkout\s+--|branch\s+-D|rebase|filter-branch)\b
@@ -129,21 +138,133 @@ class Risk:
     reason: str
 
 
-_RM_EVERYTHING_HERE = re.compile(r"\brm\s([^;&|]*\s)?" + _EVERYTHING_HERE)
-_WIPE_PLACE = re.compile(_PLACE)
+MAX_COMMAND = 10_000        # longer commands aren't read: they ask (and no pattern runs long on them)
 
 
 def assess_command(command: str, folder: str = "") -> Risk | None:
     """What a shell command risks (its kinds and a reason to read out), or None if it can run straight away.
-    folder: where it runs, so `rm -rf *` in the home folder is a wipe."""
-    hits = {kind: m for kind, rx in _COMMAND_KINDS.items() if (m := rx.search(command))}
-    if WIPE not in hits and _WIPE_PLACE.fullmatch(folder.strip()) and (m := _RM_EVERYTHING_HERE.search(command)):
-        hits[WIPE] = m
+    folder: where it runs (resolved, as the runner does), so `rm -rf *` or `rm -rf .ssh` in the home folder
+    is a wipe; empty when unknown."""
+    if len(command) > MAX_COMMAND:
+        return Risk(frozenset({WIPE}), "it is too long to check")
+    hits = {kind: (m.start(), m.group(0)) for kind, rx in _COMMAND_KINDS.items() if (m := rx.search(command))}
+    lost = _lost(command, _expand(folder) if folder.strip() else None)
+    if lost is None:                    # a command shlex can't read: the patterns decide
+        if m := _WIPE_UNREAD.search(command):
+            hits.setdefault(WIPE, (m.start(), m.group(0)))
+    elif lost:
+        hits.setdefault(WIPE, (max(command.find(lost), 0), lost))
     if not hits:
         return None
-    first = min(hits.values(), key=lambda m: m.start())
-    hit = first.group(0).strip(" ;&|`($")
+    hit = min(hits.values())[1].strip(" ;&|`($")
     return Risk(frozenset(hits), f"it can change your system or data ({hit})")
+
+
+_HOME_VAR = re.compile(r"^\$(HOME\b|\{HOME([:]?[-?=+][^}]*)?\})")
+_SEPARATORS = set(";&|()")
+_PREFIXES = {"sudo", "doas", "pkexec", "command", "builtin", "exec", "nohup", "nice", "time", "timeout", "env", "xargs"}
+
+
+def _expand(path: str) -> str:
+    """~ and $HOME spelled out, made absolute against nothing (a relative path stays relative)."""
+    path = _HOME_VAR.sub(lambda _: os.path.expanduser("~"), path.strip())
+    return os.path.normpath(os.path.expanduser(path)) if path else path
+
+
+def _is_place(path: str) -> bool:
+    """The root or a folder right under it, or a home or anything right in it."""
+    home = os.path.expanduser("~")
+    parts = path.rstrip("/").split("/")
+    return path.startswith("/") and (len(parts) <= 2 or parts[1] == "home" and len(parts) <= 4
+                                     or path == home or os.path.dirname(path) == home)
+
+
+def _lost(command: str, cwd: str | None) -> str | None:
+    """The first `rm` or `find … -delete` in the command that deletes a place (_is_place), following `cd`:
+    the word that does it, "" if none, or None if the command can't be read. cwd: where it starts (None:
+    unknown, so only absolute paths count)."""
+    try:
+        lex = shlex.shlex(command.replace("\n", ";"), posix=True, punctuation_chars=";&|()<>")
+        lex.whitespace_split, lex.commenters = True, ""
+        tokens = list(lex)
+    except ValueError:
+        return None
+    segment: list[str] = []
+    for tok in [*tokens, ";"]:
+        if tok and set(tok) <= _SEPARATORS:
+            cwd, word = _segment(segment, cwd)
+            if word:
+                return word
+            segment = []
+        else:
+            segment.append(tok)
+    return ""
+
+
+def _segment(words: list[str], cwd: str | None) -> tuple[str | None, str]:
+    """One simple command: the folder after it (a `cd`), and its first word if it deletes a place."""
+    args, i = [], 0
+    while i < len(words):                     # drop redirections (`> file`, `2>/dev/null`)
+        w = words[i]
+        if set(w) <= set("<>"):
+            i += 2
+            continue
+        if w.isdigit() and i + 1 < len(words) and set(words[i + 1]) <= set("<>"):
+            i += 1
+            continue
+        args.append(w)
+        i += 1
+    wrapped = False                           # `sudo -u me rm …`, `timeout 5 rm …`: the rm is further on
+    while args and (args[0] in _PREFIXES or "=" in args[0] and not args[0].startswith("-")):
+        wrapped, args = wrapped or args[0] in _PREFIXES, args[1:]
+    if wrapped:
+        args = args[next((i for i, a in enumerate(args) if os.path.basename(a) in ("rm", "find")), 0):]
+    if not args:
+        return cwd, ""
+    name, rest = os.path.basename(args[0]), args[1:]
+
+    def where(arg: str) -> str | None:
+        path = _expand(arg)
+        if path.startswith("/"):
+            return path
+        return os.path.normpath(os.path.join(cwd, path)) if cwd and "$" not in path else None
+
+    if name == "cd":
+        target = next((a for a in rest if not a.startswith("-")), "~")
+        return where(target), ""
+    if name == "rm":                          # without -r it deletes files only, never a folder
+        options = rest[:rest.index("--")] if "--" in rest else rest
+        if not any(a == "--recursive" or re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", a) for a in options):
+            return cwd, ""
+        targets = [a for a in rest if not a.startswith("-") or a == "-"]
+        if "--" in rest:
+            targets = rest[rest.index("--") + 1:]
+    elif name == "find" and any(a == "-delete" or a.startswith("-exec") and "rm" in rest for a in rest):
+        targets = []
+        for a in rest:
+            if a.startswith(("-", "(", "!")):
+                break
+            targets.append(a)
+        targets = targets or ["."]
+    else:
+        return cwd, ""
+    # `find ~/proj -name '*.pyc' -delete` only deletes what matches; over a whole home or the root, it still asks
+    narrowed = name == "find" and any(a.lstrip("-") in _FIND_FILTERS for a in rest)
+    for t in targets:
+        t = _expand(t)
+        glob = re.search(r"[*?\[]", t)
+        path = where(os.path.dirname(t[:glob.start()]) or "." if glob else t)
+        if path and _is_place(path) and (not narrowed or _is_top(path)):
+            return cwd, name
+    return cwd, ""
+
+
+_FIND_FILTERS = {"name", "iname", "path", "ipath", "wholename", "regex", "iregex", "newer", "mtime", "mmin", "size"}
+
+
+def _is_top(path: str) -> bool:
+    """The root, /home, or a home."""
+    return path in ("/", "/home", os.path.expanduser("~")) or os.path.dirname(path) == "/home"
 
 
 def command_risk(command: str) -> str | None:

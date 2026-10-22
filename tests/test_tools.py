@@ -1,6 +1,7 @@
 """The tool runtime: sessions, turns, bound confirmations, cancel, and the MCP adapter in front of it."""
 
 import json
+import os
 
 import pytest
 
@@ -303,6 +304,14 @@ def test_free_level_is_full_access_but_sending_and_the_floor_ask(rt, shell_log, 
         assert _asked(_ask(rt, "run_command", command=asks)), asks
     assert _ask(rt, "run_command", command="rm -rf *", folder="~/Projects/x/build") == "ran rm -rf *"
     assert shell_log == ["rm a", "rm -rf *"]
+
+
+def test_a_relative_rm_is_judged_where_it_runs(rt, shell_log, monkeypatch):
+    rt.set_level("free")
+    monkeypatch.chdir(os.path.expanduser("~"))
+    for folder in ("", "."):                                      # the runner runs these where the daemon is
+        assert _asked(_ask(rt, "run_command", command="rm -rf .config", folder=folder)), folder
+    assert shell_log == []
 
 
 def test_free_level_still_asks_before_buying_and_sending(rt, monkeypatch):
