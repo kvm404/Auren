@@ -98,7 +98,7 @@ def test_a_copy_of_what_was_selected_before_is_not_the_paste(monkeypatch):
     clips = iter([json.dumps({"type": "excalidraw/clipboard", "elements": [{"id": "users"}]}),
                   json.dumps({"type": "excalidraw/clipboard", "elements": [{"id": "new1"}, {"id": "new2"}]})])
     monkeypatch.setattr(screen, "press_keys", lambda keys: None)
-    monkeypatch.setattr(ex, "_clipboard_text", lambda: next(clips))
+    monkeypatch.setattr(ex.clipboard, "text", lambda: next(clips))
     monkeypatch.setattr(ex.time, "sleep", lambda s: None)
     landed = ex._copied("payload", timeout=5, old={"users"})
     assert [x["id"] for x in landed] == ["new1", "new2"]
@@ -135,7 +135,7 @@ def test_a_paste_is_moved_to_its_place_even_when_the_zoom_isnt_what_was_assumed(
 
 def test_only_the_paste_is_deleted_never_what_the_user_selected_meanwhile(monkeypatch):
     pressed = []
-    monkeypatch.setattr(ex, "_copy", lambda data, kind=None, sensitive=True: None)
+    monkeypatch.setattr(ex, "_copy", lambda data: None)
     monkeypatch.setattr(screen, "press_keys", pressed.append)
     monkeypatch.setattr(ex, "_copied", lambda sentinel, timeout, old=frozenset(): [{"id": "theirs"}])
     with pytest.raises(ex.ExcalidrawError, match="selection changed"):
@@ -151,9 +151,9 @@ def desk(monkeypatch):
     """Excalidraw on a fake desktop: the canvas holds the user's drawing; pastes come back as `pastes` says."""
     d = {"keys": [], "pastes": []}
     monkeypatch.setattr(ex, "_need_clipboard", lambda: None)
-    monkeypatch.setattr(ex, "_save_clipboard", lambda: ("text/plain", b"theirs"))
-    monkeypatch.setattr(ex, "_restore_clipboard", lambda saved: d.setdefault("restored", saved))
-    monkeypatch.setattr(ex, "_copy", lambda data, kind=None, sensitive=True: None)
+    monkeypatch.setattr(ex.clipboard, "save", lambda: ("text/plain", b"theirs"))
+    monkeypatch.setattr(ex.clipboard, "restore", lambda saved: d.setdefault("restored", saved))
+    monkeypatch.setattr(ex, "_copy", lambda data: None)
     monkeypatch.setattr(ex, "_ready", lambda open_it: ({}, (0, 0), False))
     monkeypatch.setattr(ex, "_copied", lambda sentinel, timeout, old=frozenset(): [
         {"id": "theirs", "type": "rectangle", "x": 0, "y": 0, "width": 100, "height": 50}])

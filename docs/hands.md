@@ -178,7 +178,7 @@ The fallback for what no other tool reaches: browser permission popups, apps' ow
 |---|---|
 | `look_at_screen()` | `grim` captures the focused monitor at 1024 px wide, with a light labelled grid every 50 px (numbers along the top and left). Returned as an image the brain sees |
 | `click_at(x, y, target, button, double)` | Image pixels → layout coordinates (monitor position + scale). Moves with Hyprland (`hl.dsp.cursor.move`), clicks with a virtual mouse made through `/dev/uinput` (python-evdev; the user can write to `/dev/uinput`), then puts the cursor back. `target` says what is clicked. Labels like buy, pay, send, post, submit, delete need confirmation |
-| `scroll_at`, `type_text`, `press_keys` | Wheel via the virtual mouse; shortcuts via `wtype`. Text is pasted (`wl-copy`, Ctrl+V, then the old clipboard is put back), except in terminals, which get `wtype`. Alt+F4, Ctrl+Q, Ctrl+W and similar need confirmation |
+| `scroll_at`, `type_text`, `press_keys` | Wheel via the virtual mouse; shortcuts via `wtype`. Text is pasted (`wl-copy --sensitive`, Ctrl+V, then the old clipboard is put back unless the user copied something meanwhile), except in terminals (known window classes), which get `wtype`. Clipboard helpers: `src/auren/hands/clipboard.py`, shared with Excalidraw. Alt+F4, Ctrl+Q, Ctrl+W and similar need confirmation |
 
 **Brain rules.** Use these only as a fallback, or when the user asks; look first; click by the grid numbers; look again to verify; say what was clicked.
 

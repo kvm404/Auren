@@ -27,10 +27,9 @@ import json
 import logging
 import math
 import shutil
-import subprocess
 import time
 
-from . import desktop, screen
+from . import clipboard, desktop, screen
 
 log = logging.getLogger("auren.excalidraw")
 
@@ -434,47 +433,11 @@ def _need_clipboard() -> None:
         raise ExcalidrawError(f"drawing in Excalidraw needs {' and '.join(missing)} (install wl-clipboard and wtype)")
 
 
-def _clip_types() -> list[str]:
-    p = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=5)
-    return p.stdout.split() if p.returncode == 0 else []
-
-
-def _save_clipboard() -> tuple[str, bytes] | None:
-    """What's on the clipboard now, in the one format worth putting back (text, else a PNG, else whatever it
-    is, such as copied files). wl-copy serves one format, so a copy that offered several keeps only that one."""
-    types = _clip_types()
-    kind = next((t for t in ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "image/png") if t in types),
-                next((t for t in types if "/" in t), None))
-    if kind is None:
-        return None
-    p = subprocess.run(["wl-paste", "--no-newline", "--type", kind], capture_output=True, timeout=5)
-    return (kind, p.stdout) if p.returncode == 0 else None
-
-
-def _copy(data: bytes, kind: str | None = None, sensitive: bool = True) -> None:
-    # wl-copy stays in the background to serve the clipboard: it must not hold our pipes open
-    base = ["wl-copy", *(["--type", kind] if kind else [])]
-    for cmd in ([*base, "--sensitive"], base) if sensitive else (base,):
-        p = subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-        if p.returncode == 0:
-            return
-    raise ExcalidrawError("couldn't put the drawing on the clipboard (wl-copy failed)")
-
-
-def _restore_clipboard(saved: tuple[str, bytes] | None) -> None:
+def _copy(data: bytes) -> None:
     try:
-        if saved is None:
-            subprocess.run(["wl-copy", "--clear"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-        else:
-            kind, data = saved
-            _copy(data, None if kind.startswith("text/") or kind == "UTF8_STRING" else kind, sensitive=False)
-    except (OSError, subprocess.SubprocessError, ExcalidrawError):
-        pass
-
-
-def _clipboard_text() -> str:
-    p = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, timeout=5)
-    return p.stdout.decode("utf-8", "replace") if p.returncode == 0 else ""
+        clipboard.copy(data)
+    except clipboard.ClipboardError:
+        raise ExcalidrawError("couldn't put the drawing on the clipboard (wl-copy failed)") from None
 
 
 def _copied(sentinel: str, timeout: float, old: set[str] = frozenset()) -> list[dict] | None:
@@ -486,7 +449,7 @@ def _copied(sentinel: str, timeout: float, old: set[str] = frozenset()) -> list[
     while True:
         screen.press_keys("ctrl+c")
         time.sleep(0.3)
-        text = _clipboard_text()
+        text = clipboard.text()
         if text and text != sentinel:
             try:
                 data = json.loads(text)
@@ -675,7 +638,7 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
     timeout = 12 if mermaid.strip() else 3
     probe = f"auren-excalidraw-probe-{time.time()}"
     _need_clipboard()
-    saved = _save_clipboard()
+    saved = clipboard.save()
     try:
         _copy(probe.encode())
         w, pt, opened = _ready(open_it=True)
@@ -728,7 +691,7 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
         time.sleep(0.2)
         screen.press_keys("Escape")
     finally:
-        _restore_clipboard(saved)
+        clipboard.restore(saved)
     kinds = _count(landed)
     picture = " (as one picture: Mermaid only makes editable shapes for flowchart, sequence, class, state and ER " \
               "diagrams)" if mermaid.strip() and set(kinds) == {"image"} else ""
@@ -744,7 +707,7 @@ def scene() -> list[dict]:
     """Everything on the canvas, as Excalidraw's elements (empty if there's nothing)."""
     probe = f"auren-excalidraw-probe-{time.time()}"
     _need_clipboard()
-    saved = _save_clipboard()
+    saved = clipboard.save()
     try:
         _copy(probe.encode())
         _ready(open_it=False)
@@ -753,7 +716,7 @@ def scene() -> list[dict]:
         elements = _copied(probe, 2) or []
         screen.press_keys("Escape")
     finally:
-        _restore_clipboard(saved)
+        clipboard.restore(saved)
     return elements
 
 

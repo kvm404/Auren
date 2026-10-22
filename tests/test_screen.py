@@ -94,25 +94,28 @@ def test_drag_rejects_unknown_hold_keys():
 
 
 class _Clipboard:
-    """wl-copy / wl-paste stand-ins: one clipboard, a log of what was pasted."""
+    """wl-copy / wl-paste stand-ins: one clipboard, a log of what was pasted and whether each copy was sensitive."""
 
-    def __init__(self, content=None):
-        self.content, self.pasted, self.cleared = content, [], False
+    def __init__(self, *types, data=b""):
+        self.types, self.data, self.pasted, self.sensitive = list(types), data, [], []
 
     def run(self, cmd, input=None, **kw):
-        out = b"" if "text" not in kw else ""
+        out = b""
         if cmd[:2] == ["wl-paste", "--list-types"]:
-            out = "" if self.content is None else f"{self.content[0]}\ntext/plain\n"
+            out = "\n".join(self.types)
         elif cmd[0] == "wl-paste":
-            out = self.content[1]
+            asked = cmd[cmd.index("--type") + 1] if "--type" in cmd else self.types[0] if self.types else None
+            out = self.data if asked in self.types else b""
         elif cmd == ["wl-copy", "--clear"]:
-            self.content, self.cleared = None, True
+            self.types, self.data = [], b""
         elif cmd[0] == "wl-copy":
-            self.content = (cmd[cmd.index("--type") + 1], input)
+            self.types = [cmd[cmd.index("--type") + 1] if "--type" in cmd else "text/plain;charset=utf-8"]
+            self.data = input
+            self.sensitive.append("--sensitive" in cmd)
         return screen.subprocess.CompletedProcess(cmd, 0, out, "")
 
 
-def _paste_env(monkeypatch, board, window="chrome-discord.com__channels_@me-Default"):
+def _paste_env(monkeypatch, board, window="chrome-discord.com__channels_@me-Default", meanwhile=lambda: None):
     keys = []
 
     def sh(cmd, timeout=10):
@@ -121,7 +124,8 @@ def _paste_env(monkeypatch, board, window="chrome-discord.com__channels_@me-Defa
         if cmd[0] == "wtype":
             keys.append(cmd)
             if cmd[1] == "-M":
-                board.pasted.append(board.content[1].decode())
+                board.pasted.append(board.data.decode())
+                meanwhile()
         return ""
     monkeypatch.setattr(screen, "_sh", sh)
     monkeypatch.setattr(screen.subprocess, "run", board.run)
@@ -131,27 +135,53 @@ def _paste_env(monkeypatch, board, window="chrome-discord.com__channels_@me-Defa
 
 
 def test_text_is_pasted_in_one_go_and_the_clipboard_put_back(monkeypatch):
-    board = _Clipboard(("text/plain;charset=utf-8", b"what the user had copied"))
+    board = _Clipboard("text/plain;charset=utf-8", "text/plain", data=b"what the user had copied")
     keys = _paste_env(monkeypatch, board)
     text = "This is from Auren.\nThe permissions are updated."
     assert screen.type_text(text) == f"pasted {len(text)} characters"
     assert board.pasted == [text]                                         # whole, newline included: no Enter key
     assert keys == [["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]]
-    assert board.content == ("text/plain;charset=utf-8", b"what the user had copied")
+    assert board.data == b"what the user had copied"
+    assert board.sensitive == [True, False]          # a clipboard history skips what Auren typed, keeps theirs
 
 
 def test_an_empty_clipboard_is_left_empty(monkeypatch):
     board = _Clipboard()
     _paste_env(monkeypatch, board)
     screen.type_text("hi")
-    assert board.pasted == ["hi"] and board.cleared and board.content is None
+    assert board.pasted == ["hi"] and board.types == []
+
+
+def test_copied_files_are_put_back_as_files(monkeypatch):
+    # a clipboard of only text/uri-list used to be taken for an empty one, and cleared
+    board = _Clipboard("text/uri-list", data=b"file:///home/u/report.pdf")
+    _paste_env(monkeypatch, board)
+    screen.type_text("hi")
+    assert board.types == ["text/uri-list"] and board.data == b"file:///home/u/report.pdf"
+
+
+def test_what_the_user_copies_meanwhile_stays(monkeypatch):
+    board = _Clipboard("text/plain", data=b"old")
+
+    def copy_theirs():
+        board.types, board.data = ["text/plain"], b"copied during the paste"
+    _paste_env(monkeypatch, board, meanwhile=copy_theirs)
+    screen.type_text("hi")
+    assert board.data == b"copied during the paste"
 
 
 def test_terminals_are_typed_into(monkeypatch):
-    board = _Clipboard(("text/plain", b"x"))
-    keys = _paste_env(monkeypatch, board, window="Alacritty")
-    assert screen.type_text("ls") == "typed 2 characters"
-    assert keys == [["wtype", "--", "ls"]] and board.pasted == []
+    for window in ("Alacritty", "com.mitchellh.ghostty", "kitty"):
+        board = _Clipboard("text/plain", data=b"x")
+        keys = _paste_env(monkeypatch, board, window=window)
+        assert screen.type_text("ls") == "typed 2 characters"
+        assert keys == [["wtype", "--", "ls"]] and board.pasted == []
+
+
+def test_a_web_app_named_like_a_terminal_is_pasted_into(monkeypatch):
+    board = _Clipboard()
+    _paste_env(monkeypatch, board, window="chrome-footlocker.com__-Default")
+    assert screen.type_text("hi") == "pasted 2 characters"
 
 
 def test_tools_report_screenshot_pixels_not_layout(monkeypatch):

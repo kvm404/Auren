@@ -22,7 +22,8 @@ no command line.
   since). Pasted through the clipboard (`wl-copy`, Ctrl+V), then the clipboard is put back: `wtype`
   drops letters in Chrome and Electron apps (Discord typed "This is from Aure The permissions"), and
   a typed newline would press Enter, which sends in a chat. Terminals still get `wtype`, since Ctrl+V
-  isn't paste there. A clipboard history keeps the pasted text.
+  isn't paste there. The pasted text is marked sensitive, so a clipboard history doesn't keep it, and
+  the old clipboard isn't put back over something the user copied meanwhile.
 - press_keys(): `wtype` (Wayland virtual keyboard), into the same window.
 - press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
   uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
@@ -32,7 +33,6 @@ no command line.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import tempfile
 import threading
@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 
 from .. import notice
+from . import clipboard
 
 IMAGE_WIDTH = 1024
 
@@ -350,27 +351,14 @@ def scroll(x: float, y: float, direction: str = "down", amount: int = 3) -> str:
     return f"scrolled {direction} {amount} at ({round(x)}, {round(y)}) in the screenshot"
 
 
-TERMINALS = re.compile(r"alacritty|kitty|ghostty|foot|wezterm|konsole|terminal", re.I)
-_KEEP = ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "image/png")     # what a clipboard save keeps
-
-
-def _clipboard() -> tuple[str, bytes] | None:
-    """The clipboard's content in its most useful type, to put back after a paste (None: empty)."""
-    try:
-        types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=3).stdout.split()
-        kind = next((t for t in _KEEP if t in types), None)
-        if kind is None:
-            return None
-        p = subprocess.run(["wl-paste", "--no-newline", "--type", kind], capture_output=True, timeout=3)
-        return (kind, p.stdout) if p.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def _copy(data: bytes, kind: str = "text/plain;charset=utf-8") -> None:
-    # wl-copy forks a server that holds the clipboard; it mustn't keep our pipes open
-    subprocess.run(["wl-copy", "--type", kind], input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=5, check=True)
+# Window classes of terminals, where Ctrl+V isn't paste. Whole names: a web app's class is its address
+# ("chrome-footlocker.com__-Default"), which can contain a terminal's name.
+TERMINALS = frozenset({
+    "alacritty", "kitty", "foot", "footclient", "com.mitchellh.ghostty", "ghostty", "org.wezfurlong.wezterm",
+    "wezterm", "org.kde.konsole", "konsole", "org.gnome.terminal", "gnome-terminal-server", "org.gnome.console",
+    "kgx", "com.gexperts.tilix", "tilix", "terminator", "xfce4-terminal", "xterm", "uxterm", "urxvt", "st",
+    "st-256color", "rio", "com.raggesilver.blackbox",
+})
 
 
 def press_code(combo: str) -> str:
@@ -401,13 +389,13 @@ def type_text(text: str) -> str:
         window = json.loads(_sh(["hyprctl", "activewindow", "-j"])).get("class", "")
     except (ScreenError, json.JSONDecodeError):
         window = ""
-    if TERMINALS.search(window):
+    if window.lower() in TERMINALS:
         _sh(["wtype", "--", text])
         return f"typed {len(text)} characters"
-    saved = _clipboard()
+    saved = clipboard.save()
     try:
-        _copy(text.encode())
-    except (OSError, subprocess.SubprocessError):
+        clipboard.copy(text.encode(), clipboard.TEXT)    # sensitive: a clipboard history doesn't keep what Auren types
+    except clipboard.ClipboardError:
         _sh(["wtype", "--", text])            # no wl-copy: type it, letters may drop
         return f"typed {len(text)} characters (no wl-copy, so check it came out right)"
     try:
@@ -415,13 +403,7 @@ def type_text(text: str) -> str:
         _sh(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"])
         time.sleep(0.4)                       # the app reads the clipboard after the key: don't swap it out yet
     finally:
-        try:
-            if saved:
-                _copy(saved[1], saved[0])
-            else:
-                subprocess.run(["wl-copy", "--clear"], timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        clipboard.restore(saved, ours=text.encode())    # unless the user copied something meanwhile
     return f"pasted {len(text)} characters"
 
 
