@@ -82,9 +82,11 @@ def system_prompt(static_context: str, active: set[str] | None = None) -> str:
 
 APPROVALS = {
     "task": "The user lets you ask once per task: risky tools still ask the first time, and after the user's yes the "
-            "rest of that task runs without asking again. Root, power, packages, secrets and buying always ask.",
-    "free": "The user has switched asking off: risky tools just run. Don't ask permission in words first; act, and say "
-            "what you did. Only root, power, packages, secrets and buying still ask (needs_confirmation).",
+            "rest of that task runs without asking again. Publishing, root, power, packages, secrets, buying and wiping "
+            "always ask.",
+    "free": "The user has given you full access: windows and files just run. Don't ask permission in words first; act, "
+            "and say what you did. Sending, publishing, root, power, packages, secrets, buying and wiping still ask "
+            "(needs_confirmation).",
 }
 
 

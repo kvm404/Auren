@@ -1,6 +1,7 @@
 """The tool runtime: sessions, turns, bound confirmations, cancel, and the MCP adapter in front of it."""
 
 import json
+import os
 
 import pytest
 
@@ -291,27 +292,36 @@ def test_ask_level_asks_every_time(rt, shell_log):
     assert shell_log == [] and not rt.acted("daemon")
 
 
-def test_free_level_runs_everything_but_the_floor(rt, shell_log, monkeypatch):
+def test_free_level_is_full_access_but_sending_and_the_floor_ask(rt, shell_log, monkeypatch):
     rt.set_level("free")
     locked = []
     monkeypatch.setattr(desktop, "lock_screen", lambda: locked.append(1) or "locked")
     assert _ask(rt, "run_command", command="rm a") == "ran rm a"
     assert _ask(rt, "lock_screen") == "locked" and locked == [1]
     assert rt.acted("daemon")                                     # it ran: a backup brain mustn't redo it
-    for floor in ("sudo reboot", "cat ~/.ssh/id_rsa", "git push origin main", "rm .env"):
-        assert _asked(_ask(rt, "run_command", command=floor)), floor
-    assert shell_log == ["rm a"]
+    for asks in ("sudo pacman -Rns linux", "cat ~/.ssh/id_rsa", "git push origin main", "rm -rf ~",
+                 "rm -rf *", "auren-ctl yes"):                    # run_command's folder is ~ unless given
+        assert _asked(_ask(rt, "run_command", command=asks)), asks
+    assert _ask(rt, "run_command", command="rm -rf *", folder="~/Projects/x/build") == "ran rm -rf *"
+    assert shell_log == ["rm a", "rm -rf *"]
 
 
-def test_free_level_still_asks_before_buying_but_not_before_sending(rt, monkeypatch):
+def test_a_relative_rm_is_judged_where_it_runs(rt, shell_log, monkeypatch):
+    rt.set_level("free")
+    monkeypatch.chdir(os.path.expanduser("~"))
+    for folder in ("", "."):                                      # the runner runs these where the daemon is
+        assert _asked(_ask(rt, "run_command", command="rm -rf .config", folder=folder)), folder
+    assert shell_log == []
+
+
+def test_free_level_still_asks_before_buying_and_sending(rt, monkeypatch):
     rt.set_level("free")
     monkeypatch.setattr(web, "label_of", lambda target: target)
     monkeypatch.setattr(web, "pin", lambda target, is_field=False: "pin:1")
     monkeypatch.setattr(web, "page", lambda: {"url": "https://shop.example", "tab": 1})
     monkeypatch.setattr(web, "browser_click", lambda target, *a: f"clicked {target}")
-    assert "clicked" in _ask(rt, "browser_click", target="Send")
-    asked = json.loads(_ask(rt, "browser_click", target="Buy now"))
-    assert asked["status"] == "needs_confirmation"
+    assert _asked(_ask(rt, "browser_click", target="Send"))
+    assert _asked(_ask(rt, "browser_click", target="Buy now"))
 
 
 def test_task_level_one_yes_covers_the_rest_of_the_task_for_the_same_kinds(rt, shell_log):

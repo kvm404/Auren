@@ -533,9 +533,10 @@ def start_agent(kind: str = "", folder: str = "~", name: str = "", task: str = "
 @tool()
 def run_command(command: str, folder: str = "~", name: str = "", wait: bool = True, timeout_s: int = 60) -> str:
     """Run a shell command as a job (in its own tab of auren's herdr workspace when herdr is there, else in
-    the background). Returns exit code and output when wait=True. Commands that delete, overwrite, need root, restart services, push, or touch secrets
-    make the tool ask the user itself (needs_confirmation): just call it, don't ask in words first."""
-    risk = safety.assess_command(command)
+    the background). Returns exit code and output when wait=True. Risky commands (deleting, overwriting, root, services,
+    packages, pushing or publishing, secrets, disks) make the tool ask the user itself (needs_confirmation) when the
+    approval level calls for it: just call it, don't ask in words first."""
+    risk = safety.assess_command(command, str(Path(os.path.expanduser(folder)).resolve()))   # where the runner runs it
     if risk:
         return _gate(risk.kinds, f"Run `{command}`? {risk.reason[0].upper() + risk.reason[1:]}.",
                      lambda: _run_command(command, folder, name, wait, timeout_s))

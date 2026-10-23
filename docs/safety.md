@@ -9,11 +9,14 @@ Reading anything, opening apps, URLs and files, moving and focusing windows, swi
 | Kind | What |
 |---|---|
 | `window` | closing a window; locking the screen; shortcuts that close windows or quit apps (Alt+F4, Ctrl+Q, Ctrl+W…) |
-| `files` | shell commands that delete, move or overwrite (`rm`, `mv`, `>`), change permissions, or throw away git work (`reset --hard`, `clean`, `rebase`) |
-| `send` | browser or mouse clicks and drags whose label is send, post, publish, submit, delete, remove, confirm, unsubscribe, sign out…; pressing Enter in a browser field that isn't a search box |
-| `system` | `sudo`/`pkexec`, `dd` and disk tools, killing processes, starting/stopping services, power off and reboot, installing or removing packages (`pacman`, `omarchy pkg/install/remove/update/refresh`), `git push` and other publishing, piping a download into a shell, `crontab`, `hyprctl keyword`, and Auren's own controls (`auren-ctl` except `status`, `auren config/update`, its sockets, `config.toml`) |
+| `files` | shell commands that delete, move or overwrite (`rm`, `find … -delete`, `mv`, `>`), change permissions, or throw away git work (`reset --hard`, `clean`, `rebase`) |
+| `send` | browser or mouse clicks and drags whose label is send, submit, delete, remove, confirm, unsubscribe, sign out…; pressing Enter in a browser field that isn't a search box; sending mail from a shell |
+| `publish` | clicks and drags whose label is post or publish; `git push` (`git -C repo push`, `git subtree push` too); `gh` changes to PRs, issues, releases, gists and repos (everything but `view`, `list`, `status`, `diff`, `checks`, `clone`, `browse`, `download`, `checkout`, `search`), and `gh api` with a method other than GET or with fields; `npm`/`pnpm`/`yarn`/`bun`/`uv`/`poetry`/`hatch`/`cargo publish` (options before `publish` too), `twine upload`, `docker`/`podman`/`gem push` |
+| `system` | running something as root (`sudo`, `doas`, `pkexec`, `su`, also behind `nohup`, `env`, `xargs` or `bash -c`; a mention, as in `grep sudo` or `man sudo`, isn't), killing processes, starting/stopping services, power off and reboot, installing or removing packages (`pacman`, `omarchy pkg/install/remove/update/refresh`), `crontab`, `hyprctl keyword` |
 | `secrets` | commands that touch `.env`, API keys, passwords, tokens, `~/.ssh`, `secret-tool` |
 | `money` | clicks and drags whose label is buy, pay, purchase, check out, place order, transfer, book now |
+| `wipe` | `dd`, `mkfs`, `fdisk` and other disk tools, `shred`, writing to `/dev/sd…`; a recursive `rm` or a `find … -delete` of `/` or a folder right under it (`/usr`, `/etc`), or of a home or anything right in it (`~`, `~/.ssh`, `~/.config`, `/home/<user>/Projects`). Relative paths count where they lead: the command is read word by word, following `cd`, from where it runs (`run_command`'s `folder`, `~` unless given), so `rm -rf .config` in `~`, `cd / && rm -rf usr` and `rm -rf ..` in `~/Projects` are wipes. A `find` with a name or path filter only wipes over `/` or a whole home (not `-name '*'`, and not with `-o`). `find -exec rm`, `mv` of such a place and `rsync --delete` into one count too, and so do `if … then`, `bash -c '…'`, `eval` and `xargs`. When the reader can't tell where a recursive delete lands (a variable, `$(…)`, `cd "$dir"`, `xargs rm -rf`), it's a wipe: it asks. A `cd` that may not hold (in `( … )`, a pipeline, or followed by `;`) counts both ways. Quoted names are names: `rm -rf "build*"` is one folder, not a glob. Changing anything from inside Auren's own config folder is `auren`. Piping a download into a shell or an interpreter, or `eval` of one; `gh repo delete`. A command too long to check (over 10,000 characters) asks too |
+| `auren` | Auren's own controls: `auren-ctl` except `status`, `auren config/update`, its sockets, anything in `~/.config/auren` |
 
 The command check (`assess_command`) errs on the side of asking. `>>` and `2>/dev/null` don't count as overwriting. It is a filter, not a sandbox: a brain with a shell can in principle reach Auren's socket some way the patterns don't name (the daemon's yes/no/safety commands are the reason `auren-ctl` is in the floor), so treat the levels as protection against mistakes and page text, not against a determined brain.
 
@@ -25,13 +28,24 @@ Like Claude Code's permission modes: `safety.level` in `config.toml`, `auren-ctl
 |---|---|
 | `ask` | Every risky action asks first. |
 | `task` | The first risky action asks. A yes also covers the rest of **that task** for the kinds that were approved: later actions of those kinds run without asking. |
-| `free` | Nothing asks, except the floor. |
+| `free` | **Full access**, for development. Windows and files just run. `send` still asks, and so does the floor. |
 
-**The floor: `system`, `secrets` and `money` ask at every level, every time**, and a yes never covers them later. Root, power, services, packages, publishing, secrets, buying and paying are never a surprise, even in `free`.
+**The floor: `publish`, `system`, `secrets`, `money`, `wipe` and `auren` ask at every level, every time**, and a yes never covers them later. None of them can be taken back: publishing, root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own controls are never a surprise, even at `free`. Several waiting at once still take one yes (below).
 
 A task is everything the brain does from the user's request until their next message that isn't an answer to one of its questions (or 5 minutes, `GRANT_TTL`). Changing the level also ends what a yes covered. The brain isn't told about the grant; it just sees tools that run. It is told the level in each message (an `<approvals>` note; nothing is said at `ask`), so at `task` and `free` it doesn't add questions of its own before actions the tools already guard.
 
-What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. That's the reason for the floor, for the task ending with the next message, and for `ask` staying the default.
+What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes deleting files and closing windows, which is why `free` is for a development machine. That's the reason for the floor, for `send` still asking at `free`, for the task ending with the next message, and for `ask` staying the default.
+
+## Planned: remembered permissions
+
+Not built yet; written down so the design is shared. Auren will get a memory, and part of it is permissions the user asks it to keep:
+
+- After a yes, the user can say "remember this for next time" (or "don't ask me about this again").
+- Auren then asks where it applies: **this folder**, **this project** (the git repository it's in), or **everywhere**.
+- It saves the kind of action and its scope, for example "`git push` in `~/Projects/auren`". Next time, that action in that folder or project runs without the question; anywhere else it still asks.
+- The user can list and remove what was remembered (`auren-ctl`, the bar panel).
+
+Open points for whoever builds it: what counts as the same action (`git push` to any remote, or only `origin`?); `publish` is the one floor kind meant to be remembered (that's the `git push` case); whether the rest of the floor (root, secrets, money, wipe, Auren's own controls) can be remembered at all (the default should be no); and that the brain must never save a permission itself; only the user's own words can.
 
 ## One yes, several questions
 
