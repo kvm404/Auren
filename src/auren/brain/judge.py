@@ -13,8 +13,9 @@ shows who a chat is with (WhatsApp's window is just "web.whatsapp.com") and what
 text planted on a page can steer the brain but has to get past the judge too, and the judge lets through
 only what the user asked to send, with the code checking its reading as well.
 
-Each verdict comes from a fresh process, started when it's needed (no earlier verdict can sway the next,
-and nothing runs while Auren is idle). Anything unexpected (Claude missing, a limit, a timeout, an answer
+Each verdict comes from a fresh process (no earlier verdict can sway the next). Starting one takes about
+a second, so it's started ahead when the brain types something a send may follow (warm), and stopped if
+no verdict wants it within a minute: nothing runs while Auren is idle. Anything unexpected (Claude missing, a limit, a timeout, an answer
 that isn't ALLOW) counts as "ask the user".
 """
 
@@ -35,6 +36,7 @@ from ..config import BRAIN_DIR
 
 log = logging.getLogger("auren.judge")
 TIMEOUT = 20.0          # seconds for a verdict, waiting for others included; then ask the user
+SPARE = 60.0            # seconds a process started ahead waits for a verdict, then it's stopped
 
 RULES = """You check one thing for a voice assistant on the user's own laptop: did the user's own words already tell it to send this exact chat message to this person or group (or, on the screen, to make this exact search)?
 
@@ -50,7 +52,7 @@ Reply with only this JSON object:
 - kind: "chat" for a private or group chat message to people; "search" for a search, a chat or contact name, an address or a command typed into an app's search, switcher or address box, which no person receives; "post" for anything public (a post, a comment, a review); "other" for a form, a login, an email or anything else.
 - to_said: the person or group the user said to send it to, in their words (or in Auren's question they said yes to). "" if they didn't say, or for a search.
 - to_shown: the person or group the message goes to as the page or screen shows it: the box's name or the page title ("Message @Priya", "Priya | Discord" → "Priya"), or in a screenshot the name at the top of the open chat. "" if nothing names who it goes to, or for a search. Never fill this in from the user's words.
-- same_text: true if the text is what they asked to say (or search for). Fixing spelling, punctuation or "I"/"you" is fine. false for a different meaning, more than they asked for, or links, numbers or names they never gave.
+- same_text: true if the text is what they asked to say (or search for). Fixing spelling, punctuation or "I"/"you" is fine. Their words come from speech to text, so a name of the person it's for right before or after the words ("send hello, Sam", "Sam, say thanks") is who it's for, not part of the text: "hello" is the same text, and so is "hello Sam". false for a different meaning, more than they asked for, or links, numbers or names they never gave.
 - box_shows: with a screenshot, true only if the box the text was typed into shows this text and nothing else (no older draft, no other words), false if it shows anything else or you can't find it; null without a screenshot.
 - told_to_send: true only if they said to send, tell, reply or message it (for a search: to search for it, find it, open that chat or go there), or said yes to Auren asking about this very message. false if they only asked to write, type or draft it, said to check with them first (and haven't since said yes to this very message), only gave general permission ("you have full permissions"), gave a bare "yes" to a question about something else, or took it back ("no", "don't", "wait", "stop").
 - verdict: ALLOW only if same_text and told_to_send are true, nothing is unclear, and either kind is "chat", to_said and to_shown name the same person or group and box_shows isn't false, or kind is "search" and the action is on the screen. Otherwise ASK."""
@@ -82,6 +84,9 @@ class Judge:
         self.model = model
         self._lock = threading.Lock()           # one verdict at a time (tools can run in parallel)
         self._missing = False                   # `claude` isn't installed: said once, then every message asks
+        self._spare: subprocess.Popen | None = None     # started ahead, for the next verdict
+        self._spare_lock = threading.Lock()
+        self._spare_timer: threading.Timer | None = None
 
     def _command(self) -> list[str]:
         return ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -104,6 +109,38 @@ class Judge:
             log.warning("judge can't start: %s", e)
             return None
 
+    def warm(self) -> None:
+        """A verdict may be wanted soon: start its process now, so it doesn't wait for Claude Code to start."""
+        with self._spare_lock:
+            if self._spare is None or self._spare.poll() is not None:
+                self._spare = self._spawn()
+            if self._spare_timer:
+                self._spare_timer.cancel()
+            timer = self._spare_timer = threading.Timer(SPARE, lambda: self._drop(timer))
+            timer.daemon = True
+            timer.start()
+
+    def _drop(self, timer: threading.Timer) -> None:
+        with self._spare_lock:
+            if self._spare_timer is not timer:      # typed again meanwhile: the later timer decides
+                return
+            spare, self._spare, self._spare_timer = self._spare, None, None
+        if spare is not None:
+            _end(spare)
+
+    def _take(self) -> subprocess.Popen | None:
+        """The process started ahead (one verdict each), or a new one."""
+        with self._spare_lock:
+            spare, self._spare = self._spare, None
+            if self._spare_timer:
+                self._spare_timer.cancel()
+                self._spare_timer = None
+        if spare is not None and spare.poll() is None:
+            return spare
+        if spare is not None:
+            _end(spare)
+        return self._spawn()
+
     def allows(self, said: list[tuple[str, str]], action: str, image: bytes | None = None) -> str:
         """What it lets through: "chat" (a message), "search" (on the screen: nobody receives it), or "" (ask).
         said: the conversation's last lines, ("user" | "auren", text), oldest first. image: a JPEG of the
@@ -111,16 +148,18 @@ class Judge:
         said = [(who, text.strip()) for who, text in said if text.strip()]
         if not any(who == "user" for who, _ in said):
             return ""
-        deadline = time.monotonic() + TIMEOUT
+        start = time.monotonic()
+        deadline = start + TIMEOUT
         if not self._lock.acquire(timeout=TIMEOUT):
             log.info("judge: ask (busy) for %r", action)
             return ""
         try:
-            proc = self._spawn()
+            proc = self._take()
             verdict = _verdict(proc, said, action, deadline, image) if proc is not None else ""
         finally:
             self._lock.release()
-        log.info("judge: %s for %r", f"allow ({verdict})" if verdict else "ask", action)
+        log.info("judge: %s in %.1fs for %r", f"allow ({verdict})" if verdict else "ask", time.monotonic() - start,
+                 action)
         return verdict
 
 

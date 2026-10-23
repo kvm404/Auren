@@ -702,3 +702,40 @@ def test_after_a_send_click_went_ahead_clicks_in_that_chat_dont_ask_again(desk):
     assert "clicked" in rt.call("daemon", "click_at", {"x": 300, "y": 700, "target": "the message box"})[0]
     rt.call("daemon", "press_keys", {"keys": "BackSpace"})                   # an edit: what's there wasn't judged
     assert _asks(rt.call("daemon", "click_at", {"x": 300, "y": 400, "target": "the last message"})[0])
+
+
+def test_a_judge_started_ahead_serves_the_next_verdict_once(fake, monkeypatch):
+    started = []
+    spawn = fake._spawn
+    monkeypatch.setattr(fake, "_spawn", lambda: started.append(1) or spawn())
+    fake.warm()
+    fake.warm()                                          # one is kept ready, not two
+    assert fake.allows([("user", "tell priya i'm running late")], _send("I'm running late")) == "chat"
+    assert len(started) == 1 and fake._spare is None
+    fake.allows([("user", "tell priya i'm running late")], _send("I'm running late"))
+    assert len(started) == 2                             # each verdict its own process
+
+
+def test_a_judge_nobody_needed_is_stopped(fake, monkeypatch):
+    monkeypatch.setattr(judge, "SPARE", 0.05)
+    fake.warm()
+    spare = fake._spare
+    for _ in range(100):
+        if spare.poll() is not None:
+            break
+        time.sleep(0.02)
+    assert spare.poll() is not None and fake._spare is None
+
+
+def test_typing_readies_the_judge_at_full_access_only(desk):
+    rt, d = desk
+    warmed = []
+    rt.judge.warm = lambda: warmed.append(rt.level)
+    rt.new_turn("daemon", said="send hi")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    rt.set_level("ask")
+    rt.call("daemon", "type_text", {"text": "!"})
+    d.target = "0xterm"
+    rt.set_level("free")
+    rt.call("daemon", "type_text", {"text": "ls"})       # a terminal runs commands: no message follows
+    assert warmed == ["free"]

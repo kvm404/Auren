@@ -33,6 +33,7 @@ import os
 import re
 import socketserver
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -429,6 +430,13 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
                                                kinds=kinds, say=say), ensure_ascii=False)
 
 
+def _warm_judge() -> None:
+    """The brain typed something a send may follow: at full access, have the judge ready for it."""
+    rt = _call.get().runtime
+    if rt.level == "free":
+        getattr(rt.judge, "warm", lambda: None)()
+
+
 def _judged(rt: Runtime, s: Session, kinds: set[str], message: str,
             image: Callable[[], bytes] | None = None) -> str:
     """Does the judge let this message through ("chat", "search"; "" if not)? Only at full access, only a
@@ -438,11 +446,15 @@ def _judged(rt: Runtime, s: Session, kinds: set[str], message: str,
         if rt.level != "free" or kinds != {safety.SEND} or s.spoke != s.turn or s.allowed == s.turn:
             return ""
         before, s.allowed = s.allowed, s.turn
+    getattr(rt.judge, "warm", lambda: None)()        # if not started yet: it starts while the screenshot is taken
     try:
+        t = time.monotonic()
         shot = image() if image else None
     except screen.ScreenError as e:
         log.info("judge: no screenshot (%s), so it asks", e)
         return ""
+    if image:
+        log.info("judge: screenshot in %.1fs", time.monotonic() - t)
     verdict = rt.judge.allows(s.said, message, shot)
     if verdict == "search":                  # nobody receives a search: it doesn't use up the message
         with rt._lock:
@@ -804,6 +816,7 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
     """Type text into a numbered field from the last read; submit=True presses Enter. Submitting a search
     box runs straight away; submitting any other field (a message, a comment, a form) makes the tool ask the
     user itself, since it can send or post: just call it, don't ask in words first."""
+    _warm_judge()
     if submit:
         try:
             f = web.field_of(target)
@@ -1085,6 +1098,8 @@ def type_text(text: str) -> str:
         if k and k.terminal and re.search(r"[\r\n]", k.text):        # what ran is gone from the line
             k.text, k.known = re.split(r"[\r\n]", k.text)[-1], True
         return out
+    if app.lower() not in screen.TERMINALS:
+        _warm_judge()
     if app.lower() in screen.TERMINALS and re.search(r"[\r\n]", text):     # typed, not pasted: a new line runs it
         line = (before.text if before else "") + text           # with what's on the line already
         risk = safety.assess_command(line, None) if not before or before.known else _unreadable(line)
