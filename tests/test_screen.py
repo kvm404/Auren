@@ -192,3 +192,13 @@ def test_tools_report_screenshot_pixels_not_layout(monkeypatch):
     monkeypatch.setattr(screen, "_last_view", {"x": 1920, "y": 0, "lw": 1536, "lh": 960, "iw": 1024, "ih": 640,
                                                "at": screen.time.time()})
     assert screen._to_image(*screen._to_layout(100, 600)) == (100, 600)
+
+
+def test_without_wl_copy_a_line_break_isnt_typed_as_enter(monkeypatch):
+    board = _Clipboard()
+    keys = _paste_env(monkeypatch, board)
+    monkeypatch.setattr(screen.clipboard, "copy", lambda *a, **kw: (_ for _ in ()).throw(screen.clipboard.ClipboardError("no wl-copy")))
+    with pytest.raises(screen.ScreenError, match="one line at a time"):
+        screen.type_text("hi\nsent already")
+    assert keys == []
+    assert "typed 2 characters" in screen.type_text("hi")

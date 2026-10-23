@@ -332,9 +332,35 @@ def pin(target: str, is_field: bool = False, tab: int | None = None) -> str | No
 
 
 def page() -> dict:
-    """The auren tab now: browser, tab id and address (what a confirmation is bound to)."""
+    """The auren tab now: browser, tab id and address (what a confirmation is bound to), and its title."""
     b, t = _current(), _tab(None)
-    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href")}
+    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href"), "title": _eval(b, t, "document.title")}
+
+
+def value_of(target: str, tab: int | None = None) -> str | None:
+    """The text a field holds now (what a Send click would send), or None if it's gone."""
+    b, t = _current(), _tab(tab)
+    js = _FIND_JS + """((target) => { const el = field(target);
+      return el ? (el.isContentEditable ? el.innerText : String(el.value ?? '')) : null; })(%s)""" % json.dumps(str(target))
+    return _eval(b, t, js)
+
+
+def same_box(button: str, field: str, tab: int | None = None) -> bool:
+    """Does this pinned button send this pinned field: not another form's, and the smallest part of the page
+    around both holds no other text field (a form or a page with two composers: it may send the other)?"""
+    b, t = _current(), _tab(tab)
+    js = """((button, field) => {
+      const q = p => document.querySelector(`[data-auren-pin="${p.slice(4)}"]`);
+      const btn = q(button), el = q(field);
+      if (!btn || !el) return false;
+      if ((el.form || btn.form) && el.form !== btn.form) return false;
+      let box = el.parentElement;
+      while (box && !box.contains(btn)) box = box.parentElement;
+      const fields = box ? [...box.querySelectorAll('input:not([type=hidden]):not([type=button]):not([type=submit])'
+        + ':not([type=checkbox]):not([type=radio]), textarea, [contenteditable]:not([contenteditable=false])')] : [];
+      return fields.length === 1 && fields[0] === el;
+    })(%s, %s)""" % (json.dumps(button), json.dumps(field))
+    return _eval(b, t, js) is True
 
 
 def field_of(target: str, tab: int | None = None) -> dict | None:
@@ -357,19 +383,24 @@ def browser_type(target: str, text: str, submit: bool = False, tab: int | None =
     ((target, text, submit) => {
       const el = field(target);
       if (!el) return false;
+      if (el.isContentEditable) return 'editable';    // setting .value wouldn't change what it shows (or sends)
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
       setter && setter.set ? setter.set.call(el, text) : (el.value = text);
       el.dispatchEvent(new Event('input', {bubbles: true}));
       el.dispatchEvent(new Event('change', {bubbles: true}));
       if (submit) {
-        el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+        // One way to send, never both (a page that sends on Enter and on submit would send twice).
         if (el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+        else el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
       }
       return true;
     })(%s, %s, %s)
     """ % (json.dumps(str(target)), json.dumps(text), "true" if submit else "false")
-    if not _eval(b, t, js):
+    done = _eval(b, t, js)
+    if done == "editable":
+        raise BrowserError("that box can't be typed into from the page: click it with click_at and use type_text")
+    if not done:
         raise BrowserError(f"no field number {target} (read the page again)")
     if submit:
         _wait_ready(b, t)
