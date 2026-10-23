@@ -330,6 +330,7 @@ class _Screen:
         monkeypatch.setattr(tools.screen, "type_text", self.type)
         monkeypatch.setattr(tools.screen, "press_keys", self.press)
         monkeypatch.setattr(tools.screen, "click", self.click)
+        monkeypatch.setattr(tools.screen, "scroll", lambda x, y, direction, amount: "scrolled")
 
     def snapshot(self, window):                          # brings that window to the front, as the real one does
         self.shots.append(window)
@@ -360,6 +361,11 @@ def _clean(rt, d):
     rt.forget("daemon")
     rt._session("daemon").keyed.clear()
     d.box = ""
+
+
+def _later(rt):
+    """The brain goes on in a later turn (the user answered meanwhile): what was held is open again."""
+    rt.new_turn("daemon", same_task=True)
 
 
 @pytest.fixture
@@ -414,6 +420,7 @@ def test_enter_and_send_clicks_ask_at_the_other_levels_and_nothing_untyped_asks(
         rt.new_turn("daemon", said="send hi")
         rt.call("daemon", "type_text", {"text": "hi"})
         assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+        _later(rt)
         assert _asks(rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0])
     assert d.sent == [] and spy.calls == []
     rt.forget("daemon")                                  # "hi" is still in the box: a new conversation sends it too
@@ -444,6 +451,7 @@ def test_enter_in_a_terminal_runs_what_was_typed_as_a_command(desk):
     assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
     rt.call("daemon", "type_text", {"text": "sudo rm -rf /usr"})
     assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])            # the floor, at full access
+    _later(rt)
     assert _asks(rt.call("daemon", "type_text", {"text": "\nrm -rf ~\n"})[0])     # a typed new line runs it
     assert d.ran == ["ls -la"] and spy.calls == []
 
@@ -533,7 +541,9 @@ def test_a_terminal_runs_its_whole_line_or_asks(desk):
     rt.new_turn("daemon", said="clean up")
     rt.call("daemon", "type_text", {"text": "sudo rm -rf /usr"})
     assert _asks(rt.call("daemon", "type_text", {"text": "\n"})[0])           # the new line runs all of it
+    _later(rt)
     assert _asks(rt.call("daemon", "press_keys", {"keys": "ctrl+j"})[0])      # so does Ctrl+J
+    _later(rt)
     assert _asks(rt.call("daemon", "press_keys", {"keys": "ctrl+o"})[0])      # and Bash's Ctrl+O
     _clean(rt, d)
     rt.new_turn("daemon", said="clean up")
@@ -583,6 +593,7 @@ def test_a_key_or_an_allowed_click_doesnt_stop_clicks_counting_as_send(desk):
     rt.call("daemon", "type_text", {"text": "hi"})
     rt.call("daemon", "press_keys", {"keys": "End"})
     assert _asks(rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "paper plane icon"})[0])
+    _later(rt)
     out = rt.call("daemon", "click_at", {"x": 300, "y": 700, "target": "the message box"})[0]
     assert "clicked" in _yes(rt, out)                    # only put the cursor in the box: "hi" is still there
     rt.call("daemon", "press_keys", {"keys": "BackSpace"})
@@ -623,12 +634,14 @@ def test_a_yes_covers_the_text_it_asked_about_only(desk):
     d.target = "0xterm"
     rt.new_turn("daemon", said="refresh sudo")
     out = rt.call("daemon", "type_text", {"text": "sudo true"}) and rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    _later(rt)
     rt.call("daemon", "type_text", {"text": " ; rm -rf /usr"})
     assert "changed since asking" in _yes(rt, out)
     d.target = "0xchat"
     rt.new_turn("daemon", said="send hi to priya")
     rt.call("daemon", "type_text", {"text": "hi"})
     out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    _later(rt)
     rt.call("daemon", "type_text", {"text": ", my OTP is 4411"})
     assert "changed since asking" in _yes(rt, out)
     assert d.ran == [] and d.sent == []
@@ -660,12 +673,14 @@ def test_a_yes_is_void_once_anything_was_pressed_there(desk):
     rt.new_turn("daemon", said="send hi to priya")
     rt.call("daemon", "type_text", {"text": "hi"})
     out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
+    _later(rt)
     rt.call("daemon", "press_keys", {"keys": "BackSpace"})                   # "h" now, not what was asked about
     assert "changed since asking" in _yes(rt, out)
     _clean(rt, d)
     d.target = "0xterm"
     rt.new_turn("daemon", said="run it again")
     out = rt.call("daemon", "press_keys", {"keys": "Enter"})[0]             # a line it can't read
+    _later(rt)
     rt.call("daemon", "press_keys", {"keys": "Up"})                          # and another one now
     assert "changed since asking" in _yes(rt, out)
     assert d.sent == [] and d.ran == []
@@ -678,10 +693,9 @@ def test_ctrl_o_leaves_the_next_history_command_on_the_line(desk):
     rt.call("daemon", "type_text", {"text": "ls"})
     assert "pressed" in rt.call("daemon", "press_keys", {"keys": "ctrl+o"})[0]
     assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
-    rt.call("daemon", "type_text", {"text": "ls"})                           # Ctrl+J only runs it: the line is empty
     _clean(rt, d)
     rt.call("daemon", "type_text", {"text": "ls"})
-    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "ctrl+j"})[0]
+    assert "pressed" in rt.call("daemon", "press_keys", {"keys": "ctrl+j"})[0]     # Ctrl+J only runs it: empty after
     rt.call("daemon", "type_text", {"text": "pwd"})
     assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
 
@@ -739,3 +753,36 @@ def test_typing_readies_the_judge_at_full_access_only(desk):
     rt.set_level("free")
     rt.call("daemon", "type_text", {"text": "ls"})       # a terminal runs commands: no message follows
     assert warmed == ["free"]
+
+
+def test_while_the_user_is_asked_about_a_window_nothing_else_is_tried_there(desk):
+    rt, d = desk
+    d.target, d.under[(10, 10)], d.under[(900, 100)] = "0xterm", "0xterm", "0xchat"
+    rt.new_turn("daemon", said="press up and enter in the terminal")
+    rt.call("daemon", "press_keys", {"keys": "Up"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])          # whatever Up brought back
+    for tool, args in [("press_keys", {"keys": "ctrl+c"}), ("press_keys", {"keys": "Up"}),
+                       ("press_keys", {"keys": "alt+f4"}), ("type_text", {"text": "ls\n"}),
+                       ("click_at", {"x": 10, "y": 10, "target": "the terminal"}),
+                       ("drag_at", {"x1": 10, "y1": 10, "x2": 50, "y2": 10, "target": "select the line"})]:
+        assert "Don't try another way" in rt.call("daemon", tool, args)[0], tool
+    assert rt.call("daemon", "scroll_at", {"x": 10, "y": 10})[0] == "scrolled"      # reading is fine
+    assert rt.call("daemon", "click_at", {"x": 900, "y": 100, "target": "the chat"})[0] == "clicked"
+    assert d.events == ["Up", ("click", 900, 100)] and len(rt.batch("daemon")) == 1   # one question, nothing else
+    rt.new_turn("daemon", said="no, type ls instead")                              # their answer lifts it
+    assert "pasted" in rt.call("daemon", "type_text", {"text": "ls"})[0]
+
+
+def test_a_chat_send_waiting_for_an_answer_holds_that_chat_only(desk):
+    rt, d = desk
+    rt.set_level("ask")
+    rt.new_turn("daemon", said="send hi to priya")
+    rt.call("daemon", "type_text", {"text": "hi"})
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+    assert "Don't try another way" in rt.call("daemon", "click_at", {"x": 900, "y": 700, "target": "Send"})[0]
+    d.target = "0xterm"                                                             # another window is free
+    assert "pasted" in rt.call("daemon", "type_text", {"text": "ls"})[0]
+    rt.forget("daemon")                                                             # no question waits any more
+    d.target = "0xchat"
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])
+    assert d.sent == []

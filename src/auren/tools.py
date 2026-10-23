@@ -90,6 +90,7 @@ class Session:
     allowed: int = 0        # the turn the judge last let a message through: at most one per thing the user says
     typed: Typed | None = None      # the message the brain last typed (full access), which a Send click sends
     keyed: dict[str, Keyed] = field(default_factory=dict)     # by window: what the brain typed there and hasn't sent
+    waiting: dict[str, int] = field(default_factory=dict)     # by window: the turn the user was asked about it in
 
 
 @dataclass
@@ -184,7 +185,7 @@ class Runtime:
         in it lets a message through. What was typed on the screen is still there, so it's still known."""
         self.confirmations.clear(sid)
         s = self._session(sid)
-        s.said, s.typed, s.spoke = [], None, 0
+        s.said, s.typed, s.spoke, s.waiting = [], None, 0, {}
 
     def set_level(self, level: str) -> None:
         if level not in safety.LEVELS:
@@ -911,6 +912,25 @@ def _moved_on(window: str, changes: bool = True) -> None:
             s.keyed[window] = Keyed(window, app, "", fresh=True, known=False)
 
 
+def _held(window: str) -> str:
+    """While the user is being asked about what's typed in a window, a key, text or click there would change
+    what they're asked about (and void their yes): in the turn that asked, it's refused, so the brain can't
+    try another way (Ctrl+C, Up, Enter again) around the question. Their next message lifts it."""
+    s = _session_now()
+    if window and s.waiting.get(window) == s.turn:
+        return ("error: the user is being asked about what's typed in that window, and a key, text or click there "
+                "now would change it. Don't try another way: ask them, and stop.")
+    return ""
+
+
+def _asking(window: str, out: str) -> str:
+    """What a gated Enter, click or typed line in that window returned: if it asks the user, hold the window."""
+    if out.startswith('{"status": "needs_confirmation"'):
+        s = _session_now()
+        s.waiting[window] = s.turn
+    return out
+
+
 def _unreadable(text: str) -> safety.Risk:
     what = f"the line may hold more than “{text[-40:]}”" if text.strip() else "the line can't be read"
     return safety.Risk(frozenset({safety.WIPE}), f"{what}, so it can't be checked")
@@ -946,7 +966,8 @@ def _run_line(k: Keyed, keys: str) -> str:
     if not risk:
         return _run(run)
     short = k.text if len(k.text) <= 60 else k.text[:57] + "…"
-    return _gate(risk.kinds, f"Run `{short}` in {k.app}? {risk.reason[0].upper() + risk.reason[1:]}.", run, check)
+    return _asking(k.window, _gate(risk.kinds, f"Run `{short}` in {k.app}? {risk.reason[0].upper() + risk.reason[1:]}.",
+                                   run, check))
 
 
 def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[], None] | None = None) -> str:
@@ -987,8 +1008,8 @@ def _send_keyed(k: Keyed, how: str, press: Callable[[], str], lands: Callable[[]
                "screen comes with this)")
     question = (f"Send “{short}” in {k.app}?" if how.startswith("pressing") else
                 f"{how[0].upper() + how[1:]} in {k.app}? It may send “{short}”, which is typed there.")
-    return _gate({safety.SEND}, question, run, check, message=message, image=lambda: screen.snapshot(k.window),
-                 searched=gone)
+    return _asking(k.window, _gate({safety.SEND}, question, run, check, message=message,
+                                   image=lambda: screen.snapshot(k.window), searched=gone))
 
 
 def _draft(window: str) -> Keyed | None:
@@ -1033,6 +1054,8 @@ def click_at(x: int, y: int, target: str, button: str = "left", double: bool = F
     (for example "Allow on Chrome's download popup"). Look again afterwards to check it worked. Clicks
     that buy, pay, send, post, submit or delete make the tool ask the user itself: just click, don't ask first."""
     window = screen.window_at(x, y) or screen.key_target()
+    if held := _held(window):
+        return held
     k = _draft(window)
     risky = web.RISKY_CLICK.search(target)
     if k and not k.terminal and not (risky and safety.click_kind(target) != safety.SEND):
@@ -1062,12 +1085,14 @@ def drag_at(x1: int, y1: int, x2: int, y2: int, target: str, hold: str = "") -> 
     slider, an item or a window, select text. hold: "shift" (in drawing apps: a perfect circle or square),
     "ctrl", "alt", or several joined with "+". target: what you are doing, in words. Look again afterwards.
     Drags that delete or send something (to the trash, onto Send) make the tool ask the user itself."""
+    window = screen.window_at(x1, y1) or screen.key_target()
+    if held := _held(window):
+        return held
     if web.RISKY_CLICK.search(target):
         return _gate({safety.click_kind(target)}, f"Drag to “{target}”?", lambda: screen.drag(x1, y1, x2, y2, hold),
                      _same_screen())
-    window = screen.window_at(x1, y1)
     out = _run(screen.drag, x1, y1, x2, y2, hold)
-    _moved_on(window or screen.key_target(), changes=False)
+    _moved_on(window, changes=False)
     return out
 
 
@@ -1084,6 +1109,8 @@ def type_text(text: str) -> str:
     sends what you typed, and that may ask the user (just do it, don't ask first)."""
     s = _session_now()
     window = screen.key_target()
+    if held := _held(window):
+        return held
     app = screen.window(window).get("class", "") if window else ""
     before = s.keyed.get(window)
 
@@ -1114,8 +1141,8 @@ def type_text(text: str) -> str:
                 if screen.key_target() != window:
                     raise PermissionError("the keys would go to a different window now: ask the user again")
             short = line if len(line) <= 60 else line[:57] + "…"
-            return _gate(risk.kinds, f"Type and run `{short}` in {app}? {risk.reason[0].upper() + risk.reason[1:]}.",
-                         typed, check)
+            return _asking(window, _gate(risk.kinds, f"Type and run `{short}` in {app}? "
+                                         f"{risk.reason[0].upper() + risk.reason[1:]}.", typed, check))
     return _run(typed)
 
 
@@ -1123,15 +1150,15 @@ def type_text(text: str) -> str:
 def press_keys(keys: str) -> str:
     """Press a key or shortcut in the focused window: 'Enter', 'Escape', 'Tab', 'ctrl+s', 'ctrl+t'...
     Shortcuts that close windows or quit apps make the tool ask the user itself."""
+    window = screen.key_target()            # where the keys will go (the window auren last clicked, if recent)
+    if held := _held(window):
+        return held
     if keys.strip().lower().replace(" ", "") in RISKY_KEYS:
-        window = screen.key_target()        # where the keys will go (the window auren last clicked, if recent)
-
         def check() -> None:
             if screen.key_target() != window:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
         return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
     s = _session_now()
-    window = screen.key_target()
     k = _draft(window)
     if not k and window and _enter(keys, True) == "send":
         app = screen.window(window).get("class", "")
