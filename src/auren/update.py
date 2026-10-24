@@ -229,6 +229,16 @@ def _fetch(info: dict) -> tuple[Path, bool, str, dict]:
     ref = f"refs/tags/{release['tag']}"
     _git(repo, "fetch", "--quiet", "--no-tags", remote, f"{ref}:{ref}")
     target = _git(repo, "rev-parse", f"{ref}^{{commit}}")
+    before = info.get("commit", "")
+    if before and info.get("tag") == release["tag"] and target != before:
+        raise UpdateError(f"Release tag {release['tag']} changed since it was installed: refusing the update")
+    # A copied install may come from an unpushed local commit. Recover its graph before either check()
+    # or run() decides whether a release is newer; recovering it only for rollback can hide a downgrade.
+    if not dev and before and not _has(repo, before):
+        source = info.get("source", "")
+        if source and (Path(source) / ".git").exists():
+            with contextlib.suppress(UpdateError):
+                _git(repo, "fetch", "--quiet", "--no-tags", source, before)
     return repo, dev, target, release
 
 
@@ -431,14 +441,9 @@ def _update() -> tuple[str, bool]:
         return "Already up to date", False
     if dev:
         _dev_ready(repo, target)
-    elif not _has(repo, before):               # installed from a commit GitHub doesn't have: get it from
-        source = info.get("source", "")        # the checkout it came from, so a failed install can go back
-        if source and (Path(source) / ".git").exists():
-            with contextlib.suppress(UpdateError):
-                _git(repo, "fetch", "--quiet", source, before)
-        if not _has(repo, before):
-            raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
-                              "update from your checkout instead (git pull && ./install.sh)")
+    elif not _has(repo, before):               # _fetch couldn't recover the installed commit for rollback
+        raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
+                          "update from your checkout instead (git pull && ./install.sh)")
     plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
                                      *SHELL_PATHS]).returncode != 0
     _step("Waiting for Auren to finish…")

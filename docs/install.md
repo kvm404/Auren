@@ -2,8 +2,9 @@
 
 ## Requirements
 
-Auren targets Omarchy with Hyprland, Wayland, PipeWire, and the Omarchy shell. The installer needs
-`git`, `uv`, `qs`, `hyprctl`, `pw-record`, and `pw-cat`. Screen capture needs `grim`; typing needs
+Auren requires Omarchy with Hyprland 0.56 or newer, Lua configuration, Wayland, PipeWire, and the
+Omarchy shell. Older Hyprland versions do not provide the Lua dispatchers used by Auren.
+The installer needs `git`, `uv`, `qs`, `hyprctl`, `pw-record`, and `pw-cat`. Screen capture needs `grim`; typing needs
 `wtype`, and clipboard pasting needs `wl-copy` and `wl-paste` from `wl-clipboard`.
 
 Install and sign in to Claude Code or Codex. Auren uses your locally installed CLI and its selected

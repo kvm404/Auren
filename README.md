@@ -29,9 +29,9 @@ Other Linux desktops are not supported yet.
 
 ## Install
 
-You need an Omarchy desktop, `git`, `uv`, Quickshell (`qs`), PipeWire's `pw-record` and `pw-cat`,
-`wtype`, `wl-clipboard`, and `grim`. At least one brain CLI, **Claude Code or Codex**, must be installed
-and signed in. You also need an **AssemblyAI API key** for voice input.
+You need an Omarchy desktop with **Hyprland 0.56 or newer and Lua configuration**, `git`, `uv`,
+Quickshell (`qs`), PipeWire's `pw-record` and `pw-cat`, `wtype`, `wl-clipboard`, and `grim`.
+At least one brain CLI, **Claude Code or Codex**, must be installed and signed in. You also need an **AssemblyAI API key** for voice input.
 
 ### Install with an agent
 

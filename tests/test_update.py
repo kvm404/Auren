@@ -441,3 +441,35 @@ def test_private_releases_can_use_an_existing_gh_login(release_api, monkeypatch)
     monkeypatch.setattr(update.subprocess, "run", auth)
     update._latest_release("https://github.com/owner/repo.git")
     assert release_api[1][0].get_header("Authorization") == "Bearer test-login-token"
+
+
+@pytest.mark.parametrize("operation", ["check", "run"])
+def test_unpushed_installed_descendant_is_not_downgraded_with_a_fresh_cache(env, operation):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    local = commit(checkout, "local.py", subject="Only installed locally", release=False)
+    env.install_info(local, source=str(checkout))
+    if operation == "check":
+        assert update.check(notify=True)["state"] == "current"
+        assert notice.shown == []
+    else:
+        assert update.run() == 0
+        assert update.status()["state"] == "done"
+    assert env.installs() == [] and env.calls == []
+    assert json.loads(env.info.read_text())["commit"] == local
+
+
+@pytest.mark.parametrize("operation", ["check", "run"])
+def test_moved_installed_release_tag_is_refused_with_a_fresh_cache(env, operation):
+    env.install_info(env.first, tag="v0.1.0")
+    commit(env.remote, "replacement.py", release=False)
+    git(env.remote, "tag", "-f", "v0.1.0")
+    if operation == "check":
+        result = update.check()
+        assert result["state"] == "error"
+    else:
+        assert update.run() == 1
+        result = update.status()
+    assert "tag" in result["message"] and "changed" in result["message"]
+    assert env.installs() == [] and env.calls == []
+    assert json.loads(env.info.read_text())["commit"] == env.first
