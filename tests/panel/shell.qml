@@ -49,8 +49,8 @@ ShellRoot {
     ]
     function fake(kind) {
       var now = Date.now() / 1000
-      if (kind === "available") p.upd = { state: "available", count: 7, channel: "main", checked_at: now - 300, installed: installed, commits: commits }
-      if (kind === "confirm") { p.upd = { state: "available", count: 1, channel: "main", installed: installed, commits: commits.slice(1, 2) }; p.confirmingUpdate = true }
+      if (kind === "available") p.upd = { state: "available", count: 7, channel: "releases", latest: { tag: "v0.2.0" }, checked_at: now - 300, installed: installed, commits: commits }
+      if (kind === "confirm") { p.upd = { state: "available", count: 1, channel: "releases", latest: { tag: "v0.2.0" }, installed: installed, commits: commits.slice(1, 2) }; p.confirmingUpdate = true }
       if (kind === "updating") p.upd = { state: "updating", step: "Installing…", count: 1, installed: installed, commits: commits.slice(1, 2) }
       if (kind === "failed") p.upd = { state: "failed", installed: installed,
         message: "install.sh failed (exit 3): see ~/.local/state/auren/update.log. Auren is back on 54ebe81." }

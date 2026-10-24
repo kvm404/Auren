@@ -325,9 +325,8 @@ Panel {
     if (root.updating) return upd.step || "Updating…"
     if (root.checking) return "Checking for updates…"
     switch (root.updState) {
-      case "available": return upd.count ? upd.count + " new change" + (upd.count === 1 ? "" : "s") + " on " + (upd.channel || "main")
-                                          : "A newer version is on " + (upd.channel || "main")
-      case "current": return "You're up to date"
+      case "available": return "Release " + ((upd.latest || {}).tag || "update") + " available"
+      case "current": return "You're up to date with releases"
       case "done": return upd.message || "Updated"
       case "failed": return "The update didn't finish"
       case "error": return "Couldn't check for updates"
@@ -1460,7 +1459,7 @@ Panel {
             }
             Caption {
               text: root.versionText + (root.installedInfo.committed ? " from " + root.day(root.installedInfo.committed) : "")
-                    + ". Updates come from the main branch while Auren is in development; releases come later."
+                    + ". Updates install published releases only."
             }
           }
         }

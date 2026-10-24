@@ -1,8 +1,8 @@
 # Architecture
 
-Auren is private for now, built by two developers. The goal: it works on any Omarchy machine without
-code edits, so it can be released later. This page is the agreed design (2026-10-12, reviewed with
-Codex) and the order it is built in.
+Auren is a voice assistant for Omarchy. It should work on an Omarchy machine without personal code
+edits. This page describes the current component boundaries and contributor rules. The original
+design was agreed on 2026-10-12; release preparation is tracked through pull requests.
 
 ## Scope
 
@@ -62,10 +62,14 @@ The systemd units point at these paths, so the checkout can live anywhere.
 
 ## Updates
 
-`auren update` (`src/auren/update.py`, and the panel's Updates page) installs the newest commit on `main`
-for now; releases will take its place (`CHANNEL`). It works from its own clone in `~/.cache/auren/source`,
-never a checkout you work in, except for a `--dev` install, whose checkout it fast-forwards when it's on
-a clean `main`. The update runs in a transient systemd unit (`systemd-run --user`, given the session's
+`auren update` (`src/auren/update.py`, and the panel's Updates page) resolves GitHub's latest published
+non-prerelease release, fetches that exact version tag, and installs its commit. Unreleased `main`
+commits and standalone tags are ignored. It works from its own clone in `~/.cache/auren/source`,
+except for a `--dev` install, whose clean `main` checkout can be fast-forwarded to the release.
+An installed commit already ahead of a release is never downgraded. Release tags are fetched without
+force, so a rewritten tag is refused. See [releases.md](releases.md) for authentication and publishing.
+
+The update runs in a transient systemd unit (`systemd-run --user`, given the session's
 PATH, XDG folders and git sign-in: SSH agent, `GH_TOKEN`), so stopping Auren or restarting the bar doesn't
 stop it: wait until Auren is idle, stop `auren` and `auren-mascot` (if they won't stop, nothing changes),
 run the new `install.sh` (with `AUREN_UPDATE=1`, so it leaves the services alone), then restart the ones
@@ -80,30 +84,13 @@ imports the mascot's QML), `omarchy restart shell` loads the new panel. Progress
 `~/.local/state/auren/update.log`. `install.json` notes whether the checkout had uncommitted changes, and
 the panel says an update replaces them.
 
-## Build order
+## Further work
 
-Each step is one commit; Auren keeps working after every one.
+The original portability work is implemented: central paths, daemon locking, diagnostics, TOML
+settings, the persistent tool runtime, optional integration detection, and model selection.
+See [the roadmap](roadmap.md) for planned work and [the release guide](releases.md) for versioning.
 
-| Step | What |
-|---|---|
-| 0 | CI (pytest and ruff), contributor rules, this page and [ipc.md](ipc.md) |
-| 1 | Central paths, single-daemon lock, `auren doctor`, portable install, voice model in Auren's folder, text-only mode if the voice fails |
-| 2 | `config.toml` (replaces `settings.json`, migrated automatically) and `auren config` |
-| 3 | Tool runtime in the daemon, MCP adapter, per-message turns, bound confirmations, safe fallback, cancel stops the brain |
-| 4 | Integration states, a profile that survives missing parts, a plain shell runner without herdr, detection (browser, apps, projects, agent) |
-| 5 | Brain: only the selected brain starts; models from config |
-
-## Before a public release
-
-- **Brain:** Anthropic's Agent SDK docs say: "Unless previously approved, Anthropic does not allow third
-  party developers to offer claude.ai login or rate limits for their products". A public default needs
-  an API-key brain (Claude Haiku 5.5), with screenshots passed as images. Driving the user's own Claude
-  Code or Codex login has to be decided, not assumed.
-- **Mascots:** load extra mascots from `~/.config/auren/mascots/`. (Clawd, the Claude Code mascot, was
-  removed: Anthropic's branding rules say products must not look like Claude Code. Auren is the default.)
-- **Plugin id** `krvm.auren` → a neutral id (migrating the shell config).
-- **Safety:** a careful mode for new installs (only read-only commands run without asking).
-- **Privacy:** say what is sent to the model (profile, routines, pages, screenshots) and how long
-  history is kept.
-- **Voice:** Supertonic's repository is archived; decide whether to keep it.
-- License, AUR package, docs split (user vs developer), history cleanup.
+The current brain adapters drive signed-in CLI processes. A direct API-key backend, external mascot
+loading, a neutral plugin ID, stricter read-only permissions, and retention controls remain future
+work. [Privacy](privacy.md) describes current data handling; [Safety](safety.md) documents the limits
+of the action checks.

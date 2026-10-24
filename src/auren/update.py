@@ -1,8 +1,8 @@
 """Updating Auren: find a newer version on GitHub and install it.
 
-For now an update is the newest commit on `main` (development builds); releases will take its place
-later (CHANNEL). The code comes from Auren's own clone of the repo in ~/.cache/auren/source, so a
-checkout you work in is never touched. The exception is an install made with `install.sh --dev`, which
+Updates install only the latest published, non-prerelease GitHub release, resolved through its tag.
+Unreleased commits and standalone tags are never offered. The code comes from Auren's own clone
+in ~/.cache/auren/source, so a checkout you work in is never touched. The exception is an install made with `install.sh --dev`, which
 runs that checkout's code: then the checkout itself is updated (fast-forward only, and only on a clean
 `main`).
 
@@ -24,17 +24,22 @@ import contextlib
 import fcntl
 import json
 import os
+import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from . import notice
 from .config import CACHE_DIR, DATA_HOME, RUNTIME_DIR, STATE_DIR, STATE_FILE
 
-CHANNEL = "main"                                    # later: the newest release
+CHANNEL = "releases"
+DEV_BRANCH = "main"
 DEFAULT_REMOTE = "https://github.com/kvm404/Auren.git"
 INSTALL_INFO = DATA_HOME / "install.json"          # written by install.sh: what's installed, from where
 SOURCE = CACHE_DIR / "source"                      # Auren's own clone, what updates install from
@@ -124,7 +129,7 @@ def _write(**fields) -> dict:
     info = installed()
     data = {"installed": {"commit": info.get("commit", ""), "short": info.get("commit", "")[:7],
                           "date": info.get("committed", 0), "branch": info.get("branch", ""),
-                          "mode": info.get("mode", ""), "version": info.get("version") or _version()},
+                          "mode": info.get("mode", ""), "tag": info.get("tag", ""), "version": info.get("version") or _version()},
             "channel": CHANNEL, "log": str(LOG), **fields}
     STATUS.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATUS.with_suffix(f".{os.getpid()}.tmp")
@@ -158,24 +163,89 @@ def _repo(info: dict) -> tuple[Path, bool]:
     return SOURCE, False
 
 
-def _fetch(info: dict) -> tuple[Path, bool, str]:
-    """Bring the newest CHANNEL commit; returns the repo, whether it's a dev checkout, and the commit."""
+def _github_repo(remote: str) -> str:
+    """Accept GitHub HTTPS/SSH remotes, never send credentials to another host."""
+    match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+/[\w.-]+?)(?:\.git)?/?", remote)
+    if not match:
+        raise UpdateError("Release updates need a github.com origin remote")
+    return match[1]
+
+
+def _latest_release(remote: str) -> dict:
+    repo = _github_repo(remote)
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token and shutil.which("gh"):
+        try:
+            auth = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+                                  capture_output=True, text=True, timeout=5)
+            if auth.returncode == 0:
+                token = auth.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "auren-updater"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(f"https://api.github.com/repos/{repo}/releases/latest", headers=headers)
+    try:
+        with urlopen(request, timeout=30) as response:
+            release = json.load(response)
+    except HTTPError as e:
+        if e.code == 404:
+            raise UpdateError("No published release is available. If the repository is private, sign in with "
+                              "gh auth login or set GH_TOKEN.") from e
+        if e.code in (401, 403, 429):
+            raise UpdateError("GitHub refused the release check: check your login or API rate limit and try again later") from e
+        raise UpdateError(f"GitHub's release check failed (HTTP {e.code})") from e
+    except (OSError, URLError, ValueError) as e:
+        raise UpdateError("Couldn't read the latest GitHub release: check your connection and try again") from e
+    if not isinstance(release, dict) or release.get("draft") is not False or release.get("prerelease") is not False:
+        raise UpdateError("GitHub didn't return a published stable release")
+    tag = release.get("tag_name", "")
+    if not isinstance(tag, str) or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise UpdateError("The latest release needs a version tag such as v0.1.0")
+    return {"tag": tag, "name": release.get("name") or tag,
+            "url": f"https://github.com/{repo}/releases/tag/{tag}"}
+
+
+def _fetch(info: dict) -> tuple[Path, bool, str, dict]:
+    """Resolve a published release, then fetch exactly its tag, never a branch tip."""
+    remote = info.get("remote") or DEFAULT_REMOTE
+    release = _latest_release(remote)
     repo, dev = _repo(info)
     if dev:
         if not (repo / ".git").exists():
             raise UpdateError(f"{repo} isn't a git checkout")
     else:
-        remote = info.get("remote") or DEFAULT_REMOTE
         if not (repo / ".git").exists():
             if repo.exists():
-                subprocess.run(["rm", "-rf", "--", str(repo)], check=False)    # a clone that didn't finish
+                subprocess.run(["rm", "-rf", "--", str(repo)], check=False)
             repo.parent.mkdir(parents=True, exist_ok=True)
-            _git(repo.parent, "clone", "--quiet", "--filter=blob:none", "--no-checkout", remote, repo.name,
+            _git(repo.parent, "clone", "--quiet", "--filter=blob:none", "--no-checkout", "--no-tags", remote, repo.name,
                  timeout=300)
         else:
             _git(repo, "remote", "set-url", "origin", remote)
-    _git(repo, "fetch", "--quiet", "origin", f"+refs/heads/{CHANNEL}:refs/remotes/origin/{CHANNEL}")
-    return repo, dev, _git(repo, "rev-parse", f"origin/{CHANNEL}")
+    # A dev checkout's origin may have changed since install. Use the recorded release remote directly.
+    # No force: replacing a release tag is refused instead of silently changing a published version.
+    ref = f"refs/tags/{release['tag']}"
+    _git(repo, "fetch", "--quiet", "--no-tags", remote, f"{ref}:{ref}")
+    target = _git(repo, "rev-parse", f"{ref}^{{commit}}")
+    before = info.get("commit", "")
+    if before and info.get("tag") == release["tag"] and target != before:
+        raise UpdateError(f"Release tag {release['tag']} changed since it was installed: refusing the update")
+    # A copied install may come from an unpushed local commit. Recover its graph before either check()
+    # or run() decides whether a release is newer; recovering it only for rollback can hide a downgrade.
+    if not dev and before and not _has(repo, before):
+        source = info.get("source", "")
+        if source and (Path(source) / ".git").exists():
+            with contextlib.suppress(UpdateError):
+                _git(repo, "fetch", "--quiet", "--no-tags", source, before)
+    return repo, dev, target, release
+
+
+def _contains(repo: Path, have: str, target: str) -> bool:
+    """A checkout ahead of a release must never be downgraded by the updater."""
+    return have == target or (_has(repo, have) and subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", target, have], capture_output=True).returncode == 0)
 
 
 # --- checking ------------------------------------------------------------------------------------
@@ -190,20 +260,19 @@ def check(notify: bool = False) -> dict:
             return _write(state="unknown", checked_at=time.time(),
                           message="This install doesn't know its version: run install.sh from a git checkout once")
         try:
-            repo, _, latest = _fetch(info)
+            repo, _, latest, release = _fetch(info)
             have = info["commit"]
-            new = _commits(repo, latest, 1)[0]
-            if have == latest:
+            new = {**_commits(repo, latest, 1)[0], **release}
+            if _contains(repo, have, latest):
                 return _write(state="current", latest=new, commits=[], count=0, checked_at=time.time())
-            if _has(repo, have) and _git(repo, "merge-base", have, latest) == have:
+            if _has(repo, have) and _contains(repo, latest, have):
                 count = int(_git(repo, "rev-list", "--count", f"{have}..{latest}"))
                 result = _write(state="available", latest=new, commits=_commits(repo, f"{have}..{latest}"),
                                 count=count, checked_at=time.time())
-            else:                               # installed from a branch, or from commits main doesn't have
+            else:                               # installed from outside the release history
                 result = _write(state="available", latest=new, commits=_commits(repo, latest, 5), count=0,
                                 checked_at=time.time(),
-                                note=f"Installed from {info.get('branch') or 'a commit'} that isn't on {CHANNEL}: "
-                                     f"updating moves it to {CHANNEL}")
+                                note=f"This install is outside the release history: updating moves it to {release['tag']}")
             if info.get("dirty") and info.get("mode") != "dev":
                 note = "It was installed with uncommitted changes: updating replaces them."
                 result = _write(**{**result, "note": " ".join(filter(None, (result.get("note"), note)))})
@@ -223,7 +292,7 @@ def _notify_once(result: dict) -> None:
         pass
     n = result.get("count") or 0
     notice.notify("Auren update available",
-                  (f"{n} new change{'s' if n != 1 else ''}" if n else "A newer version") + ". Open Auren in the bar to update.",
+                  (result.get("latest", {}).get("tag") or (f"{n} new changes" if n else "A newer release")) + ". Open Auren in the bar to update.",
                   "update", always=True)
     NOTIFIED.parent.mkdir(parents=True, exist_ok=True)
     NOTIFIED.write_text(latest)
@@ -322,10 +391,13 @@ def _back(repo: Path, dev: bool, commit: str) -> None:
         _checkout(repo, dev, commit)
 
 
-def _dev_ready(repo: Path) -> None:
+def _dev_ready(repo: Path, target: str) -> None:
     branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch != CHANNEL or _git(repo, "status", "--porcelain", "--untracked-files=no"):
+    if branch != DEV_BRANCH or _git(repo, "status", "--porcelain", "--untracked-files=no"):
         raise UpdateError(f"{repo} is a --dev install: update it yourself (it's on {branch} or has changes)")
+    if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", "HEAD", target],
+                      capture_output=True).returncode != 0:
+        raise UpdateError(f"{repo} is a --dev install ahead of or divergent from the release: update it yourself")
 
 
 def run() -> int:
@@ -364,19 +436,14 @@ def _update() -> tuple[str, bool]:
     if not before:                             # not knowing what's there, don't replace it
         raise UpdateError("This install doesn't know its version: run install.sh from a git checkout once")
     _step("Looking for the newest version…")
-    repo, dev, target = _fetch(info)
-    if target == before:
+    repo, dev, target, release = _fetch(info)
+    if _contains(repo, before, target):
         return "Already up to date", False
     if dev:
-        _dev_ready(repo)
-    elif not _has(repo, before):               # installed from a commit GitHub doesn't have: get it from
-        source = info.get("source", "")        # the checkout it came from, so a failed install can go back
-        if source and (Path(source) / ".git").exists():
-            with contextlib.suppress(UpdateError):
-                _git(repo, "fetch", "--quiet", source, before)
-        if not _has(repo, before):
-            raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
-                              "update from your checkout instead (git pull && ./install.sh)")
+        _dev_ready(repo, target)
+    elif not _has(repo, before):               # _fetch couldn't recover the installed commit for rollback
+        raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
+                          "update from your checkout instead (git pull && ./install.sh)")
     plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
                                      *SHELL_PATHS]).returncode != 0
     _step("Waiting for Auren to finish…")
@@ -389,7 +456,7 @@ def _update() -> tuple[str, bool]:
         if _systemctl("stop", *UNITS):
             raise UpdateError("Couldn't stop Auren, so nothing was changed")
         if dev:
-            _dev_ready(repo)                   # again: the wait was long enough to switch branches
+            _dev_ready(repo, target)           # again: the wait was long enough to switch branches
             back_to = _git(repo, "rev-parse", "HEAD")    # its commits since the install stay on the branch
         _step("Downloading…")
         _checkout(repo, dev, target)
@@ -418,7 +485,7 @@ def _update() -> tuple[str, bool]:
     if failure:
         raise UpdateError(str(failure) + trouble) from failure
     new = _commits(repo, target, 1)[0]
-    return f"Updated to {new['short']}: {new['subject']}" + trouble, plugin_changed
+    return f"Updated to {release['tag']} ({new['short']}): {new['subject']}" + trouble, plugin_changed
 
 
 def _started(unit: str, timeout: float = 20) -> bool:
@@ -484,10 +551,10 @@ def _print(result: dict) -> None:
     print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
     state = result.get("state")
     if state == "current":
-        print(f"Up to date with {CHANNEL}.")
+        print("Up to date with published releases.")
     elif state == "available":
         n = result.get("count") or 0
-        print(f"Update available on {CHANNEL}" + (f": {n} new change{'s' if n != 1 else ''}" if n else ""))
+        print(f"Release {result.get('latest', {}).get('tag', '')} available" + (f": {n} new change{'s' if n != 1 else ''}" if n else ""))
         if result.get("note"):
             print("  " + result["note"])
         for c in result.get("commits", []):

@@ -24,11 +24,15 @@ def git(repo, *args):
     return subprocess.run([*GIT, "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def commit(repo, name, text="x", subject=None):
+def commit(repo, name, text="x", subject=None, release=True):
     (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(text)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", subject or f"change {name}")
+    if release:
+        tags = git(repo, "tag", "--list", "v0.1.*").splitlines()
+        number = max((int(t.rsplit(".", 1)[1]) for t in tags), default=-1) + 1
+        git(repo, "tag", f"v0.1.{number}")
     return git(repo, "rev-parse", "HEAD")
 
 
@@ -68,6 +72,17 @@ def env(tmp_path, monkeypatch):
         for u in args[1:]:
             active[u] = args[0] in ("start", "restart")
         return 0
+    def latest_release(remote):
+        from pathlib import Path
+        try:
+            tags = git(Path(remote), "tag", "--list", "v0.1.*").splitlines()
+        except subprocess.CalledProcessError as e:
+            raise update.UpdateError("Couldn't reach GitHub") from e
+        if not tags:
+            raise update.UpdateError("No published release is available")
+        tag = max(tags, key=lambda t: int(t.rsplit(".", 1)[1]))
+        return {"tag": tag, "name": tag, "url": f"https://github.com/example/auren/releases/tag/{tag}"}
+    monkeypatch.setattr(update, "_latest_release", latest_release)
     monkeypatch.setattr(update, "_systemctl", systemctl)
     monkeypatch.setattr(update, "_restart_shell", lambda: shell.append(True))
 
@@ -101,10 +116,10 @@ def test_new_commits_are_listed(env):
     assert [c["subject"] for c in r["commits"]] == ["Fix the bubble", "Make it faster"]
 
 
-def test_an_install_from_elsewhere_is_offered_main(env):
+def test_an_install_from_elsewhere_is_offered_a_release(env):
     env.install_info("f" * 40, branch="my-branch")
     r = update.check()
-    assert r["state"] == "available" and "isn't on main" in r["note"]
+    assert r["state"] == "available" and "outside the release history" in r["note"]
 
 
 def test_an_install_without_a_version(env):
@@ -285,3 +300,176 @@ def test_an_install_without_a_version_isnt_replaced(env):
     commit(env.remote, "a.py")
     assert update.run() == 1
     assert "version" in update.status()["message"] and env.calls == [] and env.installs() == []
+
+
+def test_unreleased_main_commits_are_never_offered_or_installed(env):
+    env.install_info(env.first)
+    commit(env.remote, "unreleased.py", release=False)
+    assert update.check(notify=True)["state"] == "current"
+    assert update.run() == 0
+    assert env.installs() == [] and env.calls == [] and notice.shown == []
+
+
+def test_update_stops_at_release_even_when_main_is_ahead(env):
+    env.install_info(env.first)
+    released = commit(env.remote, "released.py")
+    commit(env.remote, "unreleased.py", release=False)
+    assert update.check()["latest"]["tag"] == "v0.1.1"
+    assert update.run() == 0
+    assert env.installs() == [released]
+    assert not (update.SOURCE / "unreleased.py").exists()
+
+
+def test_annotated_release_tag_is_peeled_to_a_commit(env):
+    env.install_info(env.first)
+    released = commit(env.remote, "a.py", release=False)
+    git(env.remote, "tag", "-a", "v0.1.1", "-m", "Release")
+    assert update.check()["latest"]["commit"] == released
+    assert update.run() == 0 and env.installs() == [released]
+
+
+def test_install_ahead_of_latest_release_is_not_downgraded(env):
+    ahead = commit(env.remote, "a.py", release=False)
+    env.install_info(ahead)
+    assert update.check()["state"] == "current"
+    assert update.run() == 0 and env.installs() == [] and env.calls == []
+
+
+def test_no_release_leaves_the_install_and_services_alone(env):
+    env.install_info(env.first)
+    git(env.remote, "tag", "-d", "v0.1.0")
+    assert update.check()["state"] == "error"
+    assert update.run() == 1 and env.installs() == [] and env.calls == []
+
+
+def test_a_moved_release_tag_is_refused(env):
+    env.install_info(env.first)
+    commit(env.remote, "a.py")
+    update.check()
+    commit(env.remote, "replacement.py", release=False)
+    git(env.remote, "tag", "-f", "v0.1.1")
+    assert update.run() == 1 and env.installs() == [] and env.calls == []
+
+
+@pytest.mark.parametrize("remote", ["https://github.com/owner/repo.git", "git@github.com:owner/repo.git",
+                                  "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo/"])
+def test_github_remote_forms(remote):
+    assert update._github_repo(remote) == "owner/repo"
+
+
+@pytest.mark.parametrize("remote", ["https://evil.example/owner/repo", "https://github.com.evil.example/owner/repo",
+                                  "/tmp/repo", "https://user:secret@github.com/owner/repo"])
+def test_other_hosts_and_embedded_credentials_are_refused(remote):
+    with pytest.raises(update.UpdateError):
+        update._github_repo(remote)
+
+
+@pytest.fixture
+def release_api(monkeypatch):
+    import io
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(update.shutil, "which", lambda name: None)
+    calls = []
+    payload = {"tag_name": "v0.1.0", "name": "First release", "draft": False, "prerelease": False}
+    def urlopen(request, timeout):
+        calls.append(request)
+        return io.StringIO(json.dumps(payload))
+    monkeypatch.setattr(update, "urlopen", urlopen)
+    return payload, calls
+
+
+def test_release_api_uses_published_latest_without_needing_gh(release_api):
+    _, calls = release_api
+    assert update._latest_release("https://github.com/owner/repo.git")["tag"] == "v0.1.0"
+    assert calls[0].full_url == "https://api.github.com/repos/owner/repo/releases/latest"
+    assert not calls[0].has_header("Authorization")
+
+
+def test_release_api_can_authenticate_private_repositories(release_api, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    update._latest_release("git@github.com:owner/repo.git")
+    assert release_api[1][0].get_header("Authorization") == "Bearer test-token"
+
+
+@pytest.mark.parametrize("change", [{"draft": True}, {"prerelease": True}, {"tag_name": "main"},
+                                    {"tag_name": "v0.2.0-rc.1"}, {"tag_name": "--upload-pack=evil"}])
+def test_release_api_rejects_unpublished_and_invalid_versions(release_api, change):
+    release_api[0].update(change)
+    with pytest.raises(update.UpdateError):
+        update._latest_release("https://github.com/owner/repo.git")
+
+
+@pytest.mark.parametrize("code", [401, 403, 404, 429, 500])
+def test_release_api_errors_are_actionable_and_hide_credentials(release_api, monkeypatch, code):
+    from urllib.error import HTTPError
+    def fail(*args, **kwargs):
+        raise HTTPError("https://api.github.com", code, "secret-token", {}, None)
+    monkeypatch.setattr(update, "urlopen", fail)
+    with pytest.raises(update.UpdateError) as error:
+        update._latest_release("https://github.com/owner/repo.git")
+    assert "secret-token" not in str(error.value)
+
+
+def test_standalone_tag_does_not_trigger_an_update(env, monkeypatch):
+    env.install_info(env.first)
+    commit(env.remote, "tagged-but-unpublished.py", release=False)
+    git(env.remote, "tag", "v9.0.0")
+    monkeypatch.setattr(update, "_latest_release", lambda remote: {"tag": "v0.1.0", "name": "First", "url": ""})
+    assert update.check()["state"] == "current"
+    assert update.run() == 0 and env.installs() == []
+
+
+def test_dev_checkout_ahead_of_release_never_installs_unreleased_code(env):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    env.install_info(env.first, mode="dev", source=str(checkout))
+    commit(env.remote, "released.py")
+    ahead = commit(env.remote, "unreleased.py", release=False)
+    git(checkout, "pull", "-q")
+    assert update.run() == 1
+    assert "update it yourself" in update.status()["message"]
+    assert env.installs() == [] and not any(c[0] == "stop" for c in env.calls)
+    assert git(checkout, "rev-parse", "HEAD") == ahead
+
+
+def test_private_releases_can_use_an_existing_gh_login(release_api, monkeypatch):
+    monkeypatch.setattr(update.shutil, "which", lambda name: "/usr/bin/gh")
+    def auth(cmd, **kwargs):
+        assert cmd == ["gh", "auth", "token", "--hostname", "github.com"]
+        return subprocess.CompletedProcess(cmd, 0, "test-login-token\n", "")
+    monkeypatch.setattr(update.subprocess, "run", auth)
+    update._latest_release("https://github.com/owner/repo.git")
+    assert release_api[1][0].get_header("Authorization") == "Bearer test-login-token"
+
+
+@pytest.mark.parametrize("operation", ["check", "run"])
+def test_unpushed_installed_descendant_is_not_downgraded_with_a_fresh_cache(env, operation):
+    checkout = env.tmp / "checkout"
+    subprocess.run([*GIT, "clone", "-q", str(env.remote), str(checkout)], check=True)
+    local = commit(checkout, "local.py", subject="Only installed locally", release=False)
+    env.install_info(local, source=str(checkout))
+    if operation == "check":
+        assert update.check(notify=True)["state"] == "current"
+        assert notice.shown == []
+    else:
+        assert update.run() == 0
+        assert update.status()["state"] == "done"
+    assert env.installs() == [] and env.calls == []
+    assert json.loads(env.info.read_text())["commit"] == local
+
+
+@pytest.mark.parametrize("operation", ["check", "run"])
+def test_moved_installed_release_tag_is_refused_with_a_fresh_cache(env, operation):
+    env.install_info(env.first, tag="v0.1.0")
+    commit(env.remote, "replacement.py", release=False)
+    git(env.remote, "tag", "-f", "v0.1.0")
+    if operation == "check":
+        result = update.check()
+        assert result["state"] == "error"
+    else:
+        assert update.run() == 1
+        result = update.status()
+    assert "tag" in result["message"] and "changed" in result["message"]
+    assert env.installs() == [] and env.calls == []
+    assert json.loads(env.info.read_text())["commit"] == env.first
