@@ -22,19 +22,20 @@ The command check (`assess_command`) errs on the side of asking. `>>` and `2>/de
 
 ## Approval levels
 
-Like Claude Code's permission modes: `safety.level` in `config.toml`, `auren-ctl safety ask|task|free`, or the bar panel's Brain page ("Risky actions"). The default is `ask`, which is how Auren always behaved.
+Like Claude Code's permission modes: `safety.level` in `config.toml`, `auren-ctl safety ask|task|free|never`, or the bar panel's Brain page ("Risky actions"). The default is `ask`, which is how Auren always behaved.
 
 | Level | Behaviour |
 |---|---|
 | `ask` | Every risky action asks first. |
 | `task` | The first risky action asks. A yes also covers the rest of **that task** for the kinds that were approved: later actions of those kinds run without asking. |
 | `free` | **Full access**, for development. Windows and files just run. `send` still asks, except a chat message your own words just asked for (see [The judge](#the-judge)), and the floor always asks. |
+| `never` | **Nothing asks**, the floor included: sending, publishing, root, packages, secrets, buying and wiping all just run. Only for a machine whose owner accepts what that gives up (below). |
 
-**The floor: `publish`, `system`, `secrets`, `money`, `wipe` and `auren` ask at every level, every time**, and a yes never covers them later. None of them can be taken back: publishing, root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own controls are never a surprise, even at `free`. Several waiting at once still take one yes (below).
+**The floor: `publish`, `system`, `secrets`, `money`, `wipe` and `auren` ask at every level but `never`, every time**, and a yes never covers them later. None of them can be taken back: publishing, root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own controls are never a surprise, even at `free`. Several waiting at once still take one yes (below).
 
 A task is everything the brain does from the user's request until their next message that isn't an answer to one of its questions (or 5 minutes, `GRANT_TTL`). Changing the level also ends what a yes covered. The brain isn't told about the grant; it just sees tools that run. It is told the level in each message (an `<approvals>` note; nothing is said at `ask`), so at `task` and `free` it doesn't add questions of its own before actions the tools already guard.
 
-What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes deleting files and closing windows, which is why `free` is for a development machine. That's the reason for the floor, for `send` still asking at `free`, for the task ending with the next message, and for `ask` staying the default.
+What `task` and `free` give up: a page the brain reads can contain instructions (see [Untrusted text](#untrusted-text)), and an action it was talked into runs unasked if its kind is allowed. At `free` that includes deleting files and closing windows, which is why `free` is for a development machine. That's the reason for the floor, for `send` still asking at `free`, for the task ending with the next message, and for `ask` staying the default. `never` gives up the floor too: anything the brain is talked into, by a page or by mishearing, runs.
 
 ## The judge
 

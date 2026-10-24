@@ -88,6 +88,8 @@ APPROVALS = {
     "free": "The user has given you full access: windows and files just run. Don't ask permission in words first; act, "
             "and say what you did. Sending, publishing, root, power, packages, secrets, buying and wiping still ask "
             "(needs_confirmation).",
+    "never": "The user has given you full access with no confirmations at all: every tool just runs, including sending, "
+             "publishing, root, packages, buying and deleting. Don't ask permission in words first; act, and say what you did.",
 }
 
 

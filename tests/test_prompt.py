@@ -62,6 +62,7 @@ def test_the_approval_level_is_only_mentioned_when_it_changes_what_the_brain_sho
     assert "after the user's yes" in prompt.user_message("hi", "time: now", level="task")
     free = prompt.user_message("hi", "time: now", level="free")
     assert "full access" in free and free.index("<approvals>") < free.index("Transcript: hi")
+    assert "no confirmations at all" in prompt.user_message("hi", "time: now", level="never")
 
 
 def test_the_brain_is_told_to_ask_once_for_a_whole_task():

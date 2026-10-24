@@ -104,6 +104,7 @@ def test_every_risky_click_label_has_a_kind():
     ("ask", {"auren"}, set(), True), ("free", {"auren"}, {"auren"}, True),
     ("free", {"publish"}, set(), True), ("task", {"publish"}, {"publish"}, True),   # publishing asks every time
     ("free", set(), set(), True), ("nonsense", {"window"}, set(), True),
+    ("never", {"send"}, set(), False), ("never", {"money", "wipe", "auren"}, set(), False), ("never", set(), set(), False),
 ])
 def test_what_each_level_asks(level, kinds, granted, ask):
     assert safety.needs_ask(level, kinds, granted) is ask
