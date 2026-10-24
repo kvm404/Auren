@@ -19,7 +19,7 @@ downloads, and actions therefore use that browser's session. Coding tasks handed
 follow those agents' own provider and permission settings.
 
 Speech synthesis runs locally. Audio is streamed from PipeWire to AssemblyAI; the main runtime does
-not save microphone recordings. Experiment scripts can record audio separately when you run them.
+not save microphone recordings.
 
 The machine profile can contain your username, hostname, project paths, installed applications,
 aliases, key bindings, open-window titles, and coding-agent context. Common secret patterns are

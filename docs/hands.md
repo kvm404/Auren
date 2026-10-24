@@ -14,7 +14,7 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 
 ### Layout
 
-- **Auren has its own herdr workspace, labelled `auren`.** It is created on demand in the background (`--no-focus`), with a home tab. If the user closes it, the next job recreates it. The user's own workspaces (TDS, Obsidian, PROJECTS…) are not relied on and never changed.
+- **Auren has its own herdr workspace, labelled `auren`.** It is created on demand in the background (`--no-focus`), with a home tab. If the user closes it, the next job recreates it. The user's own workspace names are not relied on or changed.
 - **One tab per job,** named after the job (`lecture-notes`, `review-voisu`). An agent started in it gets the same name, which herdr requires to be `[a-z][a-z0-9_-]{0,31}` and unique; Auren adds `-2`, `-3` when taken.
 - **Ownership:** jobs are recorded in `~/.local/state/auren/herdr-jobs.json`, and jobs whose tab was closed are forgotten. `close_job` only closes tabs listed there. Asked to close anything else, it refuses: "Auren only closes tabs it created".
 - **The user's agents are found live,** wherever they are, by name, pane id, kind ("codex", "claude code", including misheard "cloud code"), or a hint: project folder, workspace or tab label. Two candidates with no hint means "which one?", listing both.
@@ -139,7 +139,7 @@ Without Open Browser Use (or with `integrations.browser = false`) the browser to
 
 **Safety.** Clicks on buy, pay, send, post, submit, delete and similar labels need confirmation (at the default approval level, see [safety.md](safety.md#approval-levels)). Page text is wrapped as untrusted.
 
-**Lessons from the first real site (IITM Seek, Google Drive):**
+**Browser behavior to account for:**
 - **Chrome doesn't lay out background tabs,** so their visible text is empty (Drive rows read as nothing). Auren brings its tab to the front before reading or clicking (CDP `Page.bringToFront`).
 - **Links can be zero-sized** while the image inside them shows, and a link's "text" can be a single space. Both need care when listing clickable items.
 - **Drive downloads a folder as a zip,** after a few seconds of preparing.
@@ -148,11 +148,13 @@ Without Open Browser Use (or with `integrations.browser = false`) the browser to
 
 User workflows as Markdown files in `~/.config/auren/routines/*.md`, loaded into the brain's instructions.
 
-First routine, `mlp-slides.md` (verified): Chrome bookmark Courses/MLP → Supplementary Contents → Lecture PPTs/Slides → "Download Now!" (an image link to the Google Drive "Slides" folder) → More actions (Week N) → Download. Through the brain, "download the week 3 MLP slides" took 6 tool calls and 29 s, and gave `~/Downloads/Week 3-….zip`.
+A routine can describe a repeatable task such as opening a bookmark, navigating to a document,
+and downloading it. Write steps using the user's own bookmarks and page labels. Personal routines
+are not shipped with Auren.
 
 ## Scratchpad
 
-herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). Hyprland opens new windows on whatever is showing, so an app launched while the scratchpad was open landed inside it. `launch_app`, `open_url` and `open_path` now hide a showing special workspace first, so new windows land on the user's normal workspace. `launch_app` follows the target by default; `follow=False` keeps the user on the current workspace.
+herdr can run in a terminal on Omarchy's scratchpad (`special:scratchpad`). Hyprland opens new windows on whatever is showing, so an app launched while the scratchpad was open landed inside it. `launch_app`, `open_url` and `open_path` now hide a showing special workspace first, so new windows land on the user's normal workspace. `launch_app` follows the target by default; `follow=False` keeps the user on the current workspace.
 
 ## Backup brain
 
@@ -168,7 +170,7 @@ herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). H
 The dated sections below record discoveries and subsequent fixes. Later entries supersede earlier
 workarounds; the current safety behavior is documented in [Safety](safety.md).
 
-## Lessons from the user's first voice test (2026-10-10)
+## Early voice testing (2026-10-10)
 
 - **"Open WhatsApp on workspace 3" means go there.** `launch_app` follows the window by default again; it stays put only when the user says so ("keep me here").
 - **Browser popups (Chrome's "Download multiple files: Allow / Block") are browser UI, not page content.** Page tools can't see or click them. A download that doesn't start within 60 s is now reported as "the browser is probably showing a popup; ask the user". The user clicked Allow, so Chrome now remembers it for drive.google.com.
@@ -214,7 +216,7 @@ discord.com in a Brave tab instead and typed the message there (it asked before 
 
 ## Browser not open yet (user test, 2026-10-10)
 
-"Download the MLP week 1 PDF" with Chrome closed: the brain opened Chrome and retried right away, but
+A request to download a document with Chrome closed: the brain opened Chrome and retried right away, but
 the Open Browser Use extension needs a few seconds after a browser starts before it connects, so it
 gave up. Now `browser.obu()` handles it: on "not connected" it starts the browser if it isn't running
 (`uwsm-app -- google-chrome-stable`, scratchpad hidden first), pings the extension every 0.5 s for up

@@ -1,46 +1,23 @@
-# 0001: Assistant voice is local Supertonic 3, voice F2
+# 0001: Assistant voice is local Supertonic 3
 
 Date: 2026-10-09 · Status: accepted
 
-## Decision
+Auren uses Supertonic 3 for local speech synthesis. It was selected over Pocket TTS and Kokoro in
+the original evaluation for its CPU and memory use and acceptable voice quality. Speech generation
+runs locally without sending reply text to another speech service.
 
-The assistant speaks with **Supertonic 3** running locally (ONNX, CPU), configured as:
+The defaults are voice F2, 5 steps, speed 1.05, and English. The panel also offers M3, F1, and M1;
+voice selection and tuning are configurable. Choosing a mascot can select its matching voice.
 
-| Setting | Value | Why |
-|---|---|---|
-| Voice | **F2** | Chosen by ear from all 10 built-in voices |
-| Alternatives | M3 (normal pace), F1 / M1 (slower, calmer) | Same cost; switch per preference |
-| Steps | **5** | Cheapest setting; quality was good enough by ear. 8 costs ~45% more CPU |
-| Speed | **1.05** | Supertonic's default; what F2 sounded like when it was chosen |
-| Language | **English (`en`)** | Auren replies and synthesizes speech only in English |
+## Consequences
 
-## Why Supertonic
+- The voice model must be downloaded during installation or with `auren voice-model`.
+- Speech is generated sentence by sentence. The first sentence plays while later sentences are
+  synthesized; long opening sentences delay the first audio.
+- A failed voice-model load leaves text replies available.
+- The runtime replies and synthesizes speech in English. Earlier Hindi and Hinglish trials are not
+  part of the current language support.
+- The model loader uses pinned download revisions and an archive fallback. Model availability
+  should be checked when preparing releases.
 
-Measured on this laptop (i3-1115G4, 4 threads, 7.5 GB RAM) against Pocket TTS and Kokoro; details and
-scripts in `experiments/tts/`.
-
-- Lowest CPU per second of speech (0.37 s), tied with quantized Pocket TTS.
-- About half Pocket's RAM (~0.5 GB vs ~1 GB).
-- First audio in ~0.5 s for a short sentence; generates 6x faster than real time.
-- The only tested engine that speaks Hindi properly.
-- Custom voices are possible later via Supertonic Voice Builder (JSON export).
-
-## Historical Hindi and Hinglish experiments
-
-Hindi replies were added on 2026-10-10 and removed on 2026-10-13 when Auren became English-only.
-The language selector and script-based TTS routing are gone. The original experiment findings
-below remain for reference; they do not describe the current runtime.
-
-- Hindi must be written in **Devanagari** and synthesized with `lang="hi"`.
-- Hinglish in Roman letters ("main abhi Firefox khol raha hoon") is spoken badly by every engine tested.
-- Hinglish works when the brain writes it in Devanagari: either all Devanagari (English words
-  transliterated) or Hindi words in Devanagari with English words left in Latin. Both sounded good by
-  ear (`experiments/tts/hinglish.py` options B and C). Splitting by script into separate Hindi and
-  English calls (option D) came out twice as long because of pauses at every switch; not judged by ear.
-
-## Known gaps
-
-- No streaming within a sentence: the delay before speech grows with the first sentence's length, so
-  replies should start with a short sentence.
-- Pocket TTS and Kokoro were uninstalled after the comparison; reinstalling needs CPU-only torch as a
-  direct dependency (otherwise uv pulls ~3 GB of CUDA wheels).
+Implementation: `src/auren/voice.py`. User controls: [Talking to Auren](../daemon.md).

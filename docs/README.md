@@ -21,6 +21,4 @@
 - [Changelog](../CHANGELOG.md): release notes.
 
 The [voice](decisions/0001-assistant-voice.md), [speech recognition](decisions/0002-speech-to-text.md),
-and [brain](decisions/0003-brain.md) decisions record why the original providers were selected.
-Dated measurements, [research](research/brain.md), and [experiments](../experiments/) describe the setup
-and providers used at the time. They are not current pricing, availability, or performance guarantees.
+and [brain](decisions/0003-brain.md) decisions explain the selected providers and runtime tradeoffs.

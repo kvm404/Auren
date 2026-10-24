@@ -30,10 +30,9 @@ These are ideas for future work, not promises for a particular release:
 - A neutral bar plugin ID with migration from `krvm.auren`.
 - Packaged distribution and an uninstall command.
 
-## Research and measurements
+## Provider decisions
 
-The original provider comparisons live under [experiments](../experiments/), with decisions for
-[voice](decisions/0001-assistant-voice.md), [speech recognition](decisions/0002-speech-to-text.md), and
-[the brain](decisions/0003-brain.md). They record dated tests on one user's voice and laptop.
-Fallbacks mentioned only in those experiments, including ElevenLabs STT and Groq, are not wired
-into the runtime.
+The decisions for [voice](decisions/0001-assistant-voice.md),
+[speech recognition](decisions/0002-speech-to-text.md), and [the brain](decisions/0003-brain.md)
+explain the selected providers. Alternate speech-recognition providers and a third brain backend
+are not wired into the runtime.

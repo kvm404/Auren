@@ -17,3 +17,6 @@ secrets*
 
 # Panel previews (tests/panel/preview.sh)
 .panel-preview/
+
+# Local research artifacts are not part of the public project
+/experiments/

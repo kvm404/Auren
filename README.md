@@ -173,7 +173,6 @@ files and send socket commands, so they can restart independently.
 | `mascot/` | Quickshell overlay and both mascot characters |
 | `omarchy-plugin/` | Bar widget and controls |
 | `tests/` | Python tests and Qt interaction tests |
-| `experiments/` | Historical speech and model comparisons, separate from the runtime |
 
 ## Contributing and documentation
 
