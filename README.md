@@ -10,8 +10,8 @@ Ask it to open an app on another workspace, control your music, download somethi
 browser, draw a diagram in Excalidraw, or give a coding agent a task in herdr. When an app has no
 suitable command or browser interface, Auren can look at the screen and use the mouse and keyboard.
 
-Auren is an early project built for **Omarchy, Hyprland, Wayland, and PipeWire**. It has been developed
-on an i3 laptop with 8 GB of RAM. Other Linux desktops are not supported yet.
+Auren is an early project built for **Omarchy, Hyprland, Wayland, and PipeWire**.
+Other Linux desktops are not supported yet.
 
 - **Speech recognition:** AssemblyAI Universal-3.5 Pro streaming, with your own vocabulary.
 - **Brain:** Claude Code, using `haiku` by default. Codex, using `gpt-6-luna`, can take over when
@@ -32,6 +32,36 @@ on an i3 laptop with 8 GB of RAM. Other Linux desktops are not supported yet.
 You need an Omarchy desktop, `git`, `uv`, Quickshell (`qs`), PipeWire's `pw-record` and `pw-cat`,
 `wtype`, `wl-clipboard`, and `grim`. At least one brain CLI, **Claude Code or Codex**, must be installed
 and signed in. You also need an **AssemblyAI API key** for voice input.
+
+### Install with an agent
+
+Paste this prompt into a coding agent running on your Omarchy machine:
+
+```text
+Install and set up Auren from https://github.com/kvm404/Auren on this machine.
+
+Read the repository's README.md and docs/install.md first, along with any local
+agent instructions for Omarchy configuration. Use the latest published release,
+excluding drafts and prereleases. Check out its exact tag. If no release is
+available, tell me rather than installing main. Use a normal install, not --dev.
+
+Check dependencies and install what's missing. Detect my installed Claude Code
+and Codex CLIs, help me complete sign-in if needed, and configure the brain to use
+an available one. Run ./install.sh and help me add my AssemblyAI API key directly
+to the local secrets.env file with mode 600. Never ask me to paste the key into
+this conversation or print it in command output.
+
+Back up config files before editing them. Add the talk and fresh-conversation
+bindings without overwriting existing shortcuts; ask me to choose alternatives
+if they conflict. Keep the default ask approval level. Offer herdr, browser, and
+mouse-control integrations as optional setup choices, and leave unavailable
+integrations disabled or on auto.
+
+Run auren doctor, resolve setup problems, and restart Auren when idle. Tell me
+what changed, anything I still need to do, and how to try my first voice request.
+```
+
+### Manual installation
 
 Install the first release:
 
