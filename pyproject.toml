@@ -2,6 +2,9 @@
 name = "auren"
 version = "0.1.0"
 description = "Voice assistant for an Omarchy/Hyprland laptop"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "evdev>=2.0.0",

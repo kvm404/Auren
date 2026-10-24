@@ -93,9 +93,9 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
-| `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, remote, source, mode |
+| `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode, dirty, committed, installed_at |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |
-| `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (checking, current, available, updating, done, failed, error, unknown), `step`, `message`, `latest`, `commits`, `count`, `checked_at` (read by the bar plugin) |
+| `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (current, available, updating, done, failed, error, unknown), `channel` (`releases`), `installed`, `step`, `message`, `latest` (commit, short, date, subject, release tag, name, url), `commits`, `count`, `checked_at`, `started_at`, `finished_at`, `note`, `log` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |
 | `~/.config/auren/panel.json` | bar plugin | The panel's own settings (`notifyUpdates`) |
 

@@ -1,48 +1,39 @@
 # Roadmap
 
-A voice-driven personal assistant for this Omarchy/Hyprland laptop: talk to it, it answers by voice,
-and it can do tasks on the computer, including prompting coding agents in herdr panes. A mascot
-overlay shows what it's doing.
+Auren targets voice-driven tasks on an Omarchy desktop. The first release is v0.1.0; see the
+[changelog](../CHANGELOG.md) for its scope and limitations.
 
-## Pieces
+## Working today
 
-| # | Piece | Status |
-|---|---|---|
-| 1 | **Voice (TTS):** Supertonic 3, voice F2, local | ✅ decided, [0001](decisions/0001-assistant-voice.md) |
-| 2 | **Ears (STT):** AssemblyAI streaming 3.5 Pro + vocabulary; ElevenLabs backup | ✅ decided, [0002](decisions/0002-speech-to-text.md) |
-| 3 | **Brain:** Claude Haiku 5.5 via Claude Code (Pro); GPT-6 Luna via Codex as backup (wired, automatic switch); Groq Qwen as last resort (not wired) | ✅ [0003](decisions/0003-brain.md) |
-| 4 | **Hands (tools):** system profile, herdr, desktop and system, browser (Open Browser Use), routines ([hands.md](hands.md)); connected to the brain via MCP (`uv run auren chat`). Screen control (see the screen, mouse, keyboard) as a fallback | ✅ first version |
-| 5 | **Safety:** approval levels (ask, once per task, don't ask) with an always-ask floor; one yes for a batch, read by the daemon or clicked; screen and web text treated as untrusted | ✅ ([safety.md](safety.md)) |
-| 6 | **Daemon:** press to talk (Super+A; Super+Shift+A for a fresh conversation), ears → brain → voice, interrupting; systemd user service ([daemon.md](daemon.md)) | ✅ first version |
-| 7 | **Mascot overlay:** a character floating over the desktop: drag anywhere, hold to talk, scroll to resize; fades when idle, sleeps; live transcript, activity, captions and yes/no questions in a speech bubble; bounces to the mic and voice. Its own Quickshell instance, systemd user service ([mascot.md](mascot.md)). More mascots later | ✅ first version |
-| 8 | **Bar plugin:** the mascot in pixels in the Omarchy bar showing Auren's state; panel with the live mascot (hold to talk), last exchange, switches (Auren, voice replies, mascot, sleep animation), brain (auto/Claude/Codex), actions (fresh, stop, restart, log) ([bar-plugin.md](bar-plugin.md)) | ✅ first version |
-| 9 | **Dictation mode** (⏭ next): same ears, but the text is typed into the focused app (`wtype`) instead of going to the brain. Replaces a separate "new Voisu" app | planned |
-| 10 | **More mascots:** Veyra (a lavender fox spirit) and Auren (a cobalt hover-bot), on a shared `MascotBase`; the first mascot, Clawd (the Claude Code mascot), was later removed and Auren became the default; picked on the bar panel's Mascot page, with a matching voice (Auren M3) ([mascot.md](mascot.md)). The panel became four pages, with voice tuning (speed, quality, volume, pause) | ✅ first version |
+- AssemblyAI streaming speech recognition with detected and user-managed vocabulary.
+- Claude Code as the primary brain, Codex fallback on a usage limit before an action runs, and
+  configurable brain modes, models, and effort.
+- Local English speech with Supertonic 3 and adjustable voice settings.
+- Desktop, browser, screen, shell, herdr-agent, and Excalidraw tools.
+- Approval levels, bound confirmations, batch answers, cancellation, and the full-access send judge.
+- Press-to-start and press-to-send controls, fresh conversations, and typed terminal conversations.
+- Auren and Veyra mascots and a six-page Omarchy bar panel.
+- XDG settings, detection of optional integrations, diagnostics, and portable installation.
+- Published-release updates, service state preservation, and installation rollback.
 
-## Brain: what we know so far
+## Planned
 
-- Layered so that expensive models only do expensive work:
-  - **Layer 0:** direct commands ("volume up", "workspace 3") handled without an LLM.
-  - **Layer 1:** a fast, cheap model with tool calling for most requests.
-  - **Layer 2:** heavy work delegated to the user's existing agents (Claude Code, Codex, OpenCode)
-    in herdr panes via `herdr agent prompt <name> "..." --wait`.
-- The user is on Claude **Pro** (small limits, shared with daily coding), and also has Codex, OpenCode
-  (free models) and the Antigravity CLI.
-- Layer 1 also turns imperfect transcripts into intent, so it should get the vocabulary and system
-  context (herdr panes, focused window, projects).
-- Research sources: Artificial Analysis first, then a test on real requests, as with TTS and STT.
-- Research done 2026-10-10: [research/brain.md](research/brain.md) (shortlist and test plan).
+These are ideas for future work, not promises for a particular release:
 
-## Later
+- Dictation into the focused app using the same speech recognizer.
+- Direct API-key model backends and a review of supported authentication options for wider distribution.
+- Alternate speech-recognition backends and better handling of non-English input.
+- Completion alerts for background agent jobs.
+- User-installed mascots without edits to the shipped QML.
+- History retention controls and a more restrictive read-only approval mode.
+- Browser control in standalone web-app windows.
+- A neutral bar plugin ID with migration from `krvm.auren`.
+- Packaged distribution and an uninstall command.
 
-- Lecture-notes summary routine (the user will describe the lecture site and note format).
-- Wire the ElevenLabs STT backup and the Groq last-resort brain.
-- Alerts when a long agent job finishes; a spoken "stop" for running actions.
-- Our own copy of Open Browser Use, so web-app windows can be read like browser tabs.
-- Maybe move the mascot into the Omarchy shell process (saves ~78 MB).
+## Research and measurements
 
-## Notes
-
-- Keys (the user's choice): **Super+A** press to start talking, press again to send; **Super+Shift+A**
-  the same in a fresh conversation. No push-to-talk.
-- The project was called parth until 2026-10-10, when it was renamed Auren.
+The original provider comparisons live under [experiments](../experiments/), with decisions for
+[voice](decisions/0001-assistant-voice.md), [speech recognition](decisions/0002-speech-to-text.md), and
+[the brain](decisions/0003-brain.md). They record dated tests on one user's voice and laptop.
+Fallbacks mentioned only in those experiments, including ElevenLabs STT and Groq, are not wired
+into the runtime.

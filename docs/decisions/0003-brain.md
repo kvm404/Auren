@@ -1,6 +1,9 @@
-# 0003: The brain is Claude Haiku 5.5 through Claude Code, with GPT-6.1 Sol and Groq as backups
+# 0003: Claude Code is the primary brain, with Codex as backup
 
 Date: 2026-10-10 · Status: accepted
+
+Current runtime: Claude Code uses the configurable `haiku` alias; Codex is the only wired backup.
+Groq is experimental and is not used by the daemon.
 
 Update 2026-10-21: the backup is now **GPT-6 Luna** (`gpt-6-luna`), effort low. Sol stays available
 through `brain.codex_model` in `config.toml`. The comparison below is from the original decision.

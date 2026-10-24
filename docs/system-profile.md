@@ -20,7 +20,7 @@ uv run auren-profile --refresh              # rebuild the cache now
   - well-known token shapes;
   - `--password` / `--token` flags.
 
-  The user's `.bashrc` has three such secrets, and none of them reach the profile.
+  Redaction matches known patterns, not every possible secret. See [Privacy](privacy.md).
 
 ## Sources
 
@@ -39,17 +39,12 @@ uv run auren-profile --refresh              # rebuild the cache now
 | Battery, volume, memory | `/sys/class/power_supply`, `wpctl get-volume`, `/proc/meminfo` |
 | User services | `systemctl --user` (running, minus desktop plumbing) |
 
-## Facts about this setup worth knowing
+## Portability and limitations
 
-- **Omarchy 4.0.4.** Hyprland is configured in **Lua** (`~/.config/hypr/*.lua`), with defaults in `/usr/share/omarchy/default/hypr/`.
-- **Defaults:** browser Brave, terminal foot, editor Neovim, Omarchy's default coding agent **Codex**, PDFs in Document Viewer (Evince), Markdown in Typora.
-- **herdr runs in a foot terminal on the scratchpad workspace.** herdr workspaces in use: "TDS", "Obsidian" (panes in `~/Obsidian`) and "PROJECTS".
-- **Not installed:** Firefox, Spotify (`omarchy launch spotify` installs it), Slack, Telegram, Signal, VLC, GIMP, Thunderbird. Discord exists only as a web app.
-- **Useful Omarchy commands for the hands:**
-  - `omarchy launch or focus <pattern> <cmd>`, `omarchy launch webapp <url>`, `omarchy hyprland focus app <name>`;
-  - `omarchy capture screenshot [smart|region|windows|fullscreen] [slurp|copy|save]`, `omarchy capture text` (OCR);
-  - `omarchy audio output volume <raise|lower|mute-toggle|+N|N>`, `omarchy brightness display`;
-  - `omarchy reminder <minutes> <text>`, `omarchy notification send`, `omarchy toggle nightlight|idle|…`;
-  - `omarchy launch terminal herdr`;
-  - `omarchy agent prompt <prompt>` (starts the default coding agent with a prompt).
-- **Media keys** go through Omarchy's Lua binds. `playerctl` isn't installed.
+Browser, terminal, editor, coding agent, projects, and installed apps are detected on each machine.
+The source examples above describe the original development setup; counts and application choices
+vary by installation. Projects and browser behavior can be overridden in `config.toml`.
+
+Collector failures return an error for that source instead of preventing every other collector from
+running. The profile can include personal paths and window titles even after secret redaction.
+Do not publish the full profile without reviewing it.

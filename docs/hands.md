@@ -8,7 +8,7 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | herdr: coding agents and commands in panes | `hands/herdr.py` | ✅ |
 | Desktop and system: apps, windows, screenshots, volume, media, reminders | `hands/desktop.py` | ✅ |
 | Screen control: see the screen, mouse and keyboard (fallback) | `hands/screen.py` | ✅ |
-| Browser (the user's real Chromium browser via Open Browser Use), routines | `hands/browser.py`, `~/.config/auren/routines/` | ✅ first routine |
+| Browser (the user's real Chromium browser via Open Browser Use), routines | `hands/browser.py`, `~/.config/auren/routines/` | ✅ |
 
 ## herdr
 
@@ -29,11 +29,11 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | `list_agents()` | Every running agent: kind, status (idle, working, blocked, done), folder, workspace and tab; Auren's own marked |
 | `read_agent(agent, hint)` | The agent pane's recent output |
 | `prompt_agent(agent, text, hint, wait)` | Send a prompt, after switching the user's view to the agent (see below). With `wait`, return the agent's reply (the text after the echoed prompt, minus the TUI footer) once it settles |
-| `start_agent(kind, cwd, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab once the agent is running |
-| `run_command(command, cwd, name, wait)` | New tab in `auren`, run a shell command; the exit code comes from a split marker (`echo "AUREN""_EXIT=$?"`), so the typed command never matches it |
-| `command_result(job, timeout_s)` | Wait for a command job to finish; exit code and output |
+| `start_agent(kind, folder, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab once the agent is running |
+| `run_command(command, folder, name, wait)` | New tab in `auren`, run a shell command; the exit code comes from a split marker (`echo "AUREN""_EXIT=$?"`), so the typed command never matches it |
+| `job_status(job, wait_s)` | Wait for a command job to finish; exit code and output |
 | `close_job(job)` | Close one of Auren's own tabs |
-| `focus(agent, hint)` | Switch herdr's view to that pane and bring herdr's window up |
+| `show_agent(agent, hint)` | Switch herdr's view to that pane and bring herdr's window up |
 
 **Watching agents work.** Giving an agent a task (`start_agent`, `prompt_agent`) brings it in front of the
 user: herdr's view switches to the agent's tab (`herdr tab focus` / `herdr agent focus`) and
@@ -152,7 +152,7 @@ First routine, `mlp-slides.md` (verified): Chrome bookmark Courses/MLP → Suppl
 
 ## Scratchpad
 
-herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). Hyprland opens new windows on whatever is showing, so an app launched while the scratchpad was open landed inside it. `launch_app`, `open_url` and `open_path` now hide a showing special workspace first, so new windows land on the user's normal workspace. `launch_app` only moves the user's view when asked (`follow=False` by default).
+herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). Hyprland opens new windows on whatever is showing, so an app launched while the scratchpad was open landed inside it. `launch_app`, `open_url` and `open_path` now hide a showing special workspace first, so new windows land on the user's normal workspace. `launch_app` follows the target by default; `follow=False` keeps the user on the current workspace.
 
 ## Backup brain
 
@@ -162,6 +162,11 @@ herdr lives in a foot terminal on Omarchy's scratchpad (`special:scratchpad`). H
 - Pending confirmations live in the runtime, and each message lists them in `<awaiting_confirmation>`, so a "yes" works even though every Codex run is fresh.
 - It only takes over before anything has been done in that request (see [safety.md](safety.md#stopping)).
 - Speed: ~13–17 s per request against ~3–5 s for Claude. `auren chat --backup` forces it.
+
+## Historical testing notes
+
+The dated sections below record discoveries and subsequent fixes. Later entries supersede earlier
+workarounds; the current safety behavior is documented in [Safety](safety.md).
 
 ## Lessons from the user's first voice test (2026-10-10)
 
@@ -177,7 +182,7 @@ The fallback for what no other tool reaches: browser permission popups, apps' ow
 | Tool | How |
 |---|---|
 | `look_at_screen()` | `grim` captures the focused monitor at 1024 px wide, with a light labelled grid every 50 px (numbers along the top and left). Returned as an image the brain sees |
-| `click_at(x, y, target, button, double)` | Image pixels → layout coordinates (monitor position + scale). Moves with Hyprland (`hl.dsp.cursor.move`), clicks with a virtual mouse made through `/dev/uinput` (python-evdev; the user can write to `/dev/uinput`), then puts the cursor back. `target` says what is clicked. Labels like buy, pay, send, post, submit, delete need confirmation |
+| `click_at(x, y, target, button, double)` | Image pixels → layout coordinates (monitor position + scale). Moves with Hyprland (`hl.dsp.cursor.move`), clicks with a virtual mouse made through `/dev/uinput` (python-evdev; the user can write to `/dev/uinput`), leaves the cursor at the click so focus follows the intended window. `target` says what is clicked. Labels like buy, pay, send, post, submit, delete need confirmation |
 | `scroll_at`, `type_text`, `press_keys` | Wheel via the virtual mouse; shortcuts via `wtype`. Text is pasted (`wl-copy --sensitive`, Ctrl+V, then the old clipboard is put back unless the user copied something meanwhile), except in terminals (known window classes), which get `wtype`. Clipboard helpers: `src/auren/hands/clipboard.py`, shared with Excalidraw. Alt+F4, Ctrl+Q, Ctrl+W and similar need confirmation |
 
 **Brain rules.** Use these only as a fallback, or when the user asks; look first; click by the grid numbers; look again to verify; say what was clicked.

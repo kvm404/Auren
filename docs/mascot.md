@@ -69,7 +69,7 @@ systemctl --user restart auren-mascot
   mascot bug can't affect the bar. It's a layer-shell surface on the overlay layer: on every
   workspace, never takes keyboard focus, not in the window list.
 - **Input mask** = the body's mouse area outside a held gesture, so clicks around it reach the windows below. The bubble is a
-  second layer surface with an empty input mask (fully click-through).
+  second layer surface that normally passes clicks through, with an input region for Yes/No buttons while a confirmation is open.
 - **Dragging:** the transparent layer surface stays screen-sized at a fixed origin. Only the mascot
   moves, so pressing, dragging and releasing never resize or move the Wayland surface. The input mask
   follows the same body rectangle as the mouse area; it covers the screen during a held gesture so a
