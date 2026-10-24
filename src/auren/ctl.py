@@ -1,6 +1,6 @@
 """auren-ctl: send one command to the daemon and print its reply (see docs/ipc.md).
 
-    auren-ctl talk | talk-fresh | cancel | status | ask <text> | say <text> | voice off | ...
+    auren-ctl talk | talk-fresh | listen | listen-fresh | cancel | status | ask <text> | say <text> | voice off | ...
 
 Key bindings, the mascot and the bar plugin call this, so it only imports what it needs.
 """

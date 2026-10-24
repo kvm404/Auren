@@ -17,3 +17,9 @@ def test_the_connection_keeps_push_to_talk_and_the_model():
 
 def test_the_vocabulary_is_capped_at_100_terms():
     assert len(json.loads(ears.connection_params([f"w{i}" for i in range(150)])["keyterms_prompt"])) == 100
+
+
+def test_hands_free_turns_end_on_a_short_silence():
+    assert ears.connection_params([])["min_turn_silence"] == 10000          # push-to-talk: the key ends the turn
+    params = ears.connection_params([], hands_free=True)
+    assert params["min_turn_silence"] < params["max_turn_silence"] <= 3000

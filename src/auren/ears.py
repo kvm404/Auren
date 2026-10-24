@@ -8,7 +8,8 @@ Connection settings (see docs/decisions/0002-speech-to-text.md):
 - speech_model universal-3-5-pro (3.6 Pro answered in Hindi script on this voice)
 - language_codes ["en"]: Auren is English-only. 3.5 Pro ignores it (Hindi speech still comes back in Devanagari);
   it is sent for the models that honor it
-- min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
+- min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint). A hands-free
+  turn (one tap, from the phone) uses short silences instead, and its first finished sentence ends it
 - keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
 - audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
 
@@ -75,22 +76,23 @@ def vocabulary(profile=None, limit: int = 100) -> list[str]:
     return out[:limit]
 
 
-def connection_params(vocab: list[str]) -> dict:
+def connection_params(vocab: list[str], hands_free: bool = False) -> dict:
     """The query parameters of the streaming connection."""
+    silence = (1200, 2500) if hands_free else (10000, 10000)
     params = {"sample_rate": RATE, "encoding": "pcm_s16le", "speech_model": "universal-3-5-pro",
               "language_codes": json.dumps(["en"]),
-              "min_turn_silence": 10000, "max_turn_silence": 10000}
+              "min_turn_silence": silence[0], "max_turn_silence": silence[1]}
     if vocab:
         params["keyterms_prompt"] = json.dumps(vocab[:100])
     return params
 
 
 class Listening:
-    """One push-to-talk turn."""
+    """One push-to-talk turn. With on_end it is hands-free: on_end is called when the user stops talking."""
 
     def __init__(self, vocab: list[str], on_partial: Callable[[str], None] | None = None, source: list[str] | None = None,
-                 on_level: Callable[[float], None] | None = None):
-        self.vocab, self.on_partial, self.on_level = vocab, on_partial, on_level
+                 on_level: Callable[[float], None] | None = None, on_end: Callable[[], None] | None = None):
+        self.vocab, self.on_partial, self.on_level, self.on_end = vocab, on_partial, on_level, on_end
         self.source = source or []           # extra pw-record args (e.g. --target) for testing
         self.mic: asyncio.subprocess.Process | None = None
         self.ws = None
@@ -120,7 +122,7 @@ class Listening:
             "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         self._tasks.append(asyncio.create_task(self._read_mic()))
-        self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(connection_params(self.vocab))}", key)))
+        self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(connection_params(self.vocab, self.on_end is not None))}", key)))
 
     async def _read_mic(self) -> None:
         while chunk := await self.mic.stdout.read(CHUNK):
@@ -163,6 +165,8 @@ class Listening:
                             self._turn_ended(text)
                             if self.released_at:
                                 self._final.set()
+                            elif self.on_end and text.strip():
+                                self.on_end()
                         elif text:
                             self.partial = text
                             self._heard_live(text)
@@ -219,8 +223,13 @@ class Listening:
         self.released_at = time.perf_counter()
         if self.mic and self.mic.returncode is None:
             self.mic.send_signal(signal.SIGINT)
-        # Return as soon as the final turn is in; don't wait for the connection to close.
-        waits = [asyncio.create_task(self._final.wait()), asyncio.create_task(self._done.wait())]
+        # Return as soon as the final turn is in; don't wait for the connection to close. A hands-free turn
+        # already has its final: wait briefly for the session to end cleanly instead, since sessions the
+        # service never sees end count against its limit on concurrent sessions for a while.
+        if self.on_end and self.finals:
+            waits, timeout = [asyncio.create_task(self._done.wait())], 1.5
+        else:
+            waits = [asyncio.create_task(self._final.wait()), asyncio.create_task(self._done.wait())]
         done, pending = await asyncio.wait(waits, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()

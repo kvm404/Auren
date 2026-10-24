@@ -3,6 +3,8 @@
     auren daemon            # run in the foreground (later: a systemd user service)
     auren-ctl talk          # Super+A: start listening; press again to stop and send
     auren-ctl talk-fresh    # Super+Shift+A: the same, in a fresh conversation
+    auren-ctl listen        # hands-free (a phone button): start listening; it sends when you stop talking
+    auren-ctl listen-fresh  # the same, in a fresh conversation
     auren-ctl start|stop    # push-to-talk (press / release), used by holding the mascot
     auren-ctl ask <text>    # a typed request through the same pipeline (spoken reply)
     auren-ctl say <text> | cancel | status | quit
@@ -181,15 +183,17 @@ class Daemon:
 
     async def command(self, line: str) -> str:
         cmd, _, arg = line.strip().partition(" ")
-        if cmd in ("talk", "talk-fresh") and not self.listening and time.monotonic() - self._sent_by_itself < ALREADY_SENT:
+        if cmd in ("talk", "talk-fresh", "listen", "listen-fresh") and not self.listening and time.monotonic() - self._sent_by_itself < ALREADY_SENT:
             return "already sent"                    # pressed to send just as the quiet sent it: not a new listen or a stop
-        if cmd in ("talk", "talk-fresh") and not self.listening and self.state in ("thinking", "working"):
+        if cmd in ("talk", "talk-fresh", "listen", "listen-fresh") and not self.listening and self.state in ("thinking", "working"):
             await self.cancel()                      # the talk key stops an answer in progress
             return "stopped"
         if cmd == "talk":
             return await (self.release() if self.listening else self.press())
         if cmd == "talk-fresh":
             return await (self.release() if self.listening else self.press(fresh=True))
+        if cmd in ("listen", "listen-fresh"):
+            return await (self.release() if self.listening else self.press(cmd == "listen-fresh", hands_free=True))
         if cmd == "start":
             return await self.press()
         if cmd == "stop":
@@ -355,14 +359,17 @@ class Daemon:
         self._refresh_state()
         return "tts " + " ".join(f"{k} {v}" for k, v in values.items())
 
-    async def press(self, fresh: bool = False) -> str:
+    async def press(self, fresh: bool = False, hands_free: bool = False) -> str:
         if self.listening:
             return "already listening"
         if self.voice:
             self.voice.stop()            # talking over auren interrupts it
         if fresh:                        # restart the brain while the user speaks; the answer waits for it
             asyncio.create_task(self._forget_quietly())
-        session = self.listening = Listening(self.vocab, on_level=self.level.set)
+        def ended() -> None:                 # hands-free: the user stopped talking, so send it
+            if self.listening is session:
+                asyncio.create_task(self.release())
+        session = self.listening = Listening(self.vocab, on_level=self.level.set, on_end=ended if hands_free else None)
         session.on_partial = lambda _text: self._show_listening(session, fresh)
         self._reminding = False
         try:
