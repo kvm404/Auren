@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from evdev.uinput import UInputError
 
 from auren import tools
 from auren.hands import excalidraw as ex
@@ -266,9 +267,81 @@ def test_physical_keys_are_only_modifiers_and_digits():
         screen.press_code("ctrl+q")
 
 
-def test_a_physical_key_is_let_go_even_when_pressing_it_fails(monkeypatch):
+def test_a_shortcut_with_a_digit_is_pressed_by_physical_key(monkeypatch):
+    sent = []
+    monkeypatch.setattr(screen, "press_code", lambda combo: sent.append(("code", combo)) or "pressed")
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(("wtype", cmd[cmd.index("-k") + 1])) or "")
+    monkeypatch.setattr(screen, "_refocus", lambda: None)
+    for combo in ("ctrl+2", "Alt+9", "ctrl+t", "2"):
+        screen.press_keys(combo)
+    assert sent == [("code", "ctrl+2"), ("code", "Alt+9"), ("wtype", "t"), ("wtype", "2")]
+
+
+@pytest.mark.parametrize("error", [
+    PermissionError("permission denied"), FileNotFoundError("no /dev/uinput"),
+    UInputError('"/dev/uinput" cannot be opened for writing'),
+])
+@pytest.mark.parametrize("combo,modifier,key", [
+    ("ctrl+1", "ctrl", "1"), ("Shift+2", "shift", "2"),
+    ("Alt+9", "alt", "9"), ("win+0", "logo", "0"),
+])
+def test_digit_shortcuts_fall_back_when_the_virtual_keyboard_is_unavailable(monkeypatch, error, combo, modifier, key):
+    import evdev
+    sent = []
+
+    def unavailable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(evdev, "UInput", unavailable)
+    monkeypatch.setattr(screen, "_keyboard", None)
+    monkeypatch.setattr(screen, "_refocus", lambda: None)
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(cmd) or "")
+    assert screen.press_keys(combo) == f"pressed {combo}"
+    assert sent == [["wtype", "-M", modifier, "-k", key, "-m", modifier]]
+    assert screen._keyboard is None
+    with pytest.raises(screen.ScreenError, match="can't create a virtual keyboard"):
+        screen.press_code(combo)                 # physical-key callers must still report failure
+    assert len(sent) == 1
+
+
+def test_digit_shortcuts_use_the_virtual_keyboard_when_available(monkeypatch):
     from evdev import ecodes as e
-    up = []
+    events, sent = [], []
+
+    class Keyboard:
+        def write(self, kind, code, value):
+            events.append((code, value))
+
+        def syn(self):
+            pass
+
+    monkeypatch.setattr(screen, "_keyboard", Keyboard())
+    monkeypatch.setattr(screen, "_refocus", lambda: None)
+    monkeypatch.setattr(screen.time, "sleep", lambda s: None)
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(cmd) or "")
+    assert screen.press_keys("Control+win+2") == "pressed Control+win+2"
+    assert events == [(e.KEY_LEFTCTRL, 1), (e.KEY_LEFTMETA, 1), (e.KEY_2, 1),
+                      (e.KEY_2, 0), (e.KEY_LEFTMETA, 0), (e.KEY_LEFTCTRL, 0)]
+    assert sent == []
+
+
+def test_digit_shortcuts_do_not_retry_a_focus_error(monkeypatch):
+    sent = []
+
+    def unfocused():
+        raise screen.ScreenError("can't focus the target window")
+
+    monkeypatch.setattr(screen, "_refocus", unfocused)
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(cmd) or "")
+    with pytest.raises(screen.ScreenError, match="can't focus"):
+        screen.press_keys("ctrl+2")
+    assert sent == []
+
+
+@pytest.mark.parametrize("press", [screen.press_code, screen.press_keys])
+def test_a_physical_key_is_let_go_even_when_pressing_it_fails(monkeypatch, press):
+    from evdev import ecodes as e
+    up, sent = [], []
 
     class Keyboard:
         def write(self, kind, code, value):
@@ -281,9 +354,11 @@ def test_a_physical_key_is_let_go_even_when_pressing_it_fails(monkeypatch):
             pass
     monkeypatch.setattr(screen, "_refocus", lambda: None)
     monkeypatch.setattr(screen, "_keys", Keyboard)
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(cmd) or "")
     with pytest.raises(OSError):
-        screen.press_code("shift+2")
+        press("shift+2")
     assert up == [e.KEY_2, e.KEY_LEFTSHIFT]
+    assert sent == []                             # never retry after keys have already been sent
 
 
 def test_the_paste_point_is_left_of_the_welcome_menu_in_a_half_screen_window_too():
