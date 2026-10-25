@@ -189,6 +189,17 @@ The fallback for what no other tool reaches: browser permission popups, apps' ow
 
 **Brain rules.** Use these only as a fallback, or when the user asks; look first; click by the grid numbers; look again to verify; say what was clicked.
 
+**Existing browser tabs.** The system snapshot lists windows, whose titles reflect only the selected
+tab. It cannot establish that a background tab is absent. For a request such as "switch to the Amazon
+tab", Auren focuses the intended browser and uses its Tab Search to find the open tab by site or
+title, then verifies the selected page. Chrome's Tab Search opens with Ctrl+Shift+A, as described in
+[Chrome's tab guide](https://support.google.com/chrome/answer/2391819). Auren checks the search UI before
+typing and selects an open result rather than a recently closed tab. It asks which one when the
+request cannot distinguish multiple matches. This screen workflow remains available when browser
+automation is disabled; it does not open a duplicate page or switch to the default browser. An
+explicit `focus_window` also changes the target for subsequent keys, overriding an earlier click in
+another window. Numbered tab requests continue to use Ctrl+digit.
+
 **Tested 2026-10-10:**
 - A local test page in Chrome: "click the big green button with the mouse" → look, `click_at(512, 345)`, look → "It turned red and now says CLICKED!" (8.6 s).
 - The virtual mouse shows up as a Hyprland input device (`auren-virtual-mouse`), and a terminal with mouse reporting received a real press and release.
