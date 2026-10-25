@@ -266,6 +266,16 @@ def test_physical_keys_are_only_modifiers_and_digits():
         screen.press_code("ctrl+q")
 
 
+def test_a_shortcut_with_a_digit_is_pressed_by_physical_key(monkeypatch):
+    sent = []
+    monkeypatch.setattr(screen, "press_code", lambda combo: sent.append(("code", combo)) or "pressed")
+    monkeypatch.setattr(screen, "_sh", lambda cmd, timeout=10: sent.append(("wtype", cmd[cmd.index("-k") + 1])) or "")
+    monkeypatch.setattr(screen, "_refocus", lambda: None)
+    for combo in ("ctrl+2", "Alt+9", "ctrl+t", "2"):
+        screen.press_keys(combo)
+    assert sent == [("code", "ctrl+2"), ("code", "Alt+9"), ("wtype", "t"), ("wtype", "2")]
+
+
 def test_a_physical_key_is_let_go_even_when_pressing_it_fails(monkeypatch):
     from evdev import ecodes as e
     up = []

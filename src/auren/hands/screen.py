@@ -24,7 +24,9 @@ no command line.
   a typed newline would press Enter, which sends in a chat. Terminals still get `wtype`, since Ctrl+V
   isn't paste there. The pasted text is marked sensitive, so a clipboard history doesn't keep it, and
   the old clipboard isn't put back over something the user copied meanwhile.
-- press_keys(): `wtype` (Wayland virtual keyboard), into the same window.
+- press_keys(): `wtype` (Wayland virtual keyboard), into the same window. A modifier with a digit
+  goes through press_code instead: wtype's keys sit on made-up keycodes, and Chromium reads the keycode
+  for Ctrl+1..9, so wtype's Ctrl+2 did nothing in Brave (or picked tab 1 when it landed on KEY_1's code).
 - press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
   uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
   typed see the wrong key: Excalidraw's Shift+2 is one.
@@ -284,7 +286,7 @@ def click_layout(lx: int, ly: int, button: str = "left", double: bool = False, r
 
 
 _HOLD = {"shift": "KEY_LEFTSHIFT", "ctrl": "KEY_LEFTCTRL", "control": "KEY_LEFTCTRL", "alt": "KEY_LEFTALT",
-         "super": "KEY_LEFTMETA"}
+         "super": "KEY_LEFTMETA", "win": "KEY_LEFTMETA"}
 
 
 _DIGITS = {str(d): f"KEY_{d}" for d in range(10)}
@@ -473,6 +475,8 @@ def press_keys(combo: str) -> str:
     unknown = [p for p in parts[:-1] if p.lower() not in _MODS]
     if unknown:
         raise ScreenError(f"unknown modifier(s): {', '.join(unknown)}")
+    if mods and parts[-1] in _DIGITS:       # Ctrl+2 and the like: by physical key (see the module docstring)
+        return press_code(combo)
     key = _KEY_NAMES.get(parts[-1].lower(), parts[-1])
     _refocus()
     cmd = ["wtype"]
