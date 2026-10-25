@@ -27,6 +27,7 @@ no command line.
 - press_keys(): `wtype` (Wayland virtual keyboard), into the same window. A modifier with a digit
   goes through press_code instead: wtype's keys sit on made-up keycodes, and Chromium reads the keycode
   for Ctrl+1..9, so wtype's Ctrl+2 did nothing in Brave (or picked tab 1 when it landed on KEY_1's code).
+  If the virtual keyboard can't be created, fall back to wtype before any keys have been sent.
 - press_code(): a shortcut by physical key (modifiers and digits), from the virtual keyboard. `wtype`
   uploads its own keymap, so apps that read which key was pressed (event.code) rather than what it
   typed see the wrong key: Excalidraw's Shift+2 is one.
@@ -56,6 +57,10 @@ _clicked: dict | None = None         # the window the last click landed in, for 
 
 class ScreenError(RuntimeError):
     pass
+
+
+class _KeyboardUnavailable(ScreenError):
+    """Virtual keyboard creation failed before any key events could be sent."""
 
 
 def _sh(cmd: list[str], timeout: float = 10) -> str:
@@ -299,11 +304,12 @@ def _keys():
     if _keyboard is None:
         from evdev import UInput
         from evdev import ecodes as e
+        from evdev.uinput import UInputError
         try:
             _keyboard = UInput({e.EV_KEY: [getattr(e, k) for k in sorted({*_HOLD.values(), *_DIGITS.values()})]},
                                name="auren-virtual-keys")
-        except (OSError, PermissionError) as err:
-            raise ScreenError(f"can't create a virtual keyboard via /dev/uinput: {err}") from None
+        except (OSError, UInputError) as err:
+            raise _KeyboardUnavailable(f"can't create a virtual keyboard via /dev/uinput: {err}") from None
         time.sleep(0.6)
     return _keyboard
 
@@ -476,7 +482,10 @@ def press_keys(combo: str) -> str:
     if unknown:
         raise ScreenError(f"unknown modifier(s): {', '.join(unknown)}")
     if mods and parts[-1] in _DIGITS:       # Ctrl+2 and the like: by physical key (see the module docstring)
-        return press_code(combo)
+        try:
+            return press_code(combo)
+        except _KeyboardUnavailable:
+            pass                          # no keys were sent: the existing wtype path is safe to try
     key = _KEY_NAMES.get(parts[-1].lower(), parts[-1])
     _refocus()
     cmd = ["wtype"]
