@@ -103,7 +103,7 @@ uv run auren ask "open whatsapp on workspace 2"
 
 - **The brain** (`src/auren/brain/`) keeps one Claude Code process running: Haiku 5.5, thinking on, effort low. It uses Auren's instructions (`brain/prompt.py`) plus the static system profile (~900 tokens). Every message carries the live snapshot (~220 tokens).
 - **Tools:** only Auren's tools (`--tools ""`, `--mcp-config` → `python -m auren.server`, `--allowedTools mcp__auren`). The adapter forwards to the tool runtime: the daemon's, or for `auren chat` one of its own (its own session).
-- **Fresh conversation** after 40k tokens of context.
+- **Fresh conversation** after 80k tokens of context.
 - **Replies are cleaned for speech:** backticks, bold and bullets are removed, and the brain is told to speak plainly without paths or commands.
 - **Isolation from the user's own Claude settings:** the process runs from `$XDG_RUNTIME_DIR/auren/brain` (outside `$HOME`) with `--setting-sources local`. Claude Code loads `.claude/CLAUDE.md` from **every parent folder**, so a working folder under `$HOME` picks up the user's personal `~/.claude/CLAUDE.md` even with `--setting-sources project`. That happened once: the brain started Codex with the user's personal `codex exec` flags. Checked afterwards: the brain reports no CLAUDE.md content.
 

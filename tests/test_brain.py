@@ -146,6 +146,20 @@ def test_a_stop_before_the_message_is_sent_keeps_it_unsent(tmp_path, monkeypatch
         c.stop()
 
 
+def test_past_max_context_starts_a_fresh_conversation(tmp_path, monkeypatch):
+    c = _claude(tmp_path, monkeypatch)
+    try:
+        c.start()
+        proc = c.proc
+        c.context_tokens = b.MAX_CONTEXT + 1
+        said = [e for e in c.ask("hello") if e[0] == "say"]
+        assert b.MAX_CONTEXT == 80_000
+        assert said and c.proc is not proc and c.proc is not None
+        assert c.context_tokens <= b.MAX_CONTEXT
+    finally:
+        c.stop()
+
+
 def test_a_stop_with_nothing_in_progress_does_nothing(tmp_path, monkeypatch):
     c = _claude(tmp_path, monkeypatch)
     try:

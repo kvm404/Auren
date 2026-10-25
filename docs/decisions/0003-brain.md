@@ -27,7 +27,7 @@ future work, not an existing configuration switch.
 - The main Claude process gets Auren's system prompt, its MCP adapter, and no built-in action tools.
 - Its working folder is `$XDG_RUNTIME_DIR/auren/brain`, with `--setting-sources local`, to keep personal
   coding instructions out of the assistant's conversation in a normal desktop session.
-- Claude starts a fresh conversation after 40,000 context tokens. A user-requested fresh conversation
+- Claude starts a fresh conversation after 80,000 context tokens. A user-requested fresh conversation
   also clears Codex's recent exchanges and pending confirmations.
 - `--no-session-persistence` for Claude and `--ephemeral` for Codex limit CLI conversation persistence;
   Auren maintains its own local history as described in [Privacy](../privacy.md).
