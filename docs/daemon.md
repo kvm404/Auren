@@ -24,7 +24,7 @@
 
 ## Fresh conversation
 
-The brain keeps one conversation going, and starts a fresh one by itself past ~40k tokens. Saying just
+The brain keeps one conversation going, and starts a fresh one by itself past ~80k tokens. Saying just
 "start fresh", "new conversation", "forget everything" (also "forget all that", "clear your memory",
 "reset the conversation") or running `auren-ctl forget` starts a fresh one now. It doesn't go to the
 brain: the daemon matches the phrase (`daemon.FORGET`), restarts the Claude process (warm, ~1 s; not in codex mode) and

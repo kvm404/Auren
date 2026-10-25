@@ -32,7 +32,7 @@ from ..profile import Profile
 from . import prompt
 
 log = logging.getLogger("auren")
-MAX_CONTEXT = 40_000            # tokens; then start a fresh conversation
+MAX_CONTEXT = 80_000            # tokens; then start a fresh conversation (under Haiku 5.5's 100k cheap-input tier)
 INTERRUPT_GRACE = 5.0           # seconds for Claude Code to stop by itself before its process is killed
 LIMIT_WORDS = ("usage limit", "rate limit", "limit reached", "out of usage", "quota")
 
