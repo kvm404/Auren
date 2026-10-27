@@ -23,14 +23,20 @@ def test_rules_follow_the_integrations():
     assert "Coding agents aren't connected" in bare and "can't move or click the mouse" in bare
 
 
-@pytest.mark.parametrize("integrations", [{"screen"}, {"browser", "screen"}])
-def test_named_browser_tabs_are_searched_and_verified_even_without_browser_automation(integrations):
+@pytest.mark.parametrize("integrations", [{"tabs"}, {"tabs", "screen"}, {"tabs", "browser", "screen"}])
+def test_named_browser_tabs_use_direct_navigation_without_screen_search(integrations):
     rules = prompt.rules(integrations)
-    assert "background tabs" in rules and "not focus_window" in rules
-    assert "ctrl+shift+a" in rules and "before typing the name" in rules
-    assert "matching OPEN tab" in rules and "recently closed" in rules
-    assert "Check the selected page" in rules and "before claiming success" in rules
-    assert "can't read or click inside web pages" not in rules
+    assert "browser_switch_tab" in rules and "tab_id" in rules
+    assert "without screenshots, typing or message-send confirmations" in rules
+    assert "ctrl+shift+a" not in rules
+    assert "Do not open a duplicate tab" in rules
+
+
+def test_missing_direct_connection_does_not_fall_back_to_typing_a_tab_query():
+    rules = prompt.rules({"screen"})
+    assert "extension needs to be connected" in rules
+    assert "Do not imitate tab search" in rules
+    assert "another screenshot invalidates that pending click" in rules
 
 
 def test_the_snapshot_does_not_present_browser_window_titles_as_a_tab_inventory():

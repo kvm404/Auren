@@ -48,6 +48,8 @@ _PHRASES = {
     "close_job": "Closing a job",
     "show_agent": "Showing the agent",
     "browser_open": "Opening the browser",
+    "browser_tabs": "Finding browser tabs",
+    "browser_switch_tab": "Switching browser tab",
     "browser_read": "Reading the page",
     "browser_click": "Clicking {target}",
     "browser_type": "Typing in the browser",

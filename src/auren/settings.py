@@ -149,6 +149,8 @@ KEYS = [
         "Coding agents and commands in herdr tabs: auto (if herdr is installed), true or false. Without it, commands run in the background"),
     Key("integrations.browser", "integrations.browser", "auto", _switch,
         "Browser tools through Open Browser Use: auto (if it's installed), true or false"),
+    Key("integrations.tabs", "integrations.tabs", "auto", _switch,
+        "Direct tab navigation through Auren Tabs: auto (when its extension is connected), true or false"),
     Key("integrations.screen", "integrations.screen", "auto", _switch,
         "Mouse control (click, drag, scroll on the screen): auto (if /dev/uinput is writable), true or false"),
     Key("browser.name", "browser.name", "auto", _name,

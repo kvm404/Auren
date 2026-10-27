@@ -16,6 +16,10 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test tests/test_tab_extension.mjs
 
   mascot-drag:
     runs-on: ubuntu-latest

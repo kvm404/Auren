@@ -21,6 +21,7 @@ auren = "auren.cli:main"
 auren-ctl = "auren.ctl:main"
 auren-profile = "auren.profile.cli:main"
 auren-server = "auren.server:main"
+auren-tab-host = "auren.tab_host:main"
 
 [build-system]
 requires = ["hatchling"]
