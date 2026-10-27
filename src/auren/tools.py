@@ -44,7 +44,6 @@ from . import safety
 from .brain.judge import Judge
 from .hands import browser as web
 from .hands import desktop, excalidraw, herdr, screen, shell
-from .hands import tabs as tab_control
 from .integrations import active, hidden_tools
 from .profile import Profile
 
@@ -356,7 +355,7 @@ def _run(fn, *args, **kwargs) -> str:
     try:
         out = fn(*args, **kwargs)
     except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, shell.ShellError,
-            excalidraw.ExcalidrawError, tab_control.TabError, PermissionError, ValueError) as e:
+            excalidraw.ExcalidrawError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
         log.exception("%s failed", getattr(fn, "__name__", fn))
@@ -698,21 +697,6 @@ def show_agent(agent: str, hint: str = "") -> str:
 
 
 # --- browser (the user's real, logged-in Chromium browser) ---------------------------------------------
-
-@tool(repeatable=True, lock=BROWSER)
-def browser_tabs(query: str = "", browser: str = "") -> str:
-    """List existing browser tabs by site or title. Name the intended browser (such as brave) when known.
-    Returns tab IDs, titles, URLs, windows and positions. Reads metadata only, without screenshots."""
-    return _web(_run(tab_control.list_tabs, query, browser))
-
-
-@tool(repeatable=True, lock=SCREEN)
-def browser_switch_tab(query: str, browser: str = "", tab_id: int = 0) -> str:
-    """Switch directly to an existing tab by site or title, using the browser's tab API. No screenshots,
-    typing, clicks, or send confirmations. If multiple tabs match, ask which one, then pass its tab_id
-    with the same query and browser. Never opens, closes or regroups tabs. A missing connection is an
-    error: do not substitute screen typing or clicking."""
-    return _web(_run(tab_control.switch_tab, query, browser, tab_id))
 
 def _same_page(before: dict) -> Callable[[], None]:
     def check() -> None:

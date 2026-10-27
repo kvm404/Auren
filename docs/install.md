@@ -32,34 +32,7 @@ It does not install system packages or grant device access.
   screenshots and keyboard tools can still be offered. Device access must be configured separately.
 
 Turn off an integration explicitly with `auren config set integrations.browser false`, replacing
-`browser` with `tabs`, `herdr` or `screen` as needed. `auto`, the default, offers an integration when detected.
-
-### Direct tab navigation
-
-Auren Tabs is an optional tab-only extension for supported Chromium browsers. It lets requests such
-as "switch to the Amazon tab in Brave" select an existing tab through the browser API. It is separate
-from Open Browser Use, so `integrations.browser = false` can stay off.
-
-After running `install.sh`:
-
-1. Open the intended browser's Extensions page, for example `brave://extensions`.
-2. Enable Developer mode, select **Load unpacked**, and choose
-   `~/.local/share/auren/browser-extension`.
-3. Approve loading Auren Tabs in the browser. The installer registers its native messaging host for
-   detected browser installations, but does not install or enable the extension itself.
-4. Run `auren doctor`. Direct browser tab navigation should be on once the extension connects.
-   Restart Auren while idle so an already running brain receives the new tools.
-
-The extension reads tab titles, URLs, IDs and positions and can select an existing tab and focus its
-window. It requests `tabs`, `nativeMessaging` and `alarms` permissions. It has no page content scripts,
-website access permissions, debugger access, or arbitrary script execution. It does not type into
-pages, send messages, create or close tabs, or change groups. Native messaging connects only to
-Auren's local user socket; there is no network listener.
-
-Connect it in only one profile per browser. Multiple connected browsers are supported by naming
-the intended browser; ambiguous profiles are rejected. If a browser is installed after Auren, rerun
-`install.sh` to register its native messaging host. To remove this integration, remove Auren Tabs
-from the browser and delete `com.auren.tabs.json` from that browser's `NativeMessagingHosts` folder.
+`browser` with `herdr` or `screen` as needed. `auto`, the default, offers an integration when detected.
 
 ## Diagnostics
 

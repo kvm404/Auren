@@ -131,7 +131,6 @@ def checks() -> list[Check]:
 
     g = "Optional"
     fixes = {"herdr": "https://herdr.dev, or turn it off: auren config set integrations.herdr false",
-             "tabs": "load the installed browser-extension folder in your browser (see docs/install.md)",
              "browser": "install Open Browser Use and its extension, or: auren config set integrations.browser false",
              "screen": "add a udev rule giving your user access to /dev/uinput (see README)"}
     for name, i in integrations.INTEGRATIONS.items():

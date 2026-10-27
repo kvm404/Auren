@@ -127,18 +127,7 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 
 Open Browser Use can't pick a browser by name (its `--browser` knows only Chrome, Chrome Beta and BitBrowser), so with two browsers connected to the same socket folder Auren can't tell which one answers. Give each its own folder with `browser.sockets`.
 
-Without Open Browser Use (or with `integrations.browser = false`) its page-automation tools are left
-out. Direct navigation through Auren Tabs is a separate optional integration.
-
-**Direct tab navigation.** Load the optional Auren Tabs extension following [the installation
-steps](install.md#direct-tab-navigation). It uses the browser's own tab API to list existing tabs and
-activate a selected tab, without screenshots, page typing, clicks or message-send confirmations.
-It does not open, close, navigate or regroup tabs. `browser_tabs(query, browser)` lists matching tab
-metadata. `browser_switch_tab(query, browser, tab_id)` activates a unique match; when several match,
-it returns the choices, and Auren asks which one. The selected ID, URL and window are checked again
-before activation. Named browser requests never silently fall through to another browser. If more
-than one profile of a named browser is connected, connect Auren Tabs only in the intended profile.
-Set `integrations.tabs = false` to disable this feature independently of page automation.
+Without Open Browser Use (or with `integrations.browser = false`) the browser tools are left out and the brain is told it can only show pages.
 
 | Tool | What it does |
 |---|---|
@@ -201,13 +190,15 @@ The fallback for what no other tool reaches: browser permission popups, apps' ow
 **Brain rules.** Use these only as a fallback, or when the user asks; look first; click by the grid numbers; look again to verify; say what was clicked.
 
 **Existing browser tabs.** The system snapshot lists windows, whose titles reflect only the selected
-tab. It cannot establish that a background tab is absent. Named tab requests use the direct tab
-navigation tools above. If the extension is disconnected, Auren reports that instead of typing a tab
-query into browser chrome and then treating it as a potentially unsent message. An explicit
-`focus_window` also changes the target for subsequent keys, overriding an earlier click in another
-window. Numbered tab requests continue to use Ctrl+digit. When any screen action needs confirmation,
-Auren must stop acting on that window until the user answers; taking another screenshot would
-invalidate the pending click.
+tab. It cannot establish that a background tab is absent. For a request such as "switch to the Amazon
+tab", Auren focuses the intended browser and uses its Tab Search to find the open tab by site or
+title, then verifies the selected page. Chrome's Tab Search opens with Ctrl+Shift+A, as described in
+[Chrome's tab guide](https://support.google.com/chrome/answer/2391819). Auren checks the search UI before
+typing and selects an open result rather than a recently closed tab. It asks which one when the
+request cannot distinguish multiple matches. This screen workflow remains available when browser
+automation is disabled; it does not open a duplicate page or switch to the default browser. An
+explicit `focus_window` also changes the target for subsequent keys, overriding an earlier click in
+another window. Numbered tab requests continue to use Ctrl+digit.
 
 **Tested 2026-10-10:**
 - A local test page in Chrome: "click the big green button with the mouse" → look, `click_at(512, 345)`, look → "It turned red and now says CLICKED!" (8.6 s).

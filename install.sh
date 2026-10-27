@@ -76,8 +76,6 @@ place() { # place <source> <target>: a link in dev mode, a fresh copy otherwise
 [[ -e $share/bar-plugin ]] && had_plugin=1 || had_plugin=
 place "$repo/mascot" "$share/mascot"
 place "$repo/omarchy-plugin" "$share/bar-plugin"
-place "$repo/browser-extension" "$share/browser-extension"
-"$share/venv/bin/auren-tab-host" install "$share/browser-extension" "$share/venv/bin/auren-tab-host"
 
 # ---- secrets -----------------------------------------------------------------------------------
 mkdir -p "$config/auren"

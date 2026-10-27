@@ -28,8 +28,6 @@ class Integration:
 
 
 INTEGRATIONS = {
-    "tabs": Integration("tabs", "direct browser tab navigation",
-                        frozenset({"browser_tabs", "browser_switch_tab"})),
     "herdr": Integration("herdr", "coding agents in herdr",
                          frozenset({"list_agents", "read_agent", "prompt_agent", "start_agent", "show_agent"})),
     "browser": Integration("browser", "browser tools (Open Browser Use)",
@@ -55,9 +53,6 @@ def installed(name: str) -> tuple[bool, str]:
 
 
 def _installed(name: str) -> tuple[bool, str]:
-    if name == "tabs":
-        from .hands import tabs
-        return (True, "") if tabs.connections() else (False, "Auren Tabs extension isn't connected")
     if name == "herdr":
         return (True, "") if shutil.which("herdr") else (False, "herdr isn't installed")
     if name == "browser":
