@@ -34,7 +34,6 @@ def _windows(h: dict) -> list[str]:
             label += " (focused)"
         by_ws.setdefault(w["workspace"], []).append(label)
     lines = [f"- workspace {ws}: " + "; ".join(items) for ws, items in sorted(by_ws.items(), key=lambda kv: str(kv[0]))]
-    lines.append("- Browser window titles show only the selected tab; background tabs are not listed here.")
     lines.append(f"- current workspace: {h['active_workspace']}; others empty")
     return lines
 

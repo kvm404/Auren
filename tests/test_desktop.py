@@ -36,14 +36,6 @@ def test_find_window_by_class_title_and_case():
         d.find_window("discord")
 
 
-def test_a_missing_window_title_does_not_rule_out_a_background_browser_tab():
-    with pytest.raises(d.DesktopError) as failure:
-        d.find_window("Amazon")
-    assert "no window matches 'Amazon'" in str(failure.value)
-    assert "not background browser tabs" in str(failure.value)
-    assert "tab may still be open" in str(failure.value)
-
-
 def test_find_app_names_and_spoken_words():
     p = FakeProfile()
     assert d.find_app("VS Code", p)["id"] == "com.microsoft.VSCode"

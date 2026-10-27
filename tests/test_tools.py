@@ -161,38 +161,6 @@ def test_a_confirmed_shortcut_goes_to_the_window_asked_about(rt, monkeypatch):
     assert "different window" in _ask(rt, "confirm_action", token=asked["token"])
 
 
-def test_focusing_a_browser_retargets_keys_after_a_click_in_another_window(rt, monkeypatch):
-    from auren.hands import screen
-
-    brave = {"address": "0xB", "class": "brave-browser", "title": "New Tab",
-             "workspace": {"name": "1"}}
-    active = {"address": "0xA"}
-    sent = []
-
-    def focus(lua):
-        active["address"] = "0xB"
-
-    def sh(cmd, timeout=10):
-        sent.append(cmd)
-        if cmd[:2] == ["hyprctl", "dispatch"]:
-            active["address"] = "0xB" if "0xB" in cmd[-1] else "0xA"
-        return ""
-
-    monkeypatch.setattr(desktop, "find_window", lambda query: brave)
-    monkeypatch.setattr(desktop, "dispatch", focus)
-    monkeypatch.setattr(screen, "_clicked", {"address": "0xA", "at": screen.time.time()})
-    monkeypatch.setattr(screen, "_active_window", lambda: active["address"])
-    monkeypatch.setattr(screen, "_sh", sh)
-    monkeypatch.setattr(screen.time, "sleep", lambda seconds: None)
-    assert "focused brave-browser" in _ask(rt, "focus_window", window="Brave")
-    assert screen.key_target() == "0xB"
-    assert _ask(rt, "press_keys", keys="ctrl+shift+a") == "pressed ctrl+shift+a"
-    assert active["address"] == "0xB"
-    assert [cmd for cmd in sent if cmd[0] == "wtype"] == [
-        ["wtype", "-M", "ctrl", "-M", "shift", "-k", "a", "-m", "shift", "-m", "ctrl"],
-    ]
-
-
 def test_cancel_refuses_further_tools_until_the_next_message(rt, monkeypatch):
     monkeypatch.setattr(desktop, "system_info", lambda what: "battery 80%")
     rt.cancel("daemon")

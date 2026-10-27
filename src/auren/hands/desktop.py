@@ -192,7 +192,7 @@ def windows() -> list[dict]:
 
 
 def find_window(query: str) -> dict:
-    """A window by app name, class or current title words. Background browser tabs are not searched."""
+    """A window by app name, class or title words ("spotify", "brave", "the github tab")."""
     q = APP_WORDS.get(query.strip().lower(), query.strip().lower())
     wins = [w for w in windows() if w.get("mapped", True)]
     def score(w: dict) -> int:
@@ -209,9 +209,7 @@ def find_window(query: str) -> dict:
     hits = sorted((w for w in wins if score(w)), key=lambda w: (-score(w), w.get("focusHistoryID", 99)))
     if not hits:
         open_apps = sorted({w.get("class") for w in wins if w.get("class")})
-        raise DesktopError(f"no window matches '{query}'. Open windows: {', '.join(open_apps) or 'none'}. "
-                           "This searches window titles, not background browser tabs; a tab may still be open. "
-                           "Use the intended browser's tab search to find it.")
+        raise DesktopError(f"no window matches '{query}'. Open windows: {', '.join(open_apps) or 'none'}")
     return hits[0]
 
 
@@ -220,10 +218,8 @@ def _describe(w: dict) -> str:
 
 
 def focus_window(window: str) -> str:
-    from . import screen
-
     w = find_window(window)
-    screen.focus(w["address"])          # explicit focus replaces the window a previous click pinned
+    dispatch(f"hl.dsp.focus({{ window = {_lua('address:' + w['address'])} }})")
     return f"focused {_describe(w)}"
 
 

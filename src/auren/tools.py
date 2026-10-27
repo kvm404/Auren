@@ -476,8 +476,7 @@ def _web(out: str) -> str:
 
 @tool(repeatable=True)
 def system_state() -> str:
-    """Live snapshot: time, battery, volume, what's playing, open windows by workspace, herdr agents and panes.
-    Browser window titles show only their selected tab; this is not a list of all browser tabs."""
+    """Live snapshot: time, battery, volume, what's playing, open windows by workspace, herdr agents and panes."""
     return _run(_profile().live_context)
 
 
@@ -506,10 +505,9 @@ def launch_app(app: str, workspace: str = "", follow: bool = True) -> str:
     return _run(desktop.launch_app, app, workspace or None, follow)
 
 
-@tool(repeatable=True, lock=SCREEN)
+@tool(repeatable=True)
 def focus_window(window: str) -> str:
-    """Bring a window to the front, by app name or its current title words. Does not search background
-    browser tabs. To switch to an existing tab by site or title, focus the browser and use its tab search."""
+    """Bring a window to the front, by app name or title words."""
     return _run(desktop.focus_window, window)
 
 

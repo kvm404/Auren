@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from auren.brain import prompt
 from auren.profile import render
 
@@ -21,25 +19,6 @@ def test_rules_follow_the_integrations():
     assert "start_agent" in full and "browser_open" in full and "click_at" in full
     assert "start_agent" not in bare and "browser_open" not in bare and "click_at" not in bare
     assert "Coding agents aren't connected" in bare and "can't move or click the mouse" in bare
-
-
-@pytest.mark.parametrize("integrations", [{"screen"}, {"browser", "screen"}])
-def test_named_browser_tabs_are_searched_and_verified_even_without_browser_automation(integrations):
-    rules = prompt.rules(integrations)
-    assert "background tabs" in rules and "not focus_window" in rules
-    assert "ctrl+shift+a" in rules and "before typing the name" in rules
-    assert "matching OPEN tab" in rules and "recently closed" in rules
-    assert "Check the selected page" in rules and "before claiming success" in rules
-    assert "can't read or click inside web pages" not in rules
-
-
-def test_the_snapshot_does_not_present_browser_window_titles_as_a_tab_inventory():
-    live = {"hyprland": {"windows": [
-        {"app": "brave-browser", "title": "New Tab", "focused": True, "workspace": 1},
-    ], "active_workspace": 1}}
-    text = render.render_live(live)
-    assert "brave-browser" in text and "New Tab" in text and "(focused)" in text
-    assert "background tabs are not listed" in text
 
 
 def test_english_only_rules_preserve_the_snapshot_and_pending_confirmations():
