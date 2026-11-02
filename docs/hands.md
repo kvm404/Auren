@@ -7,6 +7,7 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | System profile (what the brain knows) | `src/auren/profile/` ([system-profile.md](system-profile.md)) | ✅ |
 | herdr: coding agents and commands in panes | `hands/herdr.py` | ✅ |
 | Desktop and system: apps, windows, screenshots, volume, media, reminders | `hands/desktop.py` | ✅ |
+| Spotify: play, search and now-playing through D-Bus plus one colour-found click | `hands/spotify.py` | ✅ |
 | Screen control: see the screen, mouse and keyboard (fallback) | `hands/screen.py` | ✅ |
 | Browser (the user's real Chromium browser via Open Browser Use), routines | `hands/browser.py`, `~/.config/auren/routines/` | ✅ |
 
@@ -329,3 +330,13 @@ That report's first version broke `click_at` and `drag_at` (and Excalidraw's can
 2026-10-20 to 10-21: they clicked, then failed with `NameError: name 'x' is not defined`, so Auren said its
 clicks were broken and clicked again (Spotify, YouTube, a Google Sheet's links). Tests now run clicks,
 drags and the layout calls Excalidraw uses through a stand-in mouse.
+
+## Spotify
+
+`spotify_play(action, query)` replaces driving Spotify's UI through screenshots, which failed on 2026-11-02
+(typed text never reached the search box, a single click on a result only selected it, the Connect icon
+was one of several look-alikes). It opens `spotify:search:<words>` through MPRIS `OpenUri`, finds the
+Top result's round green play button by colour in a screenshot of the window (layout independent) and
+clicks it once, then reads MPRIS to confirm the track changed. `now_playing` and `open <spotify: link>`
+are also there; pause, resume, next and previous stay on `media`. Known gap: picking a Connect device
+(Echo Dot) is still screen-driven, since MPRIS can't do it.
