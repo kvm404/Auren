@@ -14,8 +14,8 @@ Auren is an early project built for **Omarchy, Hyprland, Wayland, and PipeWire**
 Other Linux desktops are not supported yet.
 
 - **Speech recognition:** AssemblyAI Universal-3.5 Pro streaming, with your own vocabulary.
-- **Brain:** Claude Code, using `haiku` by default. Codex, using `gpt-6-luna`, can take over when
-  Claude hits a usage limit. Models and effort are configurable.
+- **Brain:** your own signed-in Claude Code, using Claude Haiku by default. Your signed-in Codex,
+  using `gpt-6-luna`, can take over when Claude hits a usage limit. Models and effort are configurable.
 - **Voice:** Supertonic 3 runs locally on the CPU. Replies are in English.
 - **Desktop:** apps, windows, workspaces, media, volume, reminders, screenshots, and shell jobs.
 - **Optional integrations:** herdr for coding agents, Open Browser Use for browser tasks, and
@@ -26,6 +26,28 @@ Other Linux desktops are not supported yet.
 <br clear="right">
 
 ![Auren and Veyra in each mood](docs/images/mascots.png)
+
+## Fast and light, on Claude Haiku
+
+Auren uses your own signed-in Claude Code or Codex. There is no separate model account or API key
+for the brain: requests count toward the plan you already use with that CLI.
+
+The default brain is **Claude Haiku**, Anthropic's smallest and fastest model. Auren's tools do the
+heavy lifting: they find windows, read pages, and check results themselves, so Haiku mostly has to
+pick the right tool and say what happened. Claude Code stays running between requests, so there is
+no startup wait.
+
+Measured on a 2-core Intel i3 laptop with 8 GB of RAM, over 932 requests answered by Haiku:
+
+| Request | Median time from hearing you to the reply |
+|---|---|
+| A plain answer ("what time is it?") | 1.9 s |
+| One action ("open Obsidian on workspace 2") | 3.8 s |
+| Several steps (look, click, type) | 10.1 s |
+
+Your words are ready 0.4 s after you release the key. The reply voice runs locally, so speaking
+costs nothing. Speech recognition is the only paid service, billed by AssemblyAI per hour of
+listening, and Auren listens only between your two key presses.
 
 ## Install
 
@@ -63,10 +85,10 @@ what changed, anything I still need to do, and how to try my first voice request
 
 ### Manual installation
 
-Install the first release:
+Install the latest release:
 
 ```bash
-git clone --branch v0.1.0 --depth 1 https://github.com/kvm404/Auren.git auren
+git clone --branch v0.1.1 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren
 ./install.sh
 ```
