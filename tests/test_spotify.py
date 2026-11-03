@@ -89,3 +89,26 @@ def test_now_playing_when_closed(monkeypatch):
     monkeypatch.setattr(sp, "running", lambda: False)
     assert sp.now_playing() == {}
     assert sp.act("now_playing") == "nothing is loaded in Spotify"
+
+
+def test_play_says_so_when_something_else_started(monkeypatch):
+    fake_player(monkeypatch, [song("Old", "A"), song("Old", "A"), song("Some Playlist Song", "Somebody")])
+    out = sp.act("play", "Zubeen Garg Bogakoi Bogoli")
+    assert "doesn't look like" in out and "Top result" not in out
+
+
+def test_play_an_artist_counts_by_artist_name(monkeypatch):
+    fake_player(monkeypatch, [song("Old", "A"), song("Old", "A"), song("Mayabini", "Zubeen Garg")])
+    assert "Top result for 'Zubeen Garg'" in sp.act("play", "Zubeen Garg")
+
+
+def test_search_link_escapes_slashes(monkeypatch):
+    log = fake_player(monkeypatch, [song("Old", "A"), song("Old", "A"), song("Thunderstruck", "AC/DC")])
+    sp.act("play", "AC/DC")
+    assert log["uris"] == ["spotify:search:AC%2FDC"]
+    assert sp._URI.match(log["uris"][0])
+
+
+def test_spotify_play_is_hidden_without_mouse_control():
+    from auren.integrations import INTEGRATIONS
+    assert "spotify_play" in INTEGRATIONS["screen"].tools

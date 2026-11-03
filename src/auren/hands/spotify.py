@@ -150,7 +150,7 @@ def play(query: str) -> str:
         raise SpotifyError("say what to play")
     ensure_running()
     before = now_playing()
-    open_uri(f"spotify:search:{quote(query)}")
+    open_uri(f"spotify:search:{_search(query)}")
     deadline = time.time() + 12
     clicked = False
     while time.time() < deadline and not clicked:
@@ -163,7 +163,10 @@ def play(query: str) -> str:
         time.sleep(0.5)
         n = now_playing()
         if n.get("status") == "Playing" and n.get("track") != before.get("track"):
-            return f"now playing in Spotify, {_describe(n)}. This is the Top result for '{query}'"
+            if _overlap(query, n):
+                return f"now playing in Spotify, {_describe(n)}. This is the Top result for '{query}'"
+            return (f"now playing in Spotify, {_describe(n)}, which doesn't look like '{query}'. "
+                    "Tell the user what is playing; don't say it is what they asked for")
     n = now_playing()
     if n.get("status") == "Playing" and n.get("title") and _overlap(query, n):
         return f"now playing in Spotify, {_describe(n)}"
@@ -171,16 +174,21 @@ def play(query: str) -> str:
             "Use look_at_screen to see what is on the page")
 
 
+def _search(query: str) -> str:
+    """The text of a spotify:search: link. Everything is escaped, or "AC/DC" fails the link check."""
+    return quote(" ".join(query.split()), safe="")
+
+
 def _overlap(query: str, n: dict) -> bool:
     words = {w for w in re.findall(r"\w+", query.lower()) if len(w) > 2}
-    have = set(re.findall(r"\w+", f"{n.get('title', '')} {n.get('artist', '')}".lower()))
+    have = set(re.findall(r"\w+", f"{n.get('title', '')} {n.get('artist', '')} {n.get('album', '')}".lower()))
     return bool(words & have)
 
 
 def search(query: str) -> str:
     """Show the search results page for `query` (nothing is played)."""
     ensure_running()
-    open_uri(f"spotify:search:{quote(' '.join(query.split()))}")
+    open_uri(f"spotify:search:{_search(query)}")
     return f"Spotify is showing search results for '{query}'"
 
 
