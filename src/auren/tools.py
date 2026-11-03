@@ -43,7 +43,7 @@ from typing import Any
 from . import safety
 from .brain.judge import Judge
 from .hands import browser as web
-from .hands import desktop, excalidraw, herdr, screen, shell
+from .hands import desktop, excalidraw, herdr, screen, shell, spotify
 from .integrations import active, hidden_tools
 from .profile import Profile
 
@@ -355,7 +355,7 @@ def _run(fn, *args, **kwargs) -> str:
     try:
         out = fn(*args, **kwargs)
     except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, shell.ShellError,
-            excalidraw.ExcalidrawError, PermissionError, ValueError) as e:
+            excalidraw.ExcalidrawError, spotify.SpotifyError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
         log.exception("%s failed", getattr(fn, "__name__", fn))
@@ -574,6 +574,16 @@ def brightness(action: str, amount: int = 10) -> str:
 def media(action: str) -> str:
     """Control the playing media: play_pause, play, pause, next or previous."""
     return _run(desktop.media, action)
+
+
+@tool(lock=SCREEN)
+def spotify_play(action: str, query: str = "") -> str:
+    """Spotify desktop app, without typing or clicking around. action "play" with query (song, artist, album or
+    playlist, e.g. "Dilruba Dilnasheen Rito Riba") starts the best match and reports what is now playing;
+    "search" only shows the results; "now_playing" says what is on; "open" with a spotify: link opens it.
+    Starts Spotify if it is closed. Use this instead of look_at_screen, click_at and type_text for Spotify;
+    pause, resume, next and previous are the media tool."""
+    return _run(spotify.act, action, query)
 
 
 @tool()
