@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1
+
+### Added
+
+- `spotify_play`: "play X in Spotify" opens the search through Spotify's D-Bus interface, clicks the
+  Top result's play button once, and reports what is actually playing. If a different track started,
+  Auren says so instead of claiming it played what you asked for. It needs mouse control.
+
+### Changed
+
+- Claude keeps the same conversation until 80,000 context tokens (was 40,000) before starting fresh.
+- Ctrl+digit shortcuts (Ctrl+2 for the second browser tab) are pressed as physical keys, so Chromium
+  browsers pick the right tab. Without `/dev/uinput` access they fall back to `wtype`.
+- The README explains that Auren uses your own signed-in Claude Code or Codex, and why Claude Haiku
+  is the default brain, with measured response times.
+
 ## 0.1.0
 
 First release of Auren, a voice assistant for the Omarchy desktop.
