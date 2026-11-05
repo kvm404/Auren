@@ -72,6 +72,8 @@ def _version(text: str) -> tuple[int, ...]:
 # Hyprland's modmask bits, in the order key names are written (Super+Ctrl+Alt+A)
 MODS = ((64, "Super"), (1, "Shift"), (4, "Ctrl"), (8, "Alt"))
 TALK_KEYS = {"talk": "Super+Alt+A", "talk-fresh": "Super+Ctrl+Alt+A"}   # what install.sh prints
+NO_TALK = "no binding named \"Auren: talk …\" (doctor finds Auren's keys by the names install.sh gives them)"
+NO_TALK_FIX = "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua, keeping their names"
 
 
 def _key_name(b: dict) -> str:
@@ -86,15 +88,13 @@ def talk_keys(binds: list[dict]) -> list[Check]:
     g = "Install"
     ours = [b for b in binds if (b.get("description") or "").startswith("Auren: talk")]
     if not ours:
-        return [Check(g, "talk key", WARN, "no key runs auren-ctl talk",
-                      "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua")]
+        return [Check(g, "talk key", WARN, NO_TALK, NO_TALK_FIX)]
     out = []
     for which in ("talk", "talk-fresh"):
         mine = [b for b in ours if ("fresh" in b["description"]) == (which == "talk-fresh") and not b.get("release")]
         if not mine:
             if which == "talk":
-                out.append(Check(g, "talk key", WARN, "no key runs auren-ctl talk",
-                                 "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua"))
+                out.append(Check(g, "talk key", WARN, NO_TALK, NO_TALK_FIX))
             continue
         b = mine[0]
         name = _key_name(b)
