@@ -88,7 +88,7 @@ what changed, anything I still need to do, and how to try my first voice request
 Install the latest release:
 
 ```bash
-git clone --branch v0.1.1 --depth 1 https://github.com/kvm404/Auren.git auren
+git clone --branch v0.1.2 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren
 ./install.sh
 ```
