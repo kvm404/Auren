@@ -1,6 +1,6 @@
 # Auren
 
-A voice assistant for the Omarchy desktop. Press **Super+Alt+A**, say what you want, and press it again.
+A voice assistant for the Omarchy desktop. Press **Super+A**, say what you want, and press it again.
 Auren acts on your computer and answers out loud. A small mascot shows when it is listening,
 thinking, working, or waiting for your answer.
 
@@ -73,9 +73,10 @@ an available one. Run ./install.sh and help me add my AssemblyAI API key directl
 to the local secrets.env file with mode 600. Never ask me to paste the key into
 this conversation or print it in command output.
 
-Back up config files before editing them. Add the talk and fresh-conversation
-bindings without overwriting existing shortcuts; ask me to choose alternatives
-if they conflict. Keep the default ask approval level. Offer herdr, browser, and
+Back up config files before editing them. Add the key bindings install.sh prints.
+They unbind Omarchy's Super+A (Select all) and Super+Shift+A (ChatGPT): tell me,
+and if I want to keep those, use the Super+Alt+A alternative it prints. Don't
+overwrite my other shortcuts. Keep the default ask approval level. Offer herdr, browser, and
 mouse-control integrations as optional setup choices, and leave unavailable
 integrations disabled or on auto.
 
@@ -99,7 +100,9 @@ user services, and enables the Omarchy bar plugin. It prints key bindings for yo
 
 1. Add `ASSEMBLYAI_API_KEY=your-key` to `~/.config/auren/secrets.env`. The installer creates this file
    with mode `600`.
-2. Add the printed bindings to `~/.config/hypr/bindings.lua`, resolving any existing bindings on those keys.
+2. Add the printed lines to `~/.config/hypr/bindings.lua`. They unbind Omarchy's Super+A (Select all;
+   Ctrl+A still works) and Super+Shift+A (ChatGPT). To keep those, use the printed Super+Alt+A and
+   Super+Ctrl+Alt+A instead.
 3. If you only use Codex, select it with `auren config set brain.mode codex`.
 4. Run `systemctl --user restart auren auren-mascot`, then `auren doctor`.
 
@@ -110,8 +113,8 @@ The [installation guide](docs/install.md) covers optional integrations, diagnost
 
 | Control | Action |
 |---|---|
-| Super+Alt+A | Start listening; press again to send. While thinking or working, stop. While speaking, interrupt and start listening |
-| Super+Ctrl+Alt+A | Start listening in a fresh conversation. While thinking or working, stop |
+| Super+A | Start listening; press again to send. While thinking or working, stop. While speaking, interrupt and start listening |
+| Super+Shift+A | Start listening in a fresh conversation. While thinking or working, stop |
 | Click the mascot | Start listening or send; while thinking, working, or speaking, stop |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open Home, Mascot, Voice, Brain, Vocabulary, or Updates. Right-click to start a fresh conversation |
@@ -176,7 +179,7 @@ ahead of that release. See [Updates and releases](docs/releases.md).
 ## How it works
 
 ```text
-Super+Alt+A → daemon → AssemblyAI → Claude Code / Codex → local Supertonic → speech
+Super+A → daemon → AssemblyAI → Claude Code / Codex → local Supertonic → speech
              │                         │ MCP
              │                         ▼
              │                  persistent tool runtime

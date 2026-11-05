@@ -42,7 +42,7 @@ Both characters show every state (their poses are in the table above); the bubbl
 | thinking | thinking pose | what you said |
 | working | typing; holds a clicking pointer when it uses the mouse | what it's doing ("Opening WhatsApp", "Clicking Allow button") |
 | speaking | moves with the voice's loudness | the sentence being spoken (captions) |
-| waiting for a yes/no | head tilt, "?" | the question(s), a **Yes** and a **No** button (the only part of the bubble that takes clicks), and "Or Super+Alt+A, then say yes or no" |
+| waiting for a yes/no | head tilt, "?" | the question(s), a **Yes** and a **No** button (the only part of the bubble that takes clicks), and "Or Super+A, then say yes or no" |
 | error | X eyes | the error |
 | off (daemon not running) | grey, asleep | on hover: "click to start" |
 
@@ -51,7 +51,7 @@ After a reply it smiles (^ ^).
 ## Using it
 
 - **Drag** to move it anywhere; the place is remembered.
-- **Click** it to talk (same as Super+Alt+A); click again to send. While Auren thinks, works or speaks, a click stops it (the bubble says "Press Super+Alt+A to stop"). When Auren is off, a click starts it.
+- **Click** it to talk (same as Super+A); click again to send. While Auren thinks, works or speaks, a click stops it (the bubble says "Press Super+A to stop"). When Auren is off, a click starts it.
 - **Right-click** for a poke (it hops).
 - **Scroll** over it to resize.
 - **Hover**: it wakes up, looks at the pointer, and shows the hint.
