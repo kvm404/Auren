@@ -150,9 +150,12 @@ fi
 # ---- Hyprland (printed, not edited) ------------------------------------------------------------
 cat <<EOF
 
-$(say "Add to ~/.config/hypr/bindings.lua (unbind anything already on these keys first):")
-o.bind("SUPER + ALT + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
-o.bind("SUPER + CTRL + ALT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
+$(say "Add to ~/.config/hypr/bindings.lua (the unbinds free Omarchy's own uses of these keys; unbinding a free key is harmless):")
+hl.unbind("SUPER + A")          -- was: Select all (Omarchy 4.5; Ctrl+A still selects all)
+hl.unbind("SUPER + SHIFT + A")  -- was: ChatGPT web app
+o.bind("SUPER + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
+o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
+$(say "To keep those, use SUPER + ALT + A and SUPER + CTRL + ALT + A instead (free on Omarchy 4.5), without the unbinds.")
 
 $(say "Optional: add to ~/.config/hypr/hyprland.lua to skip mascot layer animations:")
 hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })

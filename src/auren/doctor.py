@@ -71,7 +71,8 @@ def _version(text: str) -> tuple[int, ...]:
 
 # Hyprland's modmask bits, in the order key names are written (Super+Ctrl+Alt+A)
 MODS = ((64, "Super"), (1, "Shift"), (4, "Ctrl"), (8, "Alt"))
-TALK_KEYS = {"talk": "Super+Alt+A", "talk-fresh": "Super+Ctrl+Alt+A"}   # what install.sh prints
+TALK_KEYS = {"talk": "Super+A", "talk-fresh": "Super+Shift+A"}           # what install.sh prints
+SPARE_KEYS = {"talk": "Super+Alt+A", "talk-fresh": "Super+Ctrl+Alt+A"}    # its alternative, free on Omarchy 4.5
 NO_TALK = "no binding named \"Auren: talk …\" (doctor finds Auren's keys by the names install.sh gives them)"
 NO_TALK_FIX = "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua, keeping their names"
 
@@ -104,11 +105,13 @@ def talk_keys(binds: list[dict]) -> list[Check]:
         if same:
             others = ", ".join(f'"{o.get("description") or o.get("dispatcher", "?")}"' for o in same)
             hypr = name.upper().replace("+", " + ")
-            out.append(Check(g, label, WARN, f"{name} also runs {others}: both happen on each press",
-                             f'add hl.unbind("{hypr}") above Auren\'s binding in ~/.config/hypr/bindings.lua, '
-                             f"or move Auren to {TALK_KEYS[which]}"))
+            fix = f'add hl.unbind("{hypr}") above Auren\'s binding in ~/.config/hypr/bindings.lua'
+            if name != SPARE_KEYS[which]:
+                fix += f", or move Auren to {SPARE_KEYS[which]}"
+            out.append(Check(g, label, WARN, f"{name} also runs {others}: both happen on each press", fix))
         else:
-            out.append(Check(g, label, OK, name if name == TALK_KEYS[which] else f"{name} (the docs say {TALK_KEYS[which]})"))
+            known = name in (TALK_KEYS[which], SPARE_KEYS[which])
+            out.append(Check(g, label, OK, name if known else f"{name} (the docs say {TALK_KEYS[which]})"))
     return out
 
 
