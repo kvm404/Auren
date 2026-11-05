@@ -69,6 +69,49 @@ def _version(text: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
+# Hyprland's modmask bits, in the order key names are written (Super+Ctrl+Alt+A)
+MODS = ((64, "Super"), (1, "Shift"), (4, "Ctrl"), (8, "Alt"))
+TALK_KEYS = {"talk": "Super+Alt+A", "talk-fresh": "Super+Ctrl+Alt+A"}   # what install.sh prints
+NO_TALK = "no binding named \"Auren: talk …\" (doctor finds Auren's keys by the names install.sh gives them)"
+NO_TALK_FIX = "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua, keeping their names"
+
+
+def _key_name(b: dict) -> str:
+    key = b.get("key") or f"code:{b.get('keycode', 0)}"
+    return "+".join([name for bit, name in MODS if b.get("modmask", 0) & bit] + [key.upper() if len(key) == 1 else key])
+
+
+def talk_keys(binds: list[dict]) -> list[Check]:
+    """The keys that run auren-ctl talk and talk-fresh, found by the descriptions install.sh gives
+    them ("Auren: talk ..."): Hyprland reports Lua binds as __lua, without their command. A key that
+    also runs another binding warns: Hyprland runs both (Omarchy 4.5 put Select all on Super+A)."""
+    g = "Install"
+    ours = [b for b in binds if (b.get("description") or "").startswith("Auren: talk")]
+    if not ours:
+        return [Check(g, "talk key", WARN, NO_TALK, NO_TALK_FIX)]
+    out = []
+    for which in ("talk", "talk-fresh"):
+        mine = [b for b in ours if ("fresh" in b["description"]) == (which == "talk-fresh") and not b.get("release")]
+        if not mine:
+            if which == "talk":
+                out.append(Check(g, "talk key", WARN, NO_TALK, NO_TALK_FIX))
+            continue
+        b = mine[0]
+        name = _key_name(b)
+        same = [o for o in binds if o not in ours and _key_name(o) == name
+                and o.get("submap", "") == b.get("submap", "") and bool(o.get("release")) == bool(b.get("release"))]
+        label = "talk key" if which == "talk" else "fresh-conversation key"
+        if same:
+            others = ", ".join(f'"{o.get("description") or o.get("dispatcher", "?")}"' for o in same)
+            hypr = name.upper().replace("+", " + ")
+            out.append(Check(g, label, WARN, f"{name} also runs {others}: both happen on each press",
+                             f'add hl.unbind("{hypr}") above Auren\'s binding in ~/.config/hypr/bindings.lua, '
+                             f"or move Auren to {TALK_KEYS[which]}"))
+        else:
+            out.append(Check(g, label, OK, name if name == TALK_KEYS[which] else f"{name} (the docs say {TALK_KEYS[which]})"))
+    return out
+
+
 def checks() -> list[Check]:
     out: list[Check] = []
     svc = service_path()
@@ -165,6 +208,13 @@ def checks() -> list[Check]:
     ctl = DATA_HOME / "bin/auren-ctl"
     out.append(Check(g, "auren-ctl", OK, str(ctl)) if os.access(ctl, os.X_OK) else
                Check(g, "auren-ctl", FAIL, f"{ctl} missing", "./install.sh"))
+    code, raw = _run(["hyprctl", "binds", "-j"])
+    try:
+        binds = json.loads(raw) if code == 0 else None
+    except json.JSONDecodeError:
+        binds = None
+    if isinstance(binds, list):          # no Hyprland: the Desktop group already says so
+        out += talk_keys(binds)
     units = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
     for unit in ("auren", "auren-mascot"):
         f = units / f"{unit}.service"

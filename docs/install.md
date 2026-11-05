@@ -47,6 +47,8 @@ If voice input fails, check the AssemblyAI key, network, and default PipeWire mi
 If the brain fails, run the chosen CLI in a terminal to check sign-in, model access, and usage limits.
 Automatic fallback handles Claude usage limits before an action runs; it is not a retry for every error.
 If a command works in a terminal but not in Auren, `auren doctor` checks the systemd manager's PATH too.
+If pressing the talk key also does something else, `auren doctor` names the other binding on that key.
+Hyprland runs every binding on a key, so unbind the other one (Omarchy 4.5 puts Select all on Super+A).
 After changing the session environment, restart Auren while idle.
 
 Use `auren config set brain.mode codex` when Codex is your only installed brain. The send judge uses

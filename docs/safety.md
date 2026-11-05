@@ -77,7 +77,7 @@ A risky tool that has to ask returns `needs_confirmation`, a question and a shor
 - The batch is what the **latest message** asked, at most 6 questions (`MAX_BATCH`; a seventh call gets an error telling the brain to ask about those first). A question asked later replaces what an earlier message left open, so a yes can only mean the newest question.
 - A yes answers the questions that were showing when it was given (a click carries their tokens), so a second click, or a question asked meanwhile, isn't approved by it.
 - If a step fails (an error, a command that exits non-zero, or a target that changed since it was asked about), it stops there and the rest are dropped; the brain looks again and asks again. **Stop** also stops the steps that haven't started.
-- A fresh conversation (Super+Shift+A, "start fresh", changing Claude's effort or model) forgets every open question and what a yes covered.
+- A fresh conversation (Super+Ctrl+Alt+A, "start fresh", changing Claude's effort or model) forgets every open question and what a yes covered.
 - Steps that depend on an earlier step's *result* can't be queued (the brain never sees a result before it runs). At `ask` each asks in turn; at `task` the first yes covers them.
 
 The question the mascot and the panel show is the runtime's own text for every action waiting (not the brain's wording of it).
@@ -128,6 +128,6 @@ The system profile masks secrets (see [system-profile.md](system-profile.md)). T
 
 ## Stopping
 
-- **Stop** (Super+A or clicking the mascot while Auren thinks or works, `auren-ctl cancel`, the panel's Stop) stops the brain. Claude Code is sent its own interrupt, so the conversation is kept: "no, do this instead" still has the context. If it hasn't stopped within 5 s (`INTERRUPT_GRACE`), its process is killed and the next request starts a fresh conversation. A Codex run is killed (its finished exchanges are kept). The runtime refuses any further tool calls until the next message. A tool already running finishes.
+- **Stop** (Super+Alt+A or clicking the mascot while Auren thinks or works, `auren-ctl cancel`, the panel's Stop) stops the brain. Claude Code is sent its own interrupt, so the conversation is kept: "no, do this instead" still has the context. If it hasn't stopped within 5 s (`INTERRUPT_GRACE`), its process is killed and the next request starts a fresh conversation. A Codex run is killed (its finished exchanges are kept). The runtime refuses any further tool calls until the next message. A tool already running finishes.
 - **Backup brain after a limit:** if Claude hits its usage limit after something that shouldn't be repeated has run (anything but reading, looking, focusing and opening), Auren doesn't hand the request to Codex, which would start it over; it says it stopped partway.
 - A spoken "stop" that interrupts a running action.
