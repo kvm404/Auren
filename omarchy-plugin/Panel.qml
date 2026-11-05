@@ -437,9 +437,9 @@ Panel {
     return "Ready"
   }
   readonly property string hintText: !root.daemonAlive ? (root.daemonActive ? "Starting up" : "Click " + root.mascot.name + " or Turn on to start")
-                                   : root.mood === "listening" ? "Press Super+A again to send"
-                                   : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
-                                   : "Super+A to talk · Shift+Super+A for a fresh start"
+                                   : root.mood === "listening" ? "Press Super+Alt+A again to send"
+                                   : root.mood === "thinking" || root.mood === "working" ? "Super+Alt+A to stop"
+                                   : "Super+Alt+A to talk · add Ctrl for a fresh start"
   readonly property string brainText: (brainMode === "codex" ? (codexName ? "Codex (" + codexName + ")" : "Codex")
                                        : brainMode === "claude" ? "Claude Haiku only"
                                        : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The talk keys are now **Super+Alt+A** (talk) and **Super+Ctrl+Alt+A** (fresh conversation), which
+  are free on Omarchy 4.5. Omarchy 4.5 binds Super+A to Select all, and Hyprland runs both bindings,
+  so the old Super+A also selected everything in the focused window. Existing installs keep their
+  keys: to move, replace Auren's two lines in `~/.config/hypr/bindings.lua` with the two that
+  `./install.sh` prints, or keep Super+A and add `hl.unbind("SUPER + A")` above Auren's line.
+
+### Added
+
+- `auren doctor` shows which keys run Auren, and warns when one of them also runs another binding.
+
 ## 0.1.1
 
 ### Added

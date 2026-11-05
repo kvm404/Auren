@@ -7,7 +7,7 @@
 // doing, and the sentence being spoken.
 //
 //   drag            move it anywhere (the place is remembered)
-//   click           talk to auren (like Super+A): click again to send; while auren speaks, stop it
+//   click           talk to auren (like Super+Alt+A): click again to send; while auren speaks, stop it
 //   right-click     a poke
 //   scroll          make it bigger or smaller
 //
@@ -310,13 +310,13 @@ ShellRoot {
     var d = st.detail || ""
     switch (mood) {
       case "listening": return d || (st.fresh ? "Fresh start · listening…" : "Listening…") + "\nPress again to send"
-      case "thinking": return (st.transcript || d || "Thinking…") + "\nPress Super+A to stop"
-      case "working": return (d || "Working…") + "\nPress Super+A to stop"
+      case "thinking": return (st.transcript || d || "Thinking…") + "\nPress Super+Alt+A to stop"
+      case "working": return (d || "Working…") + "\nPress Super+Alt+A to stop"
       case "speaking": return d
       case "error": return d ? "Oops: " + d : "Something went wrong"
       case "starting": return "Waking up…"
     }
-    if (awaiting) return (st.question || "Waiting for your answer") + "\nOr Super+A, then say yes or no"
+    if (awaiting) return (st.question || "Waiting for your answer") + "\nOr Super+Alt+A, then say yes or no"
     if (mood === "idle" && d === "heard nothing" && now - (st.since || 0) < 3) return "Didn't catch that"
     if (mood === "idle" && d === "cancelled" && now - (st.since || 0) < 2.5) return "Stopped"
     if (mood === "idle" && now < captionUntil) return lastCaption
@@ -324,7 +324,7 @@ ShellRoot {
     return ""
   }
   // the control hints that bubbleText appends; shown pinned under the scrolling text
-  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Or Super+A, then say yes or no"]
+  readonly property var bubbleHints: ["Press again to send", "Press Super+Alt+A to stop", "Or Super+Alt+A, then say yes or no"]
   readonly property string bubbleHint: {
     for (var i = 0; i < bubbleHints.length; i++)
       if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]

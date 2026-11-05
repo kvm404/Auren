@@ -1,6 +1,6 @@
 # Auren
 
-A voice assistant for the Omarchy desktop. Press **Super+A**, say what you want, and press it again.
+A voice assistant for the Omarchy desktop. Press **Super+Alt+A**, say what you want, and press it again.
 Auren acts on your computer and answers out loud. A small mascot shows when it is listening,
 thinking, working, or waiting for your answer.
 
@@ -110,8 +110,8 @@ The [installation guide](docs/install.md) covers optional integrations, diagnost
 
 | Control | Action |
 |---|---|
-| Super+A | Start listening; press again to send. While thinking or working, stop. While speaking, interrupt and start listening |
-| Super+Shift+A | Start listening in a fresh conversation. While thinking or working, stop |
+| Super+Alt+A | Start listening; press again to send. While thinking or working, stop. While speaking, interrupt and start listening |
+| Super+Ctrl+Alt+A | Start listening in a fresh conversation. While thinking or working, stop |
 | Click the mascot | Start listening or send; while thinking, working, or speaking, stop |
 | Drag / scroll / right-click the mascot | Move / resize / poke |
 | Bar icon | Open Home, Mascot, Voice, Brain, Vocabulary, or Updates. Right-click to start a fresh conversation |
@@ -176,7 +176,7 @@ ahead of that release. See [Updates and releases](docs/releases.md).
 ## How it works
 
 ```text
-Super+A → daemon → AssemblyAI → Claude Code / Codex → local Supertonic → speech
+Super+Alt+A → daemon → AssemblyAI → Claude Code / Codex → local Supertonic → speech
              │                         │ MCP
              │                         ▼
              │                  persistent tool runtime

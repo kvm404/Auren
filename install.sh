@@ -151,8 +151,8 @@ fi
 cat <<EOF
 
 $(say "Add to ~/.config/hypr/bindings.lua (unbind anything already on these keys first):")
-o.bind("SUPER + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
-o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
+o.bind("SUPER + ALT + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
+o.bind("SUPER + CTRL + ALT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
 
 $(say "Optional: add to ~/.config/hypr/hyprland.lua to skip mascot layer animations:")
 hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })

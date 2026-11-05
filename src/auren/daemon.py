@@ -1,8 +1,8 @@
 """The auren daemon: push-to-talk → ears → brain → voice.
 
     auren daemon            # run in the foreground (later: a systemd user service)
-    auren-ctl talk          # Super+A: start listening; press again to stop and send
-    auren-ctl talk-fresh    # Super+Shift+A: the same, in a fresh conversation
+    auren-ctl talk          # Super+Alt+A: start listening; press again to stop and send
+    auren-ctl talk-fresh    # Super+Ctrl+Alt+A: the same, in a fresh conversation
     auren-ctl start|stop    # push-to-talk (press / release), used by holding the mascot
     auren-ctl ask <text>    # a typed request through the same pipeline (spoken reply)
     auren-ctl say <text> | cancel | status | quit
@@ -369,7 +369,7 @@ class Daemon:
         async with self.busy:
             self._fresh()
             await asyncio.to_thread(self.brain.forget)
-            log.info("fresh conversation (Super+Shift+A)")
+            log.info("fresh conversation (Super+Ctrl+Alt+A)")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
                            "tools": [], "brain": "claude"})
 
