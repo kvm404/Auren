@@ -59,7 +59,7 @@ MAX_LISTEN = 120         # seconds; listening stops by itself (the speech servic
 REMIND_AFTER = 3         # seconds without new words: "Press Super+A to send"
 SEND_AFTER = 12          # seconds without new words: send what was heard
 QUIET_TICK = 0.2         # how often a listen checks for quiet
-ALREADY_SENT = 2         # seconds after a send by itself in which the talk key does nothing (it was pressed to send)
+ALREADY_SENT = 2         # seconds after a send by itself (of something heard) in which the talk key does nothing
 # Said on its own, these start a fresh conversation instead of going to the brain.
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
                     r"forget (?:everything|all that|it all|our conversation)|clear (?:your|the) memory|reset (?:yourself|the conversation))"
@@ -75,6 +75,8 @@ class Daemon:
     _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
     _sent_by_itself = float("-inf")       # when a listen last ended without the key (quiet), time.monotonic()
+    _reminding = False                    # the "Press Super+A to send" reminder is up (state.json `remind`)
+    _quiet_watch: asyncio.Task | None = None   # the current listen's _watch_quiet (kept: the loop holds tasks weakly)
 
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
@@ -360,9 +362,9 @@ class Daemon:
             self.voice.stop()            # talking over auren interrupts it
         if fresh:                        # restart the brain while the user speaks; the answer waits for it
             asyncio.create_task(self._forget_quietly())
-        self.listening = Listening(self.vocab, on_partial=lambda t: self.set_state("listening", t, fresh=fresh),
-                                   on_level=self.level.set)
-        session = self.listening
+        session = self.listening = Listening(self.vocab, on_level=self.level.set)
+        session.on_partial = lambda _text: self._show_listening(session, fresh)
+        self._reminding = False
         try:
             await self.listening.start()
         except Exception as e:  # noqa: BLE001
@@ -375,10 +377,35 @@ class Daemon:
         self._quiet_watch = asyncio.create_task(self._watch_quiet(session, fresh))
         return "listening"
 
+    def _quiet_action(self, session: Listening) -> str:
+        return after_quiet(session.quiet_seconds, session.words > 0, self.autosend, self.autosend_after)
+
+    def _show_listening(self, session: Listening, fresh: bool, what: str | None = None) -> None:
+        """What this listen heard so far, with the reminder if it's due. New live text and the quiet watch
+        both write it, so a revised partial (no new words) keeps a reminder that is still due."""
+        if self.listening is not session:                # a partial arriving after the send, or an older listen
+            return
+        self._reminding = (self._quiet_action(session) if what is None else what) == "remind"
+        self.set_state("listening", session.text, fresh=fresh, **({"remind": True} if self._reminding else {}))
+
     async def _watch_quiet(self, session: Listening, fresh: bool) -> None:
         """While this listen lasts: remind the user to send when they go quiet, and send by itself after a
-        while (auto-send: after its own delay), so a forgotten key press doesn't leave the mic open."""
-        reminded = False
+        while (auto-send: after its own delay), so a forgotten key press doesn't leave the mic open. It also
+        enforces MAX_LISTEN, so if it fails, it stops the listen rather than leave the mic open."""
+        try:
+            await self._watch_quiet_until_sent(session, fresh)
+        except Exception as e:  # noqa: BLE001 - logged and reported; the listen must not outlive its watch
+            log.exception("the quiet watch failed: stopping this listen")
+            if self.listening is session:
+                await self.cancel()
+            else:                                            # it failed in release(): its mic may still be open
+                await session.cancel()
+                if self.listening is None:                   # not if the user started another listen meanwhile
+                    self.level.set(0)
+                    self.set_state("error", f"listening failed: {e}"[:200])
+            notice.notify("Auren stopped listening", str(e)[:200], "error")
+
+    async def _watch_quiet_until_sent(self, session: Listening, fresh: bool) -> None:
         while self.listening is session:
             await asyncio.sleep(QUIET_TICK)
             if self.listening is not session:
@@ -392,15 +419,19 @@ class Daemon:
                 how = "nothing said" if not heard else "auto-send" if self.autosend else "sending by itself"
                 log.info("%s after %.1fs without new words", how, quiet)
             if what == "send":
-                self._sent_by_itself = time.monotonic()
+                # Stamped before and after: a press while the final transcript comes in, or just as the answer
+                # starts, was meant to send this listen, not to start another or stop the answer. With nothing
+                # heard there's nothing to answer, and a press is a new try.
+                if heard:
+                    self._sent_by_itself = time.monotonic()
                 await self.release()
+                if heard:
+                    self._sent_by_itself = time.monotonic()
                 return
-            if what == "remind" and not reminded:
-                self.set_state("listening", session.text, fresh=fresh, remind=True)
-                notice.show("Press Super+A to send", "listening", 3000)
-            elif what != "remind" and reminded:        # talking again: back to the live transcript
-                self.set_state("listening", session.text, fresh=fresh)
-            reminded = what == "remind"
+            if (what == "remind") != self._reminding:      # due now, or talking again took it away
+                self._show_listening(session, fresh, what)
+                if self._reminding:
+                    notice.show("Press Super+A to send", "listening", 3000)
 
     async def _set_claude(self, effort: str | None = None, model: str | None = None) -> None:
         what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)

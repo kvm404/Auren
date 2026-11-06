@@ -59,7 +59,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Command | Does |
 |---|---|
-| `talk` / `talk-fresh` | Start listening; again to send (fresh: a new conversation). Within 2 s of a send by itself it does nothing and replies `already sent` |
+| `talk` / `talk-fresh` | Start listening; again to send (fresh: a new conversation). Within 2 s after a send by itself (of something heard) it does nothing and replies `already sent` |
 | `start` / `stop` | Push to talk (press, release) |
 | `cancel` | Stop listening, the answer in progress (brain and tools) or speaking |
 | `ask <text>` | A typed request through the same pipeline |

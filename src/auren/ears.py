@@ -14,9 +14,11 @@ Connection settings (see docs/decisions/0002-speech-to-text.md):
 
 `quiet_seconds` is how long no new words have come in (since the start, before the first word). The daemon
 uses it to remind the user to send, or to send by itself (auto-send). It counts words, not loudness, so a
-fan or music in the room doesn't keep a turn open. One exception: the last words of a sentence often come
-only with the final transcript (~2 s of speech, measured on the user's clips), so for up to TAIL seconds
-after the last new word, the mic still speaking holds the clock too.
+fan or music in the room doesn't keep a turn open. Only live (partial) words count: a final transcript comes
+only after the key (ForceEndpoint) or 10 s of silence (the turn-silence setting), and the words it adds were
+said before that silence. Those last words of a sentence often show up only in the final (~2 s of speech,
+measured on the user's clips), so for up to TAIL seconds after the last new word, a mic that still sounds
+like speech holds the clock too.
 """
 
 from __future__ import annotations
@@ -96,8 +98,10 @@ class Listening:
         self.finals: list[str] = []
         self.partial = ""                    # the turn in progress (empty again once it's final)
         self.opened_at = 0.0
-        self.words = 0                       # the most words heard so far
-        self.last_word_at = 0.0              # when that count last went up
+        self.words = 0                       # words heard so far: the final turns' and the most of the live one's
+        self.last_word_at = 0.0              # when a live word last came in
+        self._final_words = 0                # words in the final turns
+        self._live_words = 0                 # the most words the live turn has had
         self.last_voice_at = 0.0             # when the mic last sounded like speech
         self.floor = 1.0                     # the quietest mic level so far (the room's noise)
         self.released_at = 0.0
@@ -156,13 +160,14 @@ class Listening:
                         if msg.get("end_of_turn"):
                             self.finals.append(text.strip())
                             self.partial = ""
+                            self._turn_ended(text)
                             if self.released_at:
                                 self._final.set()
                         elif text:
                             self.partial = text
-                            if self.on_partial:
+                            self._heard_live(text)
+                            if self.on_partial:          # after counting: the daemon reads quiet_seconds
                                 self.on_partial(text)
-                        self._count_words()
                     elif msg.get("type") == "Termination":
                         break
                     elif msg.get("type") == "Error" or "error" in msg:
@@ -173,12 +178,21 @@ class Listening:
         finally:
             self._done.set()
 
-    def _count_words(self) -> None:
-        """New words reset the quiet clock. Only a higher count does: a partial being revised, or a final
-        written differently from its partial ("twenty five" -> "25"), isn't the user speaking."""
-        n = sum(len(f.split()) for f in self.finals) + len(self.partial.split())
-        if n > self.words:
-            self.words, self.last_word_at = n, time.perf_counter()
+    def _heard_live(self, text: str) -> None:
+        """A live transcript of the turn in progress. More words than it had reset the quiet clock; a partial
+        being revised (the same or fewer words) isn't the user speaking."""
+        n = len(text.split())
+        if n > self._live_words:
+            self._live_words, self.last_word_at = n, time.perf_counter()
+        self.words = self._final_words + self._live_words
+
+    def _turn_ended(self, text: str) -> None:
+        """A final transcript: counted as it is written (it may add the turn's last words, or write "twenty five"
+        as "25"), but it doesn't reset the clock. It comes after the key or 10 s of silence, so its words were
+        said before that."""
+        self._final_words += len(text.split())
+        self._live_words = 0
+        self.words = self._final_words
 
     @property
     def text(self) -> str:
@@ -186,7 +200,8 @@ class Listening:
         return " ".join(t for t in (*self.finals, self.partial) if t).strip()
 
     def _hear_level(self, level: float) -> None:
-        self.floor = min(self.floor, level)
+        if level > 0:                        # exact zeros are digital silence (the stream starting), not the room
+            self.floor = min(self.floor, level)
         if level >= self.floor + SPEECH_ABOVE:
             self.last_voice_at = time.perf_counter()
 
