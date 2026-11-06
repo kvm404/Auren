@@ -38,7 +38,7 @@ Both characters show every state (their poses are in the table above); the bubbl
 |---|---|---|
 | starting | wakes up | "Waking up…" |
 | idle | hovers, blinks, glances around; fades after 12 s; falls asleep (z's) after 4 min | — |
-| listening | rings that grow with your voice | the live transcript |
+| listening | rings that grow with your voice | the live transcript; after 3 s of quiet (auto-send off) "Press Super+A to send" under it |
 | thinking | thinking pose | what you said |
 | working | typing; holds a clicking pointer when it uses the mouse | what it's doing ("Opening WhatsApp", "Clicking Allow button") |
 | speaking | moves with the voice's loudness | the sentence being spoken (captions) |

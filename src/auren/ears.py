@@ -11,6 +11,14 @@ Connection settings (see docs/decisions/0002-speech-to-text.md):
 - min/max_turn_silence 10000 so pauses never end the turn; the key release does (ForceEndpoint)
 - keyterms_prompt (≤100 terms) in the URL; UpdateConfiguration closes the session
 - audio messages 50-1000 ms; the connection is open only while the key is held (billed per second)
+
+`quiet_seconds` is how long no new words have come in (since the start, before the first word). The daemon
+uses it to remind the user to send, or to send by itself (auto-send). It counts words, not loudness, so a
+fan or music in the room doesn't keep a turn open. Only live (partial) words count: a final transcript comes
+only after the key (ForceEndpoint) or 10 s of silence (the turn-silence setting), and the words it adds were
+said before that silence. Those last words of a sentence often show up only in the final (~2 s of speech,
+measured on the user's clips), so for up to TAIL seconds after the last new word, a mic that still sounds
+like speech holds the clock too.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ USER_VOCAB = CONFIG_DIR / "vocab.txt"     # the user's own words (names, project
 RATE, CHUNK = 16000, 1600                  # 50 ms of 16-bit mono
 MIN_SEND, MAX_SEND = 1600, 32000           # AssemblyAI wants 50-1000 ms per message
 URL = "wss://streaming.assemblyai.com/v3/ws"
+TAIL = 2.5                                 # seconds after the last new word in which a loud mic still counts as talking
+SPEECH_ABOVE = 0.2                         # loudness over the quietest moment so far that counts as speech (8 dB)
 
 
 def read_terms(path) -> list[str]:
@@ -86,8 +96,14 @@ class Listening:
         self.ws = None
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.finals: list[str] = []
-        self.partial = ""
+        self.partial = ""                    # the turn in progress (empty again once it's final)
         self.opened_at = 0.0
+        self.words = 0                       # words heard so far: the final turns' and the most of the live one's
+        self.last_word_at = 0.0              # when a live word last came in
+        self._final_words = 0                # words in the final turns
+        self._live_words = 0                 # the most words the live turn has had
+        self.last_voice_at = 0.0             # when the mic last sounded like speech
+        self.floor = 1.0                     # the quietest mic level so far (the room's noise)
         self.released_at = 0.0
         self._tasks: list[asyncio.Task] = []
         self._done = asyncio.Event()
@@ -109,9 +125,12 @@ class Listening:
     async def _read_mic(self) -> None:
         while chunk := await self.mic.stdout.read(CHUNK):
             await self.queue.put(chunk)
-            if self.on_level and len(chunk) >= 2:
+            if len(chunk) >= 2:
                 samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
-                self.on_level(loudness(samples))
+                level = loudness(samples)
+                self._hear_level(level)
+                if self.on_level:
+                    self.on_level(level)
         await self.queue.put(None)
 
     async def _stream(self, url: str, key: str) -> None:
@@ -140,11 +159,15 @@ class Listening:
                         text = msg.get("transcript", "")
                         if msg.get("end_of_turn"):
                             self.finals.append(text.strip())
+                            self.partial = ""
+                            self._turn_ended(text)
                             if self.released_at:
                                 self._final.set()
-                        elif text and self.on_partial:
+                        elif text:
                             self.partial = text
-                            self.on_partial(text)
+                            self._heard_live(text)
+                            if self.on_partial:          # after counting: the daemon reads quiet_seconds
+                                self.on_partial(text)
                     elif msg.get("type") == "Termination":
                         break
                     elif msg.get("type") == "Error" or "error" in msg:
@@ -154,6 +177,42 @@ class Listening:
             self.error = f"{type(e).__name__}: {e}"[:200]
         finally:
             self._done.set()
+
+    def _heard_live(self, text: str) -> None:
+        """A live transcript of the turn in progress. More words than it had reset the quiet clock; a partial
+        being revised (the same or fewer words) isn't the user speaking."""
+        n = len(text.split())
+        if n > self._live_words:
+            self._live_words, self.last_word_at = n, time.perf_counter()
+        self.words = self._final_words + self._live_words
+
+    def _turn_ended(self, text: str) -> None:
+        """A final transcript: counted as it is written (it may add the turn's last words, or write "twenty five"
+        as "25"), but it doesn't reset the clock. It comes after the key or 10 s of silence, so its words were
+        said before that."""
+        self._final_words += len(text.split())
+        self._live_words = 0
+        self.words = self._final_words
+
+    @property
+    def text(self) -> str:
+        """Everything heard so far: the final turns and the one in progress."""
+        return " ".join(t for t in (*self.finals, self.partial) if t).strip()
+
+    def _hear_level(self, level: float) -> None:
+        if level > 0:                        # exact zeros are digital silence (the stream starting), not the room
+            self.floor = min(self.floor, level)
+        if level >= self.floor + SPEECH_ABOVE:
+            self.last_voice_at = time.perf_counter()
+
+    @property
+    def quiet_seconds(self) -> float:
+        """How long no new words have come in; before the first word, how long it has been listening. Up to
+        TAIL after the last new word, a mic that still sounds like speech counts as words not written yet."""
+        if not self.last_word_at:
+            return time.perf_counter() - self.opened_at
+        talking = min(self.last_voice_at, self.last_word_at + TAIL)
+        return time.perf_counter() - max(self.last_word_at, talking)
 
     async def finish(self, timeout: float = 8) -> str:
         """Key released: stop the mic, let the last audio and ForceEndpoint through, return the text."""

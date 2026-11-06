@@ -309,7 +309,11 @@ ShellRoot {
     if (!prefs.bubble || dragging) return ""
     var d = st.detail || ""
     switch (mood) {
-      case "listening": return d || (st.fresh ? "Fresh start · listening…" : "Listening…") + "\nPress again to send"
+      case "listening":
+        // quiet for a few seconds with auto-send off: the daemon reminds them to send (st.remind)
+        if (st.remind) return (d || "Still listening…") + "\nPress Super+A to send"
+        return d || (st.fresh ? "Fresh start · listening…" : "Listening…")
+                    + (st.autosend ? "\nPause or press again to send" : "\nPress again to send")
       case "thinking": return (st.transcript || d || "Thinking…") + "\nPress Super+A to stop"
       case "working": return (d || "Working…") + "\nPress Super+A to stop"
       case "speaking": return d
@@ -324,7 +328,8 @@ ShellRoot {
     return ""
   }
   // the control hints that bubbleText appends; shown pinned under the scrolling text
-  readonly property var bubbleHints: ["Press again to send", "Press Super+A to stop", "Or Super+A, then say yes or no"]
+  readonly property var bubbleHints: ["Press again to send", "Pause or press again to send", "Press Super+A to send",
+                                      "Press Super+A to stop", "Or Super+A, then say yes or no"]
   readonly property string bubbleHint: {
     for (var i = 0; i < bubbleHints.length; i++)
       if (bubbleText.endsWith("\n" + bubbleHints[i])) return bubbleHints[i]
@@ -332,7 +337,7 @@ ShellRoot {
   }
   readonly property string bubbleBody: bubbleHint ? bubbleText.slice(0, bubbleText.length - bubbleHint.length - 1) : bubbleText
   readonly property bool bubbleMuted: mood === "thinking" || mood === "working" || mood === "starting"
-                                     || (mood === "listening" && !st.detail) || (hovered && !active && !awaiting)
+                                     || (mood === "listening" && !st.detail && !st.remind) || (hovered && !active && !awaiting)
   // keep the last spoken sentence up for a moment after auren stops talking
   property string spokeLast: ""
   Connections {

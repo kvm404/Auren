@@ -15,7 +15,9 @@ an entire recording after the user finishes speaking.
 - Sending the request ends microphone capture and sends `ForceEndpoint` and `Terminate`.
 - Up to 100 vocabulary terms are sent through `keyterms_prompt` in the connection URL.
 - Microphone reads are regrouped into messages of 50 to 1,000 ms; the final short message is padded.
-- The connection is open only during a listening session. The daemon limits each session to two minutes.
+- The connection is open only during a listening session. The daemon limits each session to two minutes,
+  and ends it sooner when no new words arrive: 12 s by default, or the auto-send delay
+  ([daemon.md](../daemon.md)). That timer is the daemon's own; the turn-silence parameters above stay as they are.
 
 ## Consequences
 

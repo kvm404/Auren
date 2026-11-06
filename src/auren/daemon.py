@@ -13,6 +13,8 @@
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
     auren-ctl safety ask|task|free    # how much it asks before risky actions (saved in config.toml)
+    auren-ctl autosend on|off|toggle  # send by itself when you stop talking (off: remind you to press Super+A)
+    auren-ctl autosend after 5        # seconds without new words before auto-send sends (1 to 15)
     auren-ctl yes | no                # answer the question(s) it is waiting on (the bubble's buttons do this)
     auren-ctl reload                  # re-read config.toml and the vocabulary (auren config and auren vocab send this)
 
@@ -42,6 +44,7 @@ from .ears import Listening, vocabulary
 from .live import Level, describe, notice_kind
 from .profile import Profile
 from .safety import LEVELS, TOKEN_TTL, parse_answer
+from .settings import BY_FLAT as SETTING_KEYS
 from .settings import load as load_settings
 from .settings import save as save_settings
 from .tools import Outcome, Runtime
@@ -51,6 +54,12 @@ SESSION = "daemon"          # the daemon's tool session (an `auren chat` has its
 log = logging.getLogger("auren")
 MIN_HOLD = 0.35          # shorter key taps are ignored
 MAX_LISTEN = 120         # seconds; listening stops by itself (the speech service bills per second)
+# When the user stops talking (no new words; see ears.Listening.quiet_seconds). With auto-send off, it reminds
+# them to press the key, then sends by itself; nothing said at all ends the listen the same way.
+REMIND_AFTER = 3         # seconds without new words: "Press Super+A to send"
+SEND_AFTER = 12          # seconds without new words: send what was heard
+QUIET_TICK = 0.2         # how often a listen checks for quiet
+ALREADY_SENT = 2         # seconds after a send by itself (of something heard) in which the talk key does nothing
 # Said on its own, these start a fresh conversation instead of going to the brain.
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
                     r"forget (?:everything|all that|it all|our conversation)|clear (?:your|the) memory|reset (?:yourself|the conversation))"
@@ -65,6 +74,9 @@ class Daemon:
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
     _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
+    _sent_by_itself = float("-inf")       # when a listen last ended without the key (quiet), time.monotonic()
+    _reminding = False                    # the "Press Super+A to send" reminder is up (state.json `remind`)
+    _quiet_watch: asyncio.Task | None = None   # the current listen's _watch_quiet (kept: the loop holds tasks weakly)
 
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
@@ -96,7 +108,8 @@ class Daemon:
                                    "safety": self.tools.level,
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
-                                   "tts": tuning(self.settings), **extra}))
+                                   "tts": tuning(self.settings), "autosend": self.autosend,
+                                   "autosendAfter": self.autosend_after, **extra}))
         tmp.replace(STATE_FILE)
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
@@ -112,6 +125,14 @@ class Daemon:
         self.loop.call_later(max(0.0, until - time.time()) + 0.5, self._refresh_state)
 
     @property
+    def autosend(self) -> bool:
+        return bool(self.settings.get("autosend", False))
+
+    @property
+    def autosend_after(self) -> float:
+        return float(self.settings.get("autosendAfter", 5))
+
+    @property
     def voice_on(self) -> bool:
         return bool(self.voice and self.speak_enabled and self.settings["voice"])
 
@@ -120,7 +141,7 @@ class Daemon:
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
                      if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "codexModel", "codexEffort",
-                                  "voice", "voiceName", "voices", "tts", "safety")}
+                                  "voice", "voiceName", "voices", "tts", "safety", "autosend", "autosendAfter")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)
@@ -160,6 +181,8 @@ class Daemon:
 
     async def command(self, line: str) -> str:
         cmd, _, arg = line.strip().partition(" ")
+        if cmd in ("talk", "talk-fresh") and not self.listening and time.monotonic() - self._sent_by_itself < ALREADY_SENT:
+            return "already sent"                    # pressed to send just as the quiet sent it: not a new listen or a stop
         if cmd in ("talk", "talk-fresh") and not self.listening and self.state in ("thinking", "working"):
             await self.cancel()                      # the talk key stops an answer in progress
             return "stopped"
@@ -239,6 +262,8 @@ class Daemon:
             self._save({"safety": level})
             self._refresh_state()
             return "safety " + level
+        if cmd == "autosend":
+            return self._autosend(arg.split())
         if cmd in ("yes", "no"):
             waiting = self.tools.confirmations.batch(SESSION)
             if not waiting:
@@ -300,6 +325,22 @@ class Daemon:
         self._refresh_state()
         return "Auren picked it up"
 
+    def _autosend(self, words: list[str]) -> str:
+        """autosend on | off | toggle | after 5"""
+        usage = "usage: autosend on|off|toggle | autosend after 1..15"
+        if len(words) == 2 and words[0] == "after":
+            try:
+                after = SETTING_KEYS["autosendAfter"].check(words[1])
+            except ValueError as e:
+                return f"autosend after should be {e}"
+            self._save({"autosendAfter": after})
+        elif len(words) == 1 and words[0] in ("on", "off", "toggle"):
+            self._save({"autosend": not self.autosend if words[0] == "toggle" else words[0] == "on"})
+        else:
+            return usage
+        self._refresh_state()
+        return f"autosend {'on' if self.autosend else 'off'}, after {self.autosend_after:g} s"
+
     def _tts(self, words: list[str]) -> str:
         """tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 (several at once is fine) | reset"""
         if words == ["reset"]:
@@ -321,9 +362,9 @@ class Daemon:
             self.voice.stop()            # talking over auren interrupts it
         if fresh:                        # restart the brain while the user speaks; the answer waits for it
             asyncio.create_task(self._forget_quietly())
-        self.listening = Listening(self.vocab, on_partial=lambda t: self.set_state("listening", t, fresh=fresh),
-                                   on_level=self.level.set)
-        session = self.listening
+        session = self.listening = Listening(self.vocab, on_level=self.level.set)
+        session.on_partial = lambda _text: self._show_listening(session, fresh)
+        self._reminding = False
         try:
             await self.listening.start()
         except Exception as e:  # noqa: BLE001
@@ -333,13 +374,64 @@ class Daemon:
             return f"error: {e}"
         self.set_state("listening", "", fresh=fresh)
         notice.show("Listening (fresh start)…" if fresh else "Listening…", "listening", 1200)
-        asyncio.get_running_loop().call_later(MAX_LISTEN, lambda: asyncio.create_task(self._listen_timeout(session)))
+        self._quiet_watch = asyncio.create_task(self._watch_quiet(session, fresh))
         return "listening"
 
-    async def _listen_timeout(self, session: Listening) -> None:
-        if self.listening is session:
-            log.info("listening stopped after %ss", MAX_LISTEN)
-            await self.release()
+    def _quiet_action(self, session: Listening) -> str:
+        return after_quiet(session.quiet_seconds, session.words > 0, self.autosend, self.autosend_after)
+
+    def _show_listening(self, session: Listening, fresh: bool, what: str | None = None) -> None:
+        """What this listen heard so far, with the reminder if it's due. New live text and the quiet watch
+        both write it, so a revised partial (no new words) keeps a reminder that is still due."""
+        if self.listening is not session:                # a partial arriving after the send, or an older listen
+            return
+        self._reminding = (self._quiet_action(session) if what is None else what) == "remind"
+        self.set_state("listening", session.text, fresh=fresh, **({"remind": True} if self._reminding else {}))
+
+    async def _watch_quiet(self, session: Listening, fresh: bool) -> None:
+        """While this listen lasts: remind the user to send when they go quiet, and send by itself after a
+        while (auto-send: after its own delay), so a forgotten key press doesn't leave the mic open. It also
+        enforces MAX_LISTEN, so if it fails, it stops the listen rather than leave the mic open."""
+        try:
+            await self._watch_quiet_until_sent(session, fresh)
+        except Exception as e:  # noqa: BLE001 - logged and reported; the listen must not outlive its watch
+            log.exception("the quiet watch failed: stopping this listen")
+            if self.listening is session:
+                await self.cancel()
+            else:                                            # it failed in release(): its mic may still be open
+                await session.cancel()
+                if self.listening is None:                   # not if the user started another listen meanwhile
+                    self.level.set(0)
+                    self.set_state("error", f"listening failed: {e}"[:200])
+            notice.notify("Auren stopped listening", str(e)[:200], "error")
+
+    async def _watch_quiet_until_sent(self, session: Listening, fresh: bool) -> None:
+        while self.listening is session:
+            await asyncio.sleep(QUIET_TICK)
+            if self.listening is not session:
+                return
+            quiet, heard = session.quiet_seconds, session.words > 0
+            what = after_quiet(quiet, heard, self.autosend, self.autosend_after)
+            if session.held_seconds >= MAX_LISTEN:
+                log.info("listening stopped after %ss", MAX_LISTEN)
+                what = "send"
+            elif what == "send":
+                how = "nothing said" if not heard else "auto-send" if self.autosend else "sending by itself"
+                log.info("%s after %.1fs without new words", how, quiet)
+            if what == "send":
+                # Stamped before and after: a press while the final transcript comes in, or just as the answer
+                # starts, was meant to send this listen, not to start another or stop the answer. With nothing
+                # heard there's nothing to answer, and a press is a new try.
+                if heard:
+                    self._sent_by_itself = time.monotonic()
+                await self.release()
+                if heard:
+                    self._sent_by_itself = time.monotonic()
+                return
+            if (what == "remind") != self._reminding:      # due now, or talking again took it away
+                self._show_listening(session, fresh, what)
+                if self._reminding:
+                    notice.show("Press Super+A to send", "listening", 3000)
 
     async def _set_claude(self, effort: str | None = None, model: str | None = None) -> None:
         what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)
@@ -608,6 +700,16 @@ class Daemon:
         log.info("listening on %s", SOCKET)
         async with server:
             await server.serve_forever()
+
+
+def after_quiet(quiet: float, heard: bool, autosend: bool, autosend_after: float) -> str:
+    """What a listen does after `quiet` seconds without new words: "send", "remind" or "" (keep listening).
+    heard: whether any words came at all (before that, the quiet is counted from the start)."""
+    if heard and autosend:
+        return "send" if quiet >= autosend_after else ""
+    if quiet >= SEND_AFTER:
+        return "send"
+    return "remind" if heard and quiet >= REMIND_AFTER else ""
 
 
 def _followup(outcomes: list[Outcome], asked: int) -> str:
