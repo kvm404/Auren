@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "krvm.auren",
   "name": "Auren",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "krvm",
   "license": "MIT",
   "description": "Control Auren, the voice assistant: on/off, voice, brain, mascot, vocabulary, fresh start, updates.",
