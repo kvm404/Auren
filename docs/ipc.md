@@ -39,6 +39,7 @@ Always present:
 | `voices` | Voices available |
 | `tts` | `{speed, steps, volume, pause}` |
 | `safety` | Approval level: `ask`, `task` or `free` ([safety.md](safety.md#approval-levels)) |
+| `autosend`, `autosendAfter` | Auto-send on, and its delay in seconds ([daemon.md](daemon.md)) |
 
 Sometimes present:
 
@@ -47,6 +48,7 @@ Sometimes present:
 | `transcript` | thinking/working: what the user said |
 | `tool`, `mouse` | working: the tool being run; `mouse` true for screen control |
 | `fresh` | listening: a fresh conversation was asked for |
+| `remind` | listening: quiet for 3 s with auto-send off; the bubble says "Press Super+A to send" |
 | `reply`, `silent` | speaking: the whole reply; `silent` when the voice is off (bubble only) |
 | `awaiting`, `question`, `until` | idle: yes/no question(s) are open until `until`. `question` is the text of every question one answer covers (several: a first line "N things, one answer:", then one line each starting with `• `; at most 6) |
 
@@ -57,7 +59,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Command | Does |
 |---|---|
-| `talk` / `talk-fresh` | Start listening; again to send (fresh: a new conversation) |
+| `talk` / `talk-fresh` | Start listening; again to send (fresh: a new conversation). Within 2 s of a send by itself it does nothing and replies `already sent` |
 | `start` / `stop` | Push to talk (press, release) |
 | `cancel` | Stop listening, the answer in progress (brain and tools) or speaking |
 | `ask <text>` | A typed request through the same pipeline |
@@ -70,6 +72,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
 | `codex-effort minimal\|low\|medium\|high\|xhigh` | Codex's effort (from its next answer) |
 | `safety ask\|task\|free` | How much Auren asks before risky actions (saved in `config.toml`) |
+| `autosend on\|off\|toggle` / `autosend after N` | Send by itself when you stop talking, and after how many seconds (1 to 15; saved in `config.toml`) |
 | `yes` / `no` | Answer the question(s) it is waiting on (the bubble's and the panel's buttons send these; bind them to keys if you like). The reply says how many were approved or dropped, or that nothing is waiting |
 | `status` | JSON: state, brain, mode, effort, voice, safety |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
@@ -79,7 +82,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[brain]` (mode, effort), `[safety]` (level). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |

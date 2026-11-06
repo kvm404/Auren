@@ -4,7 +4,8 @@
 
 | Part | What | Code |
 |---|---|---|
-| Keys | In `~/.config/hypr/bindings.lua`: Super+A runs `auren-ctl talk` (start listening; again: stop and send), Super+Shift+A runs `auren-ctl talk-fresh` (the same, but the brain restarts with an empty conversation while you speak). The key toggles listening; it does not need to be held. Listening stops by itself after 2 minutes (`MAX_LISTEN`), since the speech service bills per second | `auren-ctl` (`src/auren/ctl.py`) |
+| Keys | In `~/.config/hypr/bindings.lua`: Super+A runs `auren-ctl talk` (start listening; again: stop and send), Super+Shift+A runs `auren-ctl talk-fresh` (the same, but the brain restarts with an empty conversation while you speak). The key toggles listening; it does not need to be held. If you forget the second press, it sends by itself when you go quiet (see Auto-send below); it also stops after 2 minutes (`MAX_LISTEN`), since the speech service bills per second | `auren-ctl` (`src/auren/ctl.py`) |
+| Auto-send | When no new words come in (counted from the live transcript, so a fan or music doesn't count as talking; the last words of a sentence often come only with the final transcript, so for 2.5 s after the last new word a mic that still sounds like speech counts too). **Off (the default):** after 3 s of quiet the bubble (or the OSD, without the mascot) says "Press Super+A to send"; talking again takes it away; after 12 s it sends by itself. **On:** it sends after `listen.autosend_after` seconds (default 5, 1 to 15), with no reminder. Saying nothing at all stops listening after 12 s ("Didn't catch that"). A talk key pressed within 2 s of a send by itself is ignored, so pressing to send just too late neither starts a new listen nor stops the answer. `auren-ctl autosend on\|off\|toggle`, `auren-ctl autosend after 5`, or the panel's Voice page; shown in `state.json` as `autosend`, `autosendAfter`, and `remind` while the reminder is up | `Daemon._watch_quiet()`, `daemon.after_quiet()`, `Listening.quiet_seconds` |
 | Ears | AssemblyAI streaming, Universal-3.5 Pro, push-to-talk settings from decision 0002. The connection is open during a listening session. The text is returned as soon as the final turn arrives after sending (~0.3 s in the original tests) | `src/auren/ears.py` |
 | Vocabulary | 100 terms: user words, core names (herdr, Codex, Claude, Omarchy…), detected bookmark names, web apps, recent projects, apps | `ears.vocabulary()`, `src/auren/data/vocab.txt` |
 | Your own words | `auren vocab add <word>` / `remove <word>` / `list` (also the bar panel's Vocabulary page) keep them in `~/.config/auren/vocab.txt`, ahead of the built-in list. A word the built-in list or yours already has is refused (case and spacing ignored), and so is one past the limit: 100 less the number of built-in words (`vocab.capacity()`, so it follows the built-in list), shown in the panel as "N of M". The daemon is told to `reload`, so a new word is used from the next press, with no restart | `src/auren/vocab.py`, `Daemon._reload()` |
@@ -56,6 +57,7 @@ auren-ctl tts speed 1.1 pause 0.2   # how the voice speaks; tts reset for the de
 auren-ctl effort high               # Claude thinks harder (and slower); starts a fresh conversation
 auren-ctl codex-effort medium       # the same for Codex, from its next answer
 auren-ctl safety task               # ask once per task; ask | task | free
+auren-ctl autosend on               # send when you stop talking; autosend after 3 sets the wait
 auren-ctl yes                       # answer what it is asking (no: drop it)
 ```
 

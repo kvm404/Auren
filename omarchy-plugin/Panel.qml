@@ -13,7 +13,7 @@ import qs.Ui
 //                   Home     the live mascot (click it to talk), status, Yes/No when it asks, last exchange, quick switches
 //                   Mascot   Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
 //                   Voice    spoken replies in English, voice (F2, M3, F1, M1), speed,
-//                            quality, volume, pause, test
+//                            quality, volume, pause, test; listening: auto-send and its delay
 //                   Brain    auto / Claude / Codex, Claude's effort, how much it asks before risky actions, today's numbers
 //                   Updates  the installed version, a check for a newer one, and the update (auren update)
 //   right-click   start a fresh conversation
@@ -77,6 +77,16 @@ Panel {
   }
   readonly property string safety: st.safety || "ask"
   readonly property string voiceName: st.voiceName || "F2"
+  // Auto-send: the daemon sends by itself once no new words come for autosendAfter seconds. Off, it reminds
+  // the user to press Super+A after 3 s of quiet and sends after 12 s (daemon.REMIND_AFTER, SEND_AFTER).
+  readonly property bool autosend: st.autosend === true
+  readonly property real autosendAfter: st.autosendAfter || 5
+  readonly property var autosendDelays: [
+    { value: "2", label: "2 s", tip: "Quick: a short pause sends" },
+    { value: "3", label: "3 s", tip: "Room for a breath" },
+    { value: "5", label: "5 s", tip: "Room to think mid-sentence (the default)" },
+    { value: "8", label: "8 s", tip: "Long pauses; slower to send" }
+  ]
   readonly property var tts: st.tts || ({ speed: 1.05, steps: 5, volume: 1.0, pause: 0.0 })
   // The voices picked by ear in decision 0001: F2 (chosen), M3 (normal pace), F1 and M1 (slower, calmer).
   readonly property var voiceChoices: [
@@ -375,6 +385,8 @@ Panel {
   function setCodexEffort(level) { if (level !== root.codexEffort) ctlRun(["codex-effort", level]) }
   function pickEffort(i) { if (codexAnswers) setCodexEffort(codexEfforts[i].value); else setEffort(efforts[i].value) }
   function setSafety(level) { if (level !== root.safety) ctlRun(["safety", level]) }
+  function toggleAutosend() { ctlRun(["autosend", root.autosend ? "off" : "on"]) }
+  function setAutosendAfter(v) { ctlRun(["autosend", "after", v]) }
   function answer(yes) { ctlRun([yes ? "yes" : "no"]) }
   function setVoiceName(name) { ctlRun(["voice-name", name]) }
   function startFresh() { ctlRun(["forget"]) }
@@ -428,7 +440,7 @@ Panel {
     if (root.awaiting) return "Waiting for your yes or no"
     switch (root.mood) {
       case "starting": return "Waking up…"
-      case "listening": return "Listening…"
+      case "listening": return st.remind ? "Still listening" : "Listening…"
       case "thinking": return "Thinking…"
       case "working": return st.detail || "Working…"
       case "speaking": return "Speaking"
@@ -437,7 +449,7 @@ Panel {
     return "Ready"
   }
   readonly property string hintText: !root.daemonAlive ? (root.daemonActive ? "Starting up" : "Click " + root.mascot.name + " or Turn on to start")
-                                   : root.mood === "listening" ? "Press Super+A again to send"
+                                   : root.mood === "listening" ? (root.autosend && !st.remind ? "Pause or press Super+A to send" : "Press Super+A again to send")
                                    : root.mood === "thinking" || root.mood === "working" ? "Super+A to stop"
                                    : "Super+A to talk · Shift+Super+A for a fresh start"
   readonly property string brainText: (brainMode === "codex" ? (codexName ? "Codex (" + codexName + ")" : "Codex")
@@ -553,7 +565,9 @@ Panel {
       { n: 3, act: function(c) { root.setTts("steps", root.qualities[c].value) } },
       { n: 1, adjust: function(dx) { root.nudge("volume", dx) } },
       { n: 1, adjust: function(dx) { root.nudge("pause", dx) } },
-      { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } }]
+      { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } },
+      { n: 1, act: function() { root.toggleAutosend() } }
+    ].concat(root.autosend ? [{ n: root.autosendDelays.length, act: function(c) { root.setAutosendAfter(root.autosendDelays[c].value) } }] : [])
     if (page === 3) return [
       { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
       { n: (root.codexAnswers ? root.codexEfforts : root.efforts).length, act: function(c) { root.pickEffort(c) } },
@@ -1169,6 +1183,31 @@ Panel {
                 onPicked: function(v, i) { root.runAction(root.voiceActions, i) }
                 onHoveredIndex: function(i) { root.hover(6, i) }
               }
+            }
+
+            SectionTitle { text: "LISTENING" }
+
+            Toggle {
+              width: parent.width
+              label: "Auto-send"
+              description: root.autosend ? "Sends after " + root.autosendAfter + " s without new words"
+                                         : "Reminds you to press Super+A after 3 s of quiet; sends after 12 s"
+              checked: root.autosend
+              foreground: root.fg; fontFamily: root.font
+              hasCursor: root.has(7)
+              onClicked: root.toggleAutosend()
+              onHovered: function(h) { if (h) root.hover(7) }
+            }
+            Choice {
+              width: parent.width
+              visible: root.autosend
+              title: "SEND AFTER"
+              options: root.autosendDelays
+              value: String(root.autosendAfter)
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(8) ? root.cursorCol : -1
+              onPicked: function(v) { root.setAutosendAfter(v) }
+              onHoveredIndex: function(i) { root.hover(8, i) }
             }
           }
 

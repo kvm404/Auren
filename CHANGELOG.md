@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Forgetting to press Super+A a second time no longer leaves Auren listening. After 3 s without new
+  words, the mascot's bubble (or the OSD) says "Press Super+A to send"; after 12 s it sends by itself.
+  Saying nothing at all stops listening after 12 s.
+- Auto-send: turn it on in the panel's Voice page (or `auren-ctl autosend on`, `listen.autosend` in
+  `config.toml`) and Auren sends as soon as you stop talking, after 5 s by default (2, 3, 5 or 8 s in
+  the panel, 1 to 15 in the config). Quiet is counted from the transcript, so background noise doesn't
+  hold a turn open. Off by default.
+
 ## 0.1.2
 
 ### Changed
