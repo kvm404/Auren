@@ -28,8 +28,8 @@ import qs.Ui
 // ~/.local/share/auren/bin/auren-ctl; the services are started and stopped with systemctl --user.
 Panel {
   id: root
-  moduleName: "krvm.auren"
-  ipcTarget: "krvm.auren"
+  moduleName: "kvm404.auren"
+  ipcTarget: "kvm404.auren"
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/auren"

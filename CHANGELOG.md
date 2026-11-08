@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The bar plugin's ID is now `kvm404.auren` (it was `krvm.auren`). Installing or updating moves the
+  widget over in the same place on your bar. If you call the panel from a script or key binding,
+  use `omarchy-shell kvm404.auren toggle`.
+
 ## 0.1.3
 
 ### Added

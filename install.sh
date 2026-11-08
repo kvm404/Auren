@@ -8,7 +8,7 @@
 # Layout (see docs/architecture.md):
 #   ~/.local/share/auren/venv/          the Python environment, with auren and auren-ctl
 #   ~/.local/share/auren/mascot/        the floating mascot (Quickshell)
-#   ~/.local/share/auren/bar-plugin/    the Omarchy bar plugin, linked as krvm.auren
+#   ~/.local/share/auren/bar-plugin/    the Omarchy bar plugin, linked as kvm404.auren
 #   ~/.local/share/auren/bin/auren-ctl  what key bindings call
 #   ~/.local/share/auren/models/        the voice model
 #
@@ -116,10 +116,57 @@ done
 
 # ---- Omarchy bar plugin ------------------------------------------------------------------------
 if command -v omarchy >/dev/null; then
-  say "Bar plugin: krvm.auren"
+  plugin=kvm404.auren old_plugin=krvm.auren shell_json="$config/omarchy/shell.json"
+  say "Bar plugin: $plugin"
   mkdir -p "$plugins"
-  ln -sfn "$share/bar-plugin" "$plugins/krvm.auren"
-  grep -q '"krvm.auren"' "$config/omarchy/shell.json" 2>/dev/null || omarchy plugin enable krvm.auren
+  ln -sfn "$share/bar-plugin" "$plugins/$plugin"
+  if [[ -L $plugins/$old_plugin ]]; then
+    # Up to 0.1.3 the plugin was krvm.auren: put the new one where it was, then remove it.
+    if grep -q "\"$old_plugin\"" "$shell_json" 2>/dev/null; then
+      say "Renaming the bar plugin $old_plugin to $plugin"
+      if omarchy-shell shell ping >/dev/null 2>&1; then
+        # The running shell owns shell.json: ask it. The new id needs a rescan, which runs in the
+        # background, so retry while it says "not ready".
+        omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+        for _ in $(seq 50); do
+          result=$(omarchy-shell shell putBarWidget "$plugin" "{\"after\":\"$old_plugin\"}" 2>&1) || true
+          [[ $result == "not ready" ]] || break
+          sleep 0.1
+        done
+        [[ $result == ok ]] || warn "couldn't place $plugin in the bar ($result): omarchy plugin enable $plugin"
+        omarchy plugin disable "$old_plugin" >/dev/null 2>&1 || true
+      else
+        # No shell running: rename the entries in place, keeping their position and settings.
+        "$share/venv/bin/python" - "$shell_json" "$old_plugin" "$plugin" <<'PY'
+import json, os, sys
+path, old, new = sys.argv[1:]
+with open(path) as f:
+    config = json.load(f)
+def rename(node):
+    if isinstance(node, dict):
+        if node.get("id") == old:
+            node["id"] = new
+        for value in node.values():
+            rename(value)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            if value == old:
+                node[i] = new
+            else:
+                rename(value)
+rename(config)
+with open(path + ".auren-tmp", "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+os.replace(path + ".auren-tmp", path)
+PY
+      fi
+    fi
+    rm -f "$plugins/$old_plugin"
+    omarchy-shell -q shell rescanPlugins
+  elif ! grep -q "\"$plugin\"" "$shell_json" 2>/dev/null; then
+    omarchy plugin enable "$plugin"
+  fi
   # the running shell keeps the panel it loaded (auren update restarts it itself)
   [[ -z $had_plugin || -n ${AUREN_UPDATE:-} ]] || warn "the bar plugin was replaced: omarchy restart shell (loads the new panel)"
 fi
