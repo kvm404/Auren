@@ -68,6 +68,34 @@ auren-ctl yes                       # answer what it is asking (no: drop it)
 - **Spoken reply:** the first sentence starts ~0.3 s after the text is ready.
 - **Memory:** the daemon uses ~520 MB (mostly the Supertonic models), plus the Claude Code process.
 
+Later, on a 2-core Intel i3 laptop with 8 GB of RAM, over 932 requests answered by Haiku, median time
+from hearing you to the reply:
+
+| Request | Median |
+|---|---|
+| A plain answer ("what time is it?") | 1.9 s |
+| One action ("open Obsidian on workspace 2") | 3.8 s |
+| Several steps (look, click, type) | 10.1 s |
+
+The transcript is ready 0.4 s after the second key press.
+
+## Settings and routines
+
+Settings live in `~/.config/auren/config.toml`. The panel and CLI keep your comments when they change it.
+
+```bash
+auren config                          # show settings and defaults
+auren config set brain.mode codex
+auren config set voice.speed 1.1
+auren config set integrations.browser false
+auren vocab add "Your Project"
+auren chat                            # a separate terminal conversation that shows tool calls
+```
+
+Put personal instructions in `~/.config/auren/instructions.md` and repeatable workflows in
+`~/.config/auren/routines/*.md`. Auren detects installed apps, the default browser, coding agents,
+and common project folders. Use `auren config` to override what it detects.
+
 ## Not yet
 
 - Telling the user when a background job (a Codex agent in herdr) finishes.

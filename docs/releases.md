@@ -44,7 +44,8 @@ merged commit. The first release is **v0.1.0**, an early release for Omarchy use
 It is a regular GitHub release so the release-only updater can discover it.
 
 1. Update the version in `pyproject.toml` and `omarchy-plugin/manifest.json`, refresh `uv.lock` if
-   needed, and add release notes under that version in `CHANGELOG.md`.
+   needed, and add release notes under that version in `CHANGELOG.md`. Change the tag in the
+   README's `git clone --branch` line to the new version, so new installs get this release.
 2. Update user docs and `docs/ipc.md` for changed behavior. Run the contributor checks, including Qt
    tests, and smoke-test an install on an Omarchy session. Keep live test results separate from
    automated test results in the PR.

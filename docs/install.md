@@ -12,12 +12,38 @@ model. It does not yet have an API-key model backend. Microphone input requires 
 The local Supertonic voice model downloads about 380 MB during installation; a failed download leaves
 Auren able to show text replies. Retry with `auren voice-model`.
 
-Follow the [README installation steps](../README.md#install). A normal install is a copy, while
+Follow the [README quick start](../README.md#quick-start). A normal install is a copy, while
 `./install.sh --dev` links the runtime and UI to your checkout.
 
-The installer enables `auren.service` and `auren-mascot.service` for your graphical session and
-registers the `krvm.auren` bar plugin. It prints Hyprland bindings instead of editing your config.
-It does not install system packages or grant device access.
+## For coding agents
+
+If a user asked you to install Auren, work through these steps and tell them what you're doing as you go.
+
+1. Check the machine: Omarchy with Hyprland 0.56 or newer and Lua configuration, PipeWire, and a
+   microphone. Read any local agent instructions for Omarchy configuration. If a requirement is
+   missing, stop and tell the user.
+2. Check for `git`, `uv`, `qs` (Quickshell), `wtype`, `wl-clipboard` and `grim`. Show the user what's
+   missing and ask before installing it with pacman.
+3. Find Claude Code and Codex. Run a short test prompt to make sure at least one is signed in. If
+   neither works, help the user sign in.
+4. Use the latest published GitHub release, excluding drafts and prereleases, and check out its exact
+   tag in a temporary folder. If there is no release, tell the user instead of installing `main`.
+   Run `./install.sh` (a normal install, not `--dev`). It downloads a 380 MB voice model.
+5. `install.sh` creates `~/.config/auren/secrets.env` with mode 600. Give the user one command to add
+   `ASSEMBLYAI_API_KEY=...` themselves. Never ask them to paste the key into the conversation, and
+   never print it.
+6. Back up `~/.config/hypr/bindings.lua` and add the lines `install.sh` printed. They unbind Omarchy's
+   Super+A (Select all) and Super+Shift+A (ChatGPT). Ask the user first, and use the printed
+   Super+Alt+A lines if they want to keep Omarchy's. Don't overwrite their other shortcuts.
+7. Ask about the optional integrations one at a time: herdr for coding agents, Open Browser Use for
+   browser tasks, and `/dev/uinput` access for mouse control and Excalidraw. Set up the ones the user
+   wants and turn the others off with `auren config set integrations.<name> false`.
+8. If only Codex is available, run `auren config set brain.mode codex`. Keep the default `ask`
+   approval level.
+9. Run `auren doctor` and fix what it reports. Restart Auren while it is idle, then check that it
+   speaks with `auren-ctl say "Hi, I'm Auren"`.
+10. Finish with a short summary: what you installed, what changed in the user's config, anything they
+    still need to do, and three things to say after pressing Super+A.
 
 ## Optional integrations
 
