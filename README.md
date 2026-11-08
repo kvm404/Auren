@@ -1,217 +1,100 @@
-# Auren
+<h1 align="center">Auren</h1>
 
-A voice assistant for the Omarchy desktop. Press **Super+A**, say what you want, and press it again.
-Auren acts on your computer and answers out loud. A small mascot shows when it is listening,
-thinking, working, or waiting for your answer.
+<p align="center">
+  An Omarchy voice assistant.<br>
+  Talk to it, and it opens apps, plays music, messages friends and runs coding agents in herdr.
+</p>
 
-<img src="docs/images/bar-panel.png" alt="Auren's controls in the Omarchy bar" width="340" align="right">
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#using-it">Using it</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-Ask it to open an app on another workspace, control your music, download something in your signed-in
-browser, draw a diagram in Excalidraw, or give a coding agent a task in herdr. When an app has no
-suitable command or browser interface, Auren can look at the screen and use the mouse and keyboard.
+<p align="center">
+  <img src="docs/images/demo.gif" alt="Auren opening apps, playing music, sending a message, drawing in Excalidraw and starting Codex" width="800">
+</p>
 
-Auren is an early project built for **Omarchy, Hyprland, Wayland, and PipeWire**.
-Other Linux desktops are not supported yet.
-
-- **Speech recognition:** AssemblyAI Universal-3.5 Pro streaming, with your own vocabulary.
-- **Brain:** your own signed-in Claude Code, using Claude Haiku by default. Your signed-in Codex,
-  using `gpt-6-luna`, can take over when Claude hits a usage limit. Models and effort are configurable.
-- **Voice:** Supertonic 3 runs locally on the CPU. Replies are in English.
-- **Desktop:** apps, windows, workspaces, media, volume, reminders, screenshots, and shell jobs.
-- **Optional integrations:** herdr for coding agents, Open Browser Use for browser tasks, and
-  `/dev/uinput` access for mouse control and Excalidraw drawings.
-- **Mascots:** Auren, a hover-bot, and Veyra, a fox spirit. Both have captions, voice reactions,
-  drag-to-move, sleep animations, and confirmation buttons.
-
-<br clear="right">
-
-![Auren and Veyra in each mood](docs/images/mascots.png)
-
-## Fast and light, on Claude Haiku
-
-Auren uses your own signed-in Claude Code or Codex. There is no separate model account or API key
-for the brain: requests count toward the plan you already use with that CLI.
-
-The default brain is **Claude Haiku**, Anthropic's smallest and fastest model. Auren's tools do the
-heavy lifting: they find windows, read pages, and check results themselves, so Haiku mostly has to
-pick the right tool and say what happened. Claude Code stays running between requests, so there is
-no startup wait.
-
-Measured on a 2-core Intel i3 laptop with 8 GB of RAM, over 932 requests answered by Haiku:
-
-| Request | Median time from hearing you to the reply |
-|---|---|
-| A plain answer ("what time is it?") | 1.9 s |
-| One action ("open Obsidian on workspace 2") | 3.8 s |
-| Several steps (look, click, type) | 10.1 s |
-
-Your words are ready 0.4 s after you release the key. The reply voice runs locally, so speaking
-costs nothing. Speech recognition is the only paid service, billed by AssemblyAI per hour of
-listening, and Auren listens only between your two key presses.
+Press **Super+A** and say what you want. A tiny robot on your desktop shows what it's doing and
+answers out loud. When an app has no command for something, Auren looks at the screen and uses the
+mouse and keyboard.
 
 ## Install
 
-You need an Omarchy desktop with **Hyprland 0.56 or newer and Lua configuration**, `git`, `uv`,
-Quickshell (`qs`), PipeWire's `pw-record` and `pw-cat`, `wtype`, `wl-clipboard`, and `grim`.
-At least one brain CLI, **Claude Code or Codex**, must be installed and signed in. You also need an **AssemblyAI API key** for voice input.
+You need Omarchy, Claude Code or Codex, and an [AssemblyAI](https://www.assemblyai.com/) API key for
+speech to text.
 
-### Install with an agent
+### With a coding agent
 
-Paste this prompt into a coding agent running on your Omarchy machine:
+Paste this into Claude Code or Codex. It installs Auren, sets it up and checks that it works.
 
 ```text
-Install and set up Auren from https://github.com/kvm404/Auren on this machine.
-
-Read the repository's README.md and docs/install.md first, along with any local
-agent instructions for Omarchy configuration. Use the latest published release,
-excluding drafts and prereleases. Check out its exact tag. If no release is
-available, tell me rather than installing main. Use a normal install, not --dev.
-
-Check dependencies and install what's missing. Detect my installed Claude Code
-and Codex CLIs, help me complete sign-in if needed, and configure the brain to use
-an available one. Run ./install.sh and help me add my AssemblyAI API key directly
-to the local secrets.env file with mode 600. Never ask me to paste the key into
-this conversation or print it in command output.
-
-Back up config files before editing them. Add the key bindings install.sh prints.
-They unbind Omarchy's Super+A (Select all) and Super+Shift+A (ChatGPT): tell me,
-and if I want to keep those, use the Super+Alt+A alternative it prints. Don't
-overwrite my other shortcuts. Keep the default ask approval level. Offer herdr, browser, and
-mouse-control integrations as optional setup choices, and leave unavailable
-integrations disabled or on auto.
-
-Run auren doctor, resolve setup problems, and restart Auren when idle. Tell me
-what changed, anything I still need to do, and how to try my first voice request.
+Install Auren from https://github.com/kvm404/Auren on this Omarchy machine.
+Use the latest release and follow "For coding agents" in its docs/install.md.
+Ask before installing packages or changing my config, and never ask me to
+paste my AssemblyAI key into this chat.
 ```
 
-### Manual installation
-
-Install the latest release:
+### By hand
 
 ```bash
 git clone --branch v0.1.3 --depth 1 https://github.com/kvm404/Auren.git auren
-cd auren
-./install.sh
+cd auren && ./install.sh
 ```
 
-The installer copies Auren into `~/.local/share/auren/`, downloads the voice model, installs systemd
-user services, and enables the Omarchy bar plugin. It prints key bindings for you to add and runs
-`auren doctor`. The checkout can move or be removed after a normal install.
-
-1. Add `ASSEMBLYAI_API_KEY=your-key` to `~/.config/auren/secrets.env`. The installer creates this file
-   with mode `600`.
-2. Add the printed lines to `~/.config/hypr/bindings.lua`. They unbind Omarchy's Super+A (Select all;
-   Ctrl+A still works) and Super+Shift+A (ChatGPT). To keep those, use the printed Super+Alt+A and
-   Super+Ctrl+Alt+A instead.
-3. If you only use Codex, select it with `auren config set brain.mode codex`.
+1. Put `ASSEMBLYAI_API_KEY=your-key` in `~/.config/auren/secrets.env`.
+2. Add the key bindings the installer prints to `~/.config/hypr/bindings.lua`.
+3. If you only use Codex, run `auren config set brain.mode codex`.
 4. Run `systemctl --user restart auren auren-mascot`, then `auren doctor`.
 
-For the development checkout and editable installs, see [Contributing](CONTRIBUTING.md).
-The [installation guide](docs/install.md) covers optional integrations, diagnostics, and removal.
+The [install guide](docs/install.md) covers optional extras, troubleshooting and removal.
 
 ## Using it
 
-| Control | Action |
+| | |
 |---|---|
-| Super+A | Start listening; press again to send. While thinking or working, stop. While speaking, interrupt and start listening |
-| Super+Shift+A | Start listening in a fresh conversation. While thinking or working, stop |
-| Click the mascot | Start listening or send; while thinking, working, or speaking, stop |
-| Drag / scroll / right-click the mascot | Move / resize / poke |
-| Bar icon | Open Home, Mascot, Voice, Brain, Vocabulary, or Updates. Right-click to start a fresh conversation |
-| `auren-ctl ask "what time is it"` | Send a typed request to the daemon |
-| `auren chat` | Have a separate terminal conversation and inspect tool calls |
-| `auren-ctl cancel` | Stop the current request |
-| `auren-ctl forget` | Clear the current conversation, keeping settings and saved routines |
-| `auren doctor` | Check dependencies and show fixes |
+| **Super+A** | Start talking. Press again to send, or while it works to stop it. |
+| **Super+Shift+A** | Start a fresh conversation. |
+| **Mascot** | Click to talk. Drag to move it, scroll to resize it. |
+| **Bar icon** | Change the mascot, voice, brain and vocabulary, and install updates. |
 
-Use the panel to choose a mascot, adjust the voice, select the brain and its effort, manage vocabulary,
-and install updates. Say "start fresh" to reset the conversation by voice.
+Things to try:
 
-## Settings and routines
+- "Open Obsidian on workspace 2."
+- "Play some lofi on Spotify."
+- "Draw how login works in Excalidraw."
+- "Ask Codex to fix the failing tests in my project."
 
-Settings live in `~/.config/auren/config.toml`. The panel and CLI preserve comments when changing them.
+If something doesn't work, run `auren doctor`.
 
-```bash
-auren config                          # show settings and defaults
-auren config set brain.mode codex
-auren config set voice.speed 1.1
-auren config set integrations.browser false
-auren vocab add "Your Project"
-```
+## Under the hood
 
-Put personal instructions in `~/.config/auren/instructions.md` and repeatable workflows in
-`~/.config/auren/routines/*.md`. Auren detects installed apps, the default browser, coding agents,
-and common project folders. Use `auren config` to override detection.
-
-## Permissions and privacy
-
-The default approval level, `ask`, asks before actions classified as risky. `task` lets one approval
-cover further actions of the same kind in that task. `free` allows file and window actions without
-asking. Publishing, root/system changes, secrets, purchases, disk wipes, and changes to Auren's own
-controls still ask at every level.
-
-At `free`, a separate Claude judge can allow a private or group chat message you explicitly requested,
-without asking again. If it cannot verify the request, it asks. This judge also needs Claude Code;
-without it, those sends ask for confirmation. These checks reduce mistakes; **they are not a sandbox**.
-Read [Safety](docs/safety.md) before choosing a more permissive level.
-
-Microphone audio goes to AssemblyAI while listening. Your transcript, machine context, tool results,
-and any requested screenshots can go to the selected model provider. Speech synthesis stays local.
-Conversation history and logs are stored locally without automatic expiry. "Forget" clears the model
-conversation, not those files. See [Privacy](docs/privacy.md) for the data flow and removal instructions.
-
-## Updates
-
-The panel's Updates page and `auren update` install the **latest published GitHub release**.
-Commits on `main`, tags without releases, drafts, and prereleases do not trigger updates.
-
-```bash
-auren update                 # check, review changes, ask, and install
-auren update check           # check only
-auren update status          # last result
-```
-
-An update waits until Auren is idle, restarts it, and restores the previous version if installation
-fails. A changed mascot or bar plugin also restarts the Omarchy shell. A development install can
-fast-forward a clean `main` checkout to the release commit; it never downgrades a checkout already
-ahead of that release. See [Updates and releases](docs/releases.md).
-
-## How it works
-
-```text
-Super+A → daemon → AssemblyAI → Claude Code / Codex → local Supertonic → speech
-             │                         │ MCP
-             │                         ▼
-             │                  persistent tool runtime
-             │                  desktop · browser · screen · herdr · shell
-             ▼
-       state.json + level → Quickshell mascot · Omarchy bar plugin
-```
-
-The daemon owns tool state and confirmations across model calls. The mascot and panel read its state
-files and send socket commands, so they can restart independently.
-
-| Path | Contents |
+| | |
 |---|---|
-| `src/auren/` | Daemon, speech, brain, tool runtime, safety, settings, updates, and system profile |
-| `src/auren/hands/` | Desktop, browser, screen, clipboard, Excalidraw, herdr, and shell implementations |
-| `mascot/` | Quickshell overlay and both mascot characters |
-| `omarchy-plugin/` | Bar widget and controls |
-| `tests/` | Python tests and Qt interaction tests |
+| **Brain** | Your signed-in Claude Code on Claude Haiku, with Codex as backup. No extra API key. |
+| **Ears** (speech to text) | AssemblyAI, only while you're talking. |
+| **Voice** (text to speech) | Supertonic, running on your own CPU. |
+| **Coding agents** | herdr (optional) |
+| **Browser** | Open Browser Use (optional) |
 
-## Contributing and documentation
+Haiku is quick because Auren's tools do the heavy lifting. A simple answer comes back in about two
+seconds.
 
-Start with [Contributing](CONTRIBUTING.md) and the [documentation index](docs/README.md).
-[The roadmap](docs/roadmap.md) lists what works and what is planned.
-[The changelog](CHANGELOG.md) describes releases.
+## Safety and privacy
 
-Bug reports should include your Omarchy version, `auren doctor` output, and steps to reproduce.
-Remove personal paths, transcripts, and credentials before sharing logs.
+Auren asks before anything risky, and always asks before publishing, buying or changing the system.
+These checks catch mistakes, but they are not a sandbox.
 
-## License and credits
+Your voice goes to AssemblyAI, and your request goes to Claude or Codex. The voice, your history and
+logs stay on your machine. Read [Safety](docs/safety.md) and [Privacy](docs/privacy.md) for the details.
 
-Auren's code and mascots are [MIT licensed](LICENSE). Dependencies, models, and services have their own
-licenses and terms.
+## Contributing
 
-Built with [Omarchy](https://omarchy.org/), [Quickshell](https://quickshell.org/),
-[Supertonic](https://github.com/supertone-inc/supertonic), AssemblyAI, and Open Browser Use.
+Auren is free and open source. Bug reports, ideas and pull requests are welcome. Start with
+[Contributing](CONTRIBUTING.md) and the [roadmap](docs/roadmap.md). Releases are listed in the
+[changelog](CHANGELOG.md).
+
+---
+
+<p align="center">MIT licensed</p>
