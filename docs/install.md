@@ -21,34 +21,55 @@ It does not install system packages or grant device access.
 
 ## For coding agents
 
-If a user asked you to install Auren, work through these steps and tell them what you're doing as you go.
+If a user asked you to install Auren, check first, ask once, then do the rest without stopping.
 
-1. Check the machine: Omarchy with Hyprland 0.56 or newer and Lua configuration, PipeWire, and a
-   microphone. Read any local agent instructions for Omarchy configuration. If a requirement is
-   missing, stop and tell the user.
-2. Check for `git`, `uv`, `qs` (Quickshell), `wtype`, `wl-clipboard` and `grim`. Show the user what's
-   missing and ask before installing it with pacman.
-3. Find Claude Code and Codex. Run a short test prompt to make sure at least one is signed in. If
-   neither works, help the user sign in.
-4. Use the latest published GitHub release, excluding drafts and prereleases, and check out its exact
-   tag in a temporary folder. If there is no release, tell the user instead of installing `main`.
-   Run `./install.sh` (a normal install, not `--dev`). It downloads a 380 MB voice model.
-5. `install.sh` creates `~/.config/auren/secrets.env` with mode 600. Give the user one command to add
-   `ASSEMBLYAI_API_KEY=...` themselves. Never ask them to paste the key into the conversation, and
-   never print it.
-6. Back up `~/.config/hypr/bindings.lua` and add the lines `install.sh` printed. They unbind Omarchy's
-   Super+A (Select all) and Super+Shift+A (ChatGPT). Ask the user first, and use the printed
-   Super+Alt+A lines if they want to keep Omarchy's. Don't overwrite their other shortcuts.
-7. Ask about the optional integrations one at a time: herdr for coding agents, Open Browser Use for
-   browser tasks, and `/dev/uinput` access for mouse control and Excalidraw. Set up the ones the user
-   wants and turn the others off with `auren config set integrations.<name> false` (`herdr`,
-   `browser` or `screen`).
-8. If only Codex is available, run `auren config set brain.mode codex`. Keep the default `ask`
-   approval level.
-9. Run `auren doctor` and fix what it reports. Restart Auren while it is idle, then check that it
-   speaks with `auren-ctl say "Hi, I'm Auren"`.
-10. Finish with a short summary: what you installed, what changed in the user's config, anything they
-    still need to do, and three things to say after pressing Super+A.
+### 1. Check, without changing anything
+
+- Omarchy with Hyprland 0.56 or newer and Lua configuration, PipeWire, and a microphone. If one is
+  missing, stop and tell the user. Read any local agent instructions for Omarchy configuration.
+- Which of `git`, `uv`, `qs` (Quickshell), `wtype`, `wl-clipboard` and `grim` are missing.
+- Claude Code and Codex: run a short test prompt to see which one is signed in.
+- What is already bound to Super+A and Super+Shift+A in `~/.config/hypr/bindings.lua`.
+- Which optional integrations are available: herdr for coding agents, Open Browser Use for browser
+  tasks, and `/dev/uinput` write access for mouse control and Excalidraw (`test -w /dev/uinput`).
+- The latest published GitHub release, excluding drafts and prereleases. If there is none, tell the
+  user instead of installing `main`.
+
+### 2. Ask once
+
+Send one message: what you will install and change, then at most three questions, each with your
+recommended answer, so the user can reply "go".
+
+1. **AssemblyAI key:** paste it here, or add it themselves? Recommend pasting it. Never print it back.
+2. **Talk keys:** take over Super+A and Super+Shift+A from Omarchy (Select all and ChatGPT), or use
+   Super+Alt+A and Super+Ctrl+Alt+A? Recommend Super+A. Skip this if the user already has their own
+   binding on those keys, and use the alternative.
+3. **Optional extras:** list only the available ones and recommend turning them all on. Skip the
+   question if none are available.
+
+If neither Claude Code nor Codex is signed in, help the user sign in before you ask. Don't ask
+anything else unless something fails.
+
+### 3. Install
+
+1. Install the missing packages with pacman. If you can't run `sudo` yourself, give the user one
+   command for all of them.
+2. Check out the release's exact tag in a temporary folder and run `./install.sh` (a normal install,
+   not `--dev`). It downloads a 380 MB voice model.
+3. Write `ASSEMBLYAI_API_KEY=...` to `~/.config/auren/secrets.env` (mode 600) without printing it, or
+   tell the user the exact file and line to add.
+4. Back up `~/.config/hypr/bindings.lua`, then add the binding lines `install.sh` printed for the
+   chosen keys. Don't change the user's other shortcuts.
+5. Turn off the extras the user didn't want with `auren config set integrations.<name> false`
+   (`herdr`, `browser` or `screen`). If only Codex works, run `auren config set brain.mode codex`.
+   Keep the default `ask` approval level.
+6. Run `auren doctor` and fix what it reports. Restart Auren, then check that it speaks with
+   `auren-ctl say "Hi, I'm Auren"`.
+
+### 4. Finish
+
+Give a short summary: what you installed, what changed in the user's config, anything they still need
+to do, and three things to say after pressing the talk key.
 
 ## Optional integrations
 

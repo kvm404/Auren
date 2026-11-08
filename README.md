@@ -32,8 +32,7 @@ Paste this into Claude Code or Codex. It installs Auren, sets it up and checks t
 ```text
 Install Auren from https://github.com/kvm404/Auren on this Omarchy machine.
 Use the latest release and follow "For coding agents" in its docs/install.md.
-Ask before installing packages or changing my config, and never ask me to
-paste my AssemblyAI key into this chat.
+Ask all your questions at the start, then install everything in one go.
 ```
 
 ### By hand
