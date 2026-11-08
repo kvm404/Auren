@@ -16,7 +16,7 @@ Follow the [README installation steps](../README.md#install). A normal install i
 `./install.sh --dev` links the runtime and UI to your checkout.
 
 The installer enables `auren.service` and `auren-mascot.service` for your graphical session and
-registers the `krvm.auren` bar plugin. It prints Hyprland bindings instead of editing your config.
+registers the `kvm404.auren` bar plugin. It prints Hyprland bindings instead of editing your config.
 It does not install system packages or grant device access.
 
 ## For coding agents
@@ -92,9 +92,9 @@ Stop and disable the services, disable the bar plugin, then remove the installed
 
 ```bash
 systemctl --user disable --now auren auren-mascot
-omarchy plugin disable krvm.auren
+omarchy plugin disable kvm404.auren
 rm -f ~/.config/systemd/user/auren.service ~/.config/systemd/user/auren-mascot.service
-rm -f ~/.config/omarchy/plugins/krvm.auren ~/.local/bin/auren ~/.local/bin/auren-ctl
+rm -f ~/.config/omarchy/plugins/kvm404.auren ~/.local/bin/auren ~/.local/bin/auren-ctl
 rm -rf ~/.local/share/auren
 systemctl --user daemon-reload
 ```

@@ -27,7 +27,6 @@ These are ideas for future work, not promises for a particular release:
 - User-installed mascots without edits to the shipped QML.
 - History retention controls and a more restrictive read-only approval mode.
 - Browser control in standalone web-app windows.
-- A neutral bar plugin ID with migration from `krvm.auren`.
 - Packaged distribution and an uninstall command.
 
 ## Provider decisions

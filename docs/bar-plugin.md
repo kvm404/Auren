@@ -1,9 +1,9 @@
 # Bar plugin
 
-`krvm.auren`, an Omarchy shell bar widget. Code: `omarchy-plugin/` (`manifest.json`, `Panel.qml`, and its
+`kvm404.auren`, an Omarchy shell bar widget. Code: `omarchy-plugin/` (`manifest.json`, `Panel.qml`, and its
 parts `MiniMascot.qml`, `Choice.qml` (a titled row of buttons), `SliderRow.qml`), linked as
-`~/.config/omarchy/plugins/krvm.auren`.
-The installer enables it with `omarchy plugin enable krvm.auren`.
+`~/.config/omarchy/plugins/kvm404.auren`.
+The installer enables it with `omarchy plugin enable kvm404.auren`.
 
 ## Bar icon
 
@@ -55,7 +55,7 @@ A slider shows its new value as soon as it's released; the daemon's next state c
 mascot says hello in it. Only when Auren is idle with voice replies on. Choosing a voice by hand still
 works; it stays until the next mascot change.
 
-From a script or key binding: `omarchy-shell krvm.auren toggle` (or `open`, `close`).
+From a script or key binding: `omarchy-shell kvm404.auren toggle` (or `open`, `close`).
 
 ## Notes
 
