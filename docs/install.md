@@ -12,8 +12,12 @@ model. It does not yet have an API-key model backend. Microphone input requires 
 The local Supertonic voice model downloads about 380 MB during installation; a failed download leaves
 Auren able to show text replies. Retry with `auren voice-model`.
 
-Follow the [README quick start](../README.md#quick-start). A normal install is a copy, while
+Follow the [README installation steps](../README.md#install). A normal install is a copy, while
 `./install.sh --dev` links the runtime and UI to your checkout.
+
+The installer enables `auren.service` and `auren-mascot.service` for your graphical session and
+registers the `krvm.auren` bar plugin. It prints Hyprland bindings instead of editing your config.
+It does not install system packages or grant device access.
 
 ## For coding agents
 
@@ -37,7 +41,8 @@ If a user asked you to install Auren, work through these steps and tell them wha
    Super+Alt+A lines if they want to keep Omarchy's. Don't overwrite their other shortcuts.
 7. Ask about the optional integrations one at a time: herdr for coding agents, Open Browser Use for
    browser tasks, and `/dev/uinput` access for mouse control and Excalidraw. Set up the ones the user
-   wants and turn the others off with `auren config set integrations.<name> false`.
+   wants and turn the others off with `auren config set integrations.<name> false` (`herdr`,
+   `browser` or `screen`).
 8. If only Codex is available, run `auren config set brain.mode codex`. Keep the default `ask`
    approval level.
 9. Run `auren doctor` and fix what it reports. Restart Auren while it is idle, then check that it
