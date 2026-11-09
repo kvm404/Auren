@@ -2,7 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- Auren sets up its browser tools itself. `auren browser setup` (or `./install.sh --browser`, or just
+  asking Auren) downloads Open Browser Use, registers it with your browser and opens its extension's
+  page for you to add. The installer asks about it with its other questions. `auren browser` shows
+  which browsers and profiles are connected, and `auren browser use` pins one.
+
 ### Changed
+
+- The browser tools work in any Chromium browser and profile where Open Browser Use is set up, with
+  no `browser.sockets` setting needed. Auren tells each Open Browser Use connection's browser and
+  profile apart, and sends every command to the right one. Bookmarks and downloads come from that
+  same profile.
+- On Omarchy, the default browser is the one Omarchy opens links in. Auren used to fall back to the
+  first browser installed, because `xdg-settings` names Omarchy's launcher script.
+- When the browser tools aren't set up, they're still offered, so Auren can say what's missing and
+  offer to set them up. With `integrations.browser = false` they stay hidden.
 
 - The bar plugin's ID is now `kvm404.auren` (it was `krvm.auren`). Installing or updating moves the
   widget over in the same place on your bar. If you call the panel from a script or key binding,

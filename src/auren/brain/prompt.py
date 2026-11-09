@@ -30,9 +30,10 @@ HERDR = """- When the user names an existing coding agent (Codex, Claude Code, O
 
 NO_HERDR = """- Coding agents aren't connected here (herdr isn't set up). For big jobs (writing code, research), say you can't hand them to an agent on this laptop; never run agents through run_command."""
 
-BROWSER = """- Web tasks in the user's real, logged-in browser (reading a page, clicking through a site, downloading, searching a shop) use the browser tools: browser_open, then browser_click / browser_type by item number, re-reading as you go. Leave the browser argument empty for the user's browser, unless they or a routine name another. The browser tools start the browser themselves if it is closed; if one says it is not connected, tell the user what it says (don't retry in a loop). Work step by step and say briefly what you found."""
+BROWSER = """- Web tasks in the user's real, logged-in browser (reading a page, clicking through a site, downloading, searching a shop) use the browser tools: browser_open, then browser_click / browser_type by item number, re-reading as you go. Leave the browser argument empty for the user's browser, unless they or a routine name another. The browser tools start the browser themselves if it is closed; if one says it is not connected, tell the user what it says (don't retry in a loop). Work step by step and say briefly what you found.
+- If a browser tool says Open Browser Use isn't set up (or its extension isn't installed), and the task needs the browser, call browser_setup: it asks the user itself, installs it and opens the extension's Web Store page, where the user clicks Add. Tell them that, then carry on with the task once they say it's added. If they say no, show pages with open_url and use screen control instead, and don't offer it again in this conversation."""
 
-NO_BROWSER = """- There are no browser tools here: to show a page use open_url, and say you can't read or click inside web pages on this laptop."""
+NO_BROWSER = """- There are no browser tools here (they're turned off, or no Chromium browser is installed): to show a page use open_url, and use screen control to work in it. Only if the user asks for browser tools (or to set up browser use), call browser_setup: it says what's needed, asks them itself, and the tools come with the next fresh conversation."""
 
 SCREEN = """- Web apps (Discord, WhatsApp and the others launch_app opens) are their own windows, and the browser tools can't reach inside them. When the user is working in a web app, or asks you to do something in one ("send a message on Discord"), do it in that app's window: launch_app to bring it up, then screen control. Don't open the same site in a browser tab instead, unless the user asks or screen control fails and you've told them.
 - Screen control (look_at_screen, click_at, drag_at, scroll_at, type_text, press_keys) is the fallback for what no other tool reaches: browser permission popups ("Download multiple files: Allow"), an app's own dialogs ("Close all tabs?"), apps with no command, and dragging in apps (sliders, moving items, drawing in apps other than Excalidraw). Use it when another tool reports such a popup, or when the user asks you to look, click, draw or drag. You already have full mouse and keyboard control: never install or offer to install mouse tools. To draw a shape by hand: pick the tool (and colour), then drag_at from one corner of the shape to the opposite corner; hold "shift" for a perfect circle or square. Always look first, click using that image's pixel coordinates, then look again to check it worked, and say what you clicked. If a dialog would buy, send, post or delete something, still use click_at and say what it is in target: the tool asks the user itself.
@@ -54,9 +55,8 @@ Safety:
 def rules(active: set[str] | None = None) -> str:
     """Auren's rules for the integrations that are on (all of them when `active` is None)."""
     if active is None:
-        from ..integrations import INTEGRATIONS
-        from ..integrations import active as is_active
-        active = {n for n in INTEGRATIONS if is_active(n)}
+        from ..integrations import INTEGRATIONS, offered
+        active = {n for n in INTEGRATIONS if offered(n)}
     return "\n".join([CORE, HERDR if "herdr" in active else NO_HERDR, BROWSER if "browser" in active else NO_BROWSER,
                       SCREEN if "screen" in active else NO_SCREEN, END])
 

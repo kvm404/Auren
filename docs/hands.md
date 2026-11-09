@@ -121,14 +121,22 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 
 ## Browser
 
-**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use**. Which browser (`hands/browsers.py`):
-- **The browser:** `browser.name` in config.toml, or with `auto` the system default (`xdg-settings get default-web-browser`) if it's a Chromium browser Auren knows (Chrome, Chromium, Brave, Helium, Edge, Vivaldi), else the first one installed. The brain can name another for one request.
-- **Its profile** (bookmarks, download folder): `browser.profile`, or the last one used, from the browser's `Local State`.
-- **Its Open Browser Use host:** the default socket folder `/tmp/open-browser-use`, unless `browser.sockets` names another for that browser. People who run one host per browser set it, for example `sockets = { chrome = "/tmp/open-browser-use-chrome" }`; a bare `obu` command goes to the default one, which is why it once "got confused about which browser".
+**What it runs on.** The tools drive the user's real, logged-in browser through **Open Browser Use** (`hands/obu.py`, `hands/browsers.py`). The extension in each browser profile starts its own native host, which listens on a socket with a random name. Nothing in that name says which browser or profile it is, so Auren works it out for every live socket:
+- **Which browser and profile:** it asks the host for the extension's instance id (`info`) and finds the profiles whose extension storage (`Local Extension Settings/<extension id>/`) holds it. The host's parent process names the browser, which decides between them: a profile imported or copied from another browser carries the same id (seen live with a Helium profile imported from Brave). Of that browser's profiles holding the id, the one whose storage changed last is it; if none holds it and only one of its profiles has the extension, that one. Without a parent to go by, only running browsers count. A host that still can't be told apart, or one of a browser run with its own `--user-data-dir`, isn't used. When a profile is wanted, a host whose profile isn't known doesn't count as it.
+- **Where the sockets are:** `/tmp/open-browser-use`, every `/tmp/open-browser-use-*`, folders a manifest's host script passes with `--socket-dir` (with `$VARIABLES` and `~` expanded), and `browser.sockets` in config. Each command then goes to one exact socket (`--socket`), so two browsers or profiles never get mixed up, however the user set up their hosts.
+- **Which one is used** (`obu.choose`): a browser the brain names, else `browser.name` / `browser.profile` in config (a profile that doesn't exist is an error), else a connected one, preferring the default browser (on Omarchy `omarchy-cmd-default-browser`, since `xdg-settings` only names Omarchy's launcher script), then its last-used profile, then the newest. With none connected: the default browser if it's set up, else the first one that is. Auren starts it, or opens a window in that profile if the browser runs without it, and waits for the extension.
+- **Bookmarks and downloads** come from that same profile's folder.
 
-Open Browser Use can't pick a browser by name (its `--browser` knows only Chrome, Chrome Beta and BitBrowser), so with two browsers connected to the same socket folder Auren can't tell which one answers. Give each its own folder with `browser.sockets`.
+**Setup** (`auren browser setup [browser]`, `./install.sh --browser`, or the brain's `browser_setup`):
+1. downloads Open Browser Use (a pinned release from GitHub, checked against its SHA-256) to `~/.local/share/auren/obu/`, a path that stays put when Node or mise change;
+2. registers it with the browser: writes `NativeMessagingHosts/com.ifuryst.open_browser_use.extension.json` in the browser's config folder, unless a working one is there (a user's own setup is left alone);
+3. opens the extension's Chrome Web Store page in that browser, where the user clicks Add, then waits for it to connect.
 
-Without Open Browser Use (or with `integrations.browser = false`) the browser tools are left out and the brain is told it can only show pages.
+`auren browser` shows each browser: host registered, profiles with the extension, connected ones, and which one the tools use. `auren browser use helium School` pins a browser and profile; `auren browser use auto` goes back to choosing.
+
+**When it isn't set up**, the browser tools are still offered (unless `integrations.browser = false`). They say what's missing, and the brain calls `browser_setup`, which asks the user first (it's a `system` action, so it asks at every approval level). With `integrations.browser = false` (the user said no) they're left out; `browser_setup` stays, for when the user asks, and turns them on from the next fresh conversation.
+
+Flatpak browsers aren't supported: their sandbox doesn't run native hosts from outside.
 
 | Tool | What it does |
 |---|---|

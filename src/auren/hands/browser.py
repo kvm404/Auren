@@ -1,15 +1,17 @@
 """Browser tools: work in the user's real, logged-in browser through Open Browser Use.
 
-- Any Chromium browser Open Browser Use supports (see browsers.py for which one is used, its
-  profile and its host's socket folder).
+- Any Chromium browser where Open Browser Use is set up, in any profile: obu.py finds the live hosts
+  and which browser and profile each one is, and obu.choose picks one (the brain or config.toml can
+  name a browser or profile). Every command goes to that host's own socket.
 - auren works in tabs it opens itself (an Open Browser Use session, grouped as
   "auren" in the browser). It never closes or reuses the user's own tabs.
 - Pages are read as text plus a numbered list of links, buttons and fields;
   `browser_click` / `browser_type` act on those numbers (or on visible text).
-- Downloads are detected by watching the download folder for a new finished file.
-- If the browser isn't connected (not running, or just started and the extension
-  hasn't connected yet), auren starts it if needed, waits for the extension
-  (up to CONNECT_WAIT s) and retries once.
+- Downloads are detected by watching that profile's download folder for a new finished file.
+- If the browser isn't connected (not running, the profile has no window, or it just started and the
+  extension hasn't connected yet), auren starts it or opens a window in that profile, waits for the
+  extension (up to CONNECT_WAIT s) and retries once.
+- If Open Browser Use isn't set up in that browser, the tools say so and point at browser_setup.
 - Page text is untrusted: the tool server wraps it before the brain sees it.
 """
 
@@ -23,88 +25,131 @@ import time
 from pathlib import Path
 
 from . import browsers
+from . import obu as hosts
 
 HOME = Path.home()
 CONNECT_WAIT = 25
+RECONNECT_WAIT = 3
 SESSION = "auren"
 MAX_TEXT = 5000
-
-_state = {"tab": None, "browser": None}
 
 
 class BrowserError(RuntimeError):
     pass
 
 
-def _browser(name: str | None = None) -> str:
-    """A browser's key (chrome, brave, ...): the one named, else the configured or detected one."""
+class Link:
+    """Auren's way into one browser profile: which one (a target), and its live host once connected."""
+
+    def __init__(self, target: hosts.Target):
+        self.kind = target.kind
+        self.profile = target.profile
+        self.conn = target.conn
+
+    @property
+    def key(self) -> str:
+        return self.kind.key
+
+    @property
+    def ident(self) -> str:
+        """Names the browser and profile, for binding a confirmation to the page it was asked on."""
+        return f"{self.kind.key}:{self.profile.dir if self.profile else ''}"
+
+    def label(self) -> str:
+        return self.kind.name + (f" ({self.profile.name})" if self.profile else "")
+
+    def profile_path(self) -> Path | None:
+        """Its profile folder (bookmarks, download folder): the connected one, else the last one used."""
+        if self.profile and self.profile.path.is_dir():
+            return self.profile.path
+        return browsers.profile_dir(self.kind)
+
+    def __str__(self) -> str:
+        return self.key
+
+
+_state: dict = {"tab": None, "link": None}
+
+SETUP_HINT = "Call browser_setup to set it up (it asks the user first), unless the user has said no."
+
+
+def _browser(name: str | None = None) -> Link:
+    """The browser to work in: the one named, else the one obu.choose picks (see its rules)."""
     try:
-        return browsers.resolve(name).key
+        return Link(hosts.choose(name or None))
     except browsers.UnknownBrowser as e:
         raise BrowserError(str(e)) from None
 
 
-def _current() -> str:
+def _current() -> Link:
     """The browser auren's tab is in (or would be)."""
-    return _state["browser"] or _browser()
+    return _state["link"] or _browser()
 
 
-def _kind(browser: str) -> browsers.Kind:
-    return browsers.BY_KEY[browser]
-
-
-def _running(browser: str) -> bool:
-    return browsers.running(_kind(browser))
-
-
-def ensure_connected(browser: str, wait: float = CONNECT_WAIT) -> None:
-    """Make sure the browser's Open Browser Use extension is reachable: start the browser if it isn't
-    running, then wait for the extension to connect (it takes a few seconds after a start)."""
-    try:
-        obu(browser, "ping", timeout=5, retry=False)
+def ensure_connected(link: Link, wait: float = CONNECT_WAIT) -> None:
+    """Make sure the browser's Open Browser Use extension is reachable: start the browser (or open a
+    window in the profile) if it isn't connected, then wait for the extension to connect (it takes a
+    few seconds after a start)."""
+    missing = hosts.not_set_up(link.kind, link.profile)
+    if missing:
+        raise BrowserError(f"{missing}. {SETUP_HINT}")
+    conn = _live(link, fresh=True)
+    if conn:
+        link.conn = conn
         return
-    except BrowserError:
-        pass
-    started = False
-    if not _running(browser):
-        from . import desktop
-        desktop.hide_scratchpad()            # new windows open on a showing special workspace
-        desktop.spawn(browsers.launcher(_kind(browser)))
-        started = True
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        time.sleep(0.5)
-        try:
-            obu(browser, "ping", timeout=5, retry=False)
-            time.sleep(0.5 if not started else 1.5)    # let a fresh browser finish restoring its windows
+    started = not browsers.running(link.kind)
+    if not started:
+        # A host reconnects now and then (a new socket): give it a moment before opening a window.
+        conn = hosts.wait_for(link.kind, link.profile, RECONNECT_WAIT)
+        if conn:
+            link.conn = conn
             return
-        except BrowserError:
-            continue
-    name = _kind(browser).name
+    if started or link.profile is not None:
+        try:
+            hosts.open_in(link.kind, link.profile)     # a running browser opens a window in that profile
+        except hosts.SetupError as e:
+            raise BrowserError(str(e)) from None
+    conn = hosts.wait_for(link.kind, link.profile, wait)
+    if conn:
+        link.conn, link.profile = conn, conn.profile or link.profile
+        time.sleep(1.5 if started else 0.5)            # let a fresh browser finish restoring its windows
+        return
+    where = link.label()
     if started:
-        raise BrowserError(f"I started {name}, but its Open Browser Use extension didn't connect within "
-                           f"{wait:.0f} seconds. Is the extension installed and on in {name}?")
-    raise BrowserError(f"{name} is running, but its Open Browser Use extension isn't connected. Is it on "
+        raise BrowserError(f"I started {where}, but its Open Browser Use extension didn't connect within "
+                           f"{wait:.0f} seconds. Is the extension on there?")
+    raise BrowserError(f"{where} is running, but its Open Browser Use extension isn't connected. Is it on "
                        "(and in the profile that's open)?")
+
+
+def _live(link: Link, fresh: bool = False) -> hosts.Conn | None:
+    return next((c for c in hosts.connections(fresh=fresh) if hosts.matches(c, link.kind, link.profile)), None)
 
 
 class _NotConnected(BrowserError):
     pass
 
 
-def obu(browser: str, *args: str, timeout: float = 30, retry: bool = True) -> dict:
+def obu(link: Link, *args: str, timeout: float = 30, retry: bool = True) -> dict:
     """Run an Open Browser Use command. If the browser isn't connected, start/wait for it and retry once."""
+    if link.conn is None:
+        ensure_connected(link)
     try:
-        return _obu(browser, *args, timeout=timeout)
+        return _obu(link, *args, timeout=timeout)
     except _NotConnected:
         if not retry:
             raise
-    ensure_connected(browser)
-    return _obu(browser, *args, timeout=timeout)
+    link.conn = None
+    hosts.forget_scan()
+    ensure_connected(link)
+    return _obu(link, *args, timeout=timeout)
 
 
-def _obu(browser: str, *args: str, timeout: float = 30) -> dict:
-    cmd = ["open-browser-use", *args, "--session-id", f"{SESSION}-{browser}", "--socket-dir", browsers.socket_dir(_kind(browser))]
+def _obu(link: Link, *args: str, timeout: float = 30) -> dict:
+    binary = hosts.cli()
+    if binary is None or link.conn is None:
+        raise BrowserError(f"Open Browser Use isn't installed. {SETUP_HINT}")
+    cmd = [binary, *args, "--session-id", f"{SESSION}-{link.key}", "--socket", link.conn.socket]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -117,12 +162,12 @@ def _obu(browser: str, *args: str, timeout: float = 30) -> dict:
     if p.returncode != 0 or "error" in d:
         msg = (d.get("error") or {}).get("message") if isinstance(d.get("error"), dict) else (p.stderr or out)
         if "connect" in str(msg).lower() or "no active" in str(msg).lower() or "socket" in str(msg).lower():
-            raise _NotConnected(f"{_kind(browser).name} isn't connected to auren (Open Browser Use)")
+            raise _NotConnected(f"{link.label()} isn't connected to auren (Open Browser Use)")
         raise BrowserError(f"browser: {str(msg).strip()[:300]}")
     return d.get("result", d)
 
 
-def _eval(browser: str, tab: int, js: str, timeout: float = 30):
+def _eval(browser: Link, tab: int, js: str, timeout: float = 30):
     params = json.dumps({"expression": js, "returnByValue": True, "awaitPromise": True})
     r = obu(browser, "cdp", "--tab-id", str(tab), "--method", "Runtime.evaluate", "--params", params, timeout=timeout)
     if r.get("exceptionDetails"):     # reply shape: {"result": {"type", "value"}, "exceptionDetails"?}
@@ -209,7 +254,7 @@ const field = (target) => target.startsWith('pin:')
 """
 
 
-def _wait_ready(browser: str, tab: int, timeout: float = 15) -> None:
+def _wait_ready(browser: Link, tab: int, timeout: float = 15) -> None:
     end = time.time() + timeout
     time.sleep(0.6)
     while time.time() < end:
@@ -252,16 +297,24 @@ def browser_open(url: str, browser: str = "") -> str:
     elif not re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I):
         url = "https://" + url
     obu(b, "name-session", "--name", "auren")
-    r = obu(b, "open-tab", "--url", url, timeout=40)
+    try:
+        r = obu(b, "open-tab", "--url", url, timeout=40)
+    except BrowserError as e:
+        # Seen once right after the user closed and reopened profiles: the extension's createTab came back
+        # without a tab. It didn't happen again, so one more try.
+        if "tab id" not in str(e):
+            raise
+        time.sleep(1)
+        r = obu(b, "open-tab", "--url", url, timeout=40)
     tab = (r.get("tab") or {}).get("id")
     if not tab:
         raise BrowserError(f"couldn't open a tab: {str(r)[:200]}")
-    _state.update(tab=tab, browser=b)
+    _state.update(tab=tab, link=b)
     _wait_ready(b, tab)
-    return f"(tab {tab} in {b})\n" + browser_read(tab)
+    return f"(tab {tab} in {b.label()})\n" + browser_read(tab)
 
 
-def _front(browser: str, tab: int) -> None:
+def _front(browser: Link, tab: int) -> None:
     """Bring auren's tab to the front of its window. Chrome doesn't lay out background tabs, so their
     visible text reads as empty (Google Drive rows, for example)."""
     try:
@@ -334,7 +387,7 @@ def pin(target: str, is_field: bool = False, tab: int | None = None) -> str | No
 def page() -> dict:
     """The auren tab now: browser, tab id and address (what a confirmation is bound to), and its title."""
     b, t = _current(), _tab(None)
-    return {"browser": b, "tab": t, "url": _eval(b, t, "location.href"), "title": _eval(b, t, "document.title")}
+    return {"browser": b.ident, "tab": t, "url": _eval(b, t, "location.href"), "title": _eval(b, t, "document.title")}
 
 
 def value_of(target: str, tab: int | None = None) -> str | None:
@@ -417,8 +470,8 @@ def browser_scroll(direction: str = "down", tab: int | None = None) -> str:
 
 # --- bookmarks ---------------------------------------------------------------------------
 
-def _bookmarks(browser: str) -> list[tuple[str, str]]:
-    profile = browsers.profile_dir(_kind(browser))
+def _bookmarks(browser: Link) -> list[tuple[str, str]]:
+    profile = browser.profile_path()
     path = profile / "Bookmarks" if profile else None
     if path is None or not path.exists():
         return []
@@ -441,26 +494,26 @@ def bookmarks(query: str = "", browser: str = "") -> str:
     words = query.lower().split()
     hits = [(name, url) for name, url in _bookmarks(b) if all(w in name.lower() for w in words)]
     if not hits:
-        return f"no {b} bookmarks match '{query}'"
+        return f"no {b.label()} bookmarks match '{query}'"
     return "\n".join(f"{name} → {_mask_url(url)}" for name, url in hits[:30]) + \
         ("\n(open one with browser_open('bookmark:<name>'))")
 
 
-def _bookmark_url(name: str, browser: str) -> str:
+def _bookmark_url(name: str, browser: Link) -> str:
     want = name.strip().lower()
     marks = _bookmarks(browser)
     for test in (lambda n: n.lower() == want, lambda n: n.lower().endswith("/" + want), lambda n: want in n.lower()):
         hits = [url for n, url in marks if test(n)]
         if hits:
             return hits[0]
-    raise BrowserError(f"no bookmark called '{name}' in {browser}")
+    raise BrowserError(f"no bookmark called '{name}' in {browser.label()}")
 
 
 # --- downloads ------------------------------------------------------------------------------
 
-def download_dir(browser: str) -> Path:
+def download_dir(browser: Link) -> Path:
     try:
-        profile = browsers.profile_dir(_kind(browser))
+        profile = browser.profile_path()
         if profile is None:
             raise OSError("no profile")
         prefs = json.loads((profile / "Preferences").read_text())
@@ -472,12 +525,12 @@ def download_dir(browser: str) -> Path:
     return HOME / "Downloads"
 
 
-def _download_snapshot(browser: str) -> dict[str, float]:
+def _download_snapshot(browser: Link) -> dict[str, float]:
     d = download_dir(browser)
     return {p.name: p.stat().st_mtime for p in d.iterdir()} if d.is_dir() else {}
 
 
-def _wait_download(browser: str, before: dict[str, float], timeout: float = 60) -> str | None:
+def _wait_download(browser: Link, before: dict[str, float], timeout: float = 60) -> str | None:
     d = download_dir(browser)
     end = time.time() + timeout
     while time.time() < end:
@@ -500,7 +553,9 @@ def recent_downloads(browser: str = "", minutes: int = 30) -> str:
 
 def browser_close(keep_current: bool = False) -> str:
     """Close the tabs auren opened (never the user's own). keep_current leaves the last one open."""
-    b = _current()
+    b = _state["link"] or _browser()
+    if b.conn is None and _live(b) is None:      # nothing to close, and no reason to start the browser for it
+        return "no auren tabs are open (the browser isn't connected)"
     keep = [{"tabId": _state["tab"], "status": "deliverable"}] if keep_current and _state["tab"] else []
     obu(b, "finalize-tabs", "--keep", json.dumps(keep))
     if not keep_current:

@@ -1,10 +1,9 @@
-"""Which Chromium browser the browser tools use, and where its files are.
+"""The Chromium browsers Auren knows, and where their files are.
 
-Open Browser Use works with Chromium browsers. The browser is `browser.name` in config.toml, or with
-"auto" the system's default browser (xdg-settings) if it's one of these, else the first one installed.
-Its profile (bookmarks, download folder) is `browser.profile`, or the last one used (from its
-`Local State`). Each browser's Open Browser Use host listens in /tmp/open-browser-use unless
-`browser.sockets` names another folder for it (for people who run one host per browser).
+Open Browser Use works with Chromium browsers. Which one and which profile the browser tools use is
+chosen in obu.choose (a connected one first); this module only knows the browsers themselves: their
+launchers, config folders, commands and processes, and which one is the user's default (Omarchy's
+`omarchy-cmd-default-browser`, else xdg-settings).
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ class UnknownBrowser(ValueError):
     pass
 
 
-def _config_home() -> Path:
+def config_home() -> Path:
     v = os.environ.get("XDG_CONFIG_HOME", "")
     return Path(v) if v.startswith("/") else Path.home() / ".config"
 
@@ -63,11 +62,23 @@ def installed(kind: Kind) -> bool:
 
 
 def default_desktop_id() -> str:
-    try:
-        out = subprocess.run(["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True, timeout=5)
-        return out.stdout.strip().removesuffix(".desktop")
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+    """The default browser's launcher. On Omarchy, xdg-settings names omarchy-browser.desktop, a script that
+    opens the real default, so ask Omarchy which one that is."""
+    for cmd in (["omarchy-cmd-default-browser"], ["xdg-settings", "get", "default-web-browser"]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip().removesuffix(".desktop")
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if out and out != "omarchy-browser":
+            return out
+    return ""
+
+
+def default_kind() -> Kind | None:
+    """The user's default browser, if it's a Chromium browser Auren knows."""
+    return of_desktop_id(default_desktop_id())
 
 
 def of_desktop_id(desktop_id: str) -> Kind | None:
@@ -84,7 +95,7 @@ def resolve(name: str | None = None) -> Kind:
         if want not in BY_KEY:
             raise UnknownBrowser(f"Auren's browser tools work with {', '.join(BY_KEY)}, not {name or want}")
         return BY_KEY[want]
-    default = of_desktop_id(default_desktop_id())
+    default = default_kind()
     if default:
         return default
     for k in KINDS:
@@ -95,7 +106,7 @@ def resolve(name: str | None = None) -> Kind:
 
 def config_dir(kind: Kind) -> Path | None:
     for d in kind.config_dirs:
-        p = _config_home() / d
+        p = config_home() / d
         if (p / "Local State").exists():
             return p
     return None
@@ -119,10 +130,6 @@ def profile_dir(kind: Kind) -> Path | None:
     return None
 
 
-def socket_dir(kind: Kind) -> str:
-    return settings()["browser.sockets"].get(kind.key) or DEFAULT_SOCKETS
-
-
 def running(kind: Kind) -> bool:
     return any(subprocess.run(["pgrep", "-x", p], capture_output=True).returncode == 0 for p in kind.processes)
 
@@ -140,3 +147,12 @@ def launcher(kind: Kind) -> list[str]:
 
 def command(kind: Kind) -> str | None:
     return next((c for c in kind.commands if shutil.which(c)), None)
+
+
+def flatpak(kind: Kind) -> bool:
+    """Installed only as a Flatpak (its command is a flatpak wrapper): native hosts don't reach into those."""
+    cmd = command(kind)
+    if cmd is None:
+        return False
+    path = os.path.realpath(shutil.which(cmd) or "")
+    return "/flatpak/" in path

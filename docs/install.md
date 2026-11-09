@@ -30,8 +30,11 @@ If a user asked you to install Auren, check first, ask once, then do the rest wi
 - Which of `git`, `uv`, `qs` (Quickshell), `wtype`, `wl-clipboard` and `grim` are missing.
 - Claude Code and Codex: run a short test prompt to see which one is signed in.
 - What is already bound to Super+A and Super+Shift+A in `~/.config/hypr/bindings.lua`.
-- Which optional integrations are available: herdr for coding agents, Open Browser Use for browser
-  tasks, and `/dev/uinput` write access for mouse control and Excalidraw (`test -w /dev/uinput`).
+- Which optional integrations are available: herdr for coding agents, and `/dev/uinput` write access
+  for mouse control and Excalidraw (`test -w /dev/uinput`). Browser tools need a Chromium browser
+  (Chrome, Chromium, Brave, Helium, Edge or Vivaldi; not a Flatpak). Note the default browser
+  (`omarchy-cmd-default-browser`, else `xdg-settings get default-web-browser`). If Auren is already
+  installed, `auren browser` shows whether they're set up.
 - The latest published GitHub release, excluding drafts and prereleases. If there is none, tell the
   user instead of installing `main`.
 
@@ -45,7 +48,10 @@ recommended answer, so the user can reply "go".
    Super+Alt+A and Super+Ctrl+Alt+A? Recommend Super+A. Skip this if the user already has their own
    binding on those keys, and use the alternative.
 3. **Optional extras:** list only the available ones and recommend turning them all on. Skip the
-   question if none are available.
+   question if none are available. For the **browser tools**, name the browser they'll use (the
+   default one) and say what it means: Auren downloads Open Browser Use and opens its extension's
+   Web Store page there, and the user clicks Add while the install waits. Skip them if no Chromium
+   browser is installed, or if `auren browser` says they already work.
 
 If neither Claude Code nor Codex is signed in, help the user sign in before you ask. Don't ask
 anything else unless something fails.
@@ -54,14 +60,17 @@ anything else unless something fails.
 
 1. Install the missing packages with pacman. If you can't run `sudo` yourself, give the user one
    command for all of them.
-2. Check out the release's exact tag in a temporary folder and run `./install.sh` (a normal install,
-   not `--dev`). It downloads a 380 MB voice model.
+2. Check out the release's exact tag in a temporary folder and run `./install.sh --browser` (or
+   `--no-browser` if the user didn't want the browser tools); a normal install, not `--dev`. It
+   downloads a 380 MB voice model. With `--browser`, tell the user just before it gets there to click
+   Add on the Web Store page that opens; it waits up to three minutes. If no window could open, run
+   `auren browser setup --yes` afterwards instead.
 3. Write `ASSEMBLYAI_API_KEY=...` to `~/.config/auren/secrets.env` (mode 600) without printing it, or
    tell the user the exact file and line to add.
 4. Back up `~/.config/hypr/bindings.lua`, then add the binding lines `install.sh` printed for the
    chosen keys. Don't change the user's other shortcuts.
-5. Turn off the extras the user didn't want with `auren config set integrations.<name> false`
-   (`herdr`, `browser` or `screen`). If only Codex works, run `auren config set brain.mode codex`.
+5. Turn off the other extras the user didn't want with `auren config set integrations.<name> false`
+   (`herdr` or `screen`). If only Codex works, run `auren config set brain.mode codex`.
    Keep the default `ask` approval level.
 6. Run `auren doctor` and fix what it reports. Restart Auren, then check that it speaks with
    `auren-ctl say "Hi, I'm Auren"`.
@@ -75,10 +84,15 @@ to do, and three things to say after pressing the talk key.
 
 - **herdr:** install it and open a session for coding-agent tools. Without it, shell jobs run in the
   background with output under `~/.local/state/auren/jobs/`.
-- **Browser:** install Open Browser Use and its extension in a supported Chromium browser. The
-  `open-browser-use` command must be on the service's PATH. The default browser is detected;
-  `auren config set browser.name brave`, for example, overrides it. Auren uses its own browser tabs.
-  Browser tools cannot currently claim standalone web-app windows; those use screen control.
+- **Browser:** `auren browser setup` (or `./install.sh --browser`) sets up Open Browser Use in your
+  default browser, or in the one you name (`auren browser setup brave`): it downloads Open Browser
+  Use into `~/.local/share/auren/obu/`, registers it with the browser, and opens the extension's
+  Web Store page, where you click Add. You can also just ask Auren to set it up. It works in any
+  Chromium browser (Chrome, Chromium, Brave, Helium, Edge, Vivaldi; not Flatpaks) and any profile
+  with the extension, including an Open Browser Use you set up yourself. `auren browser` shows
+  what's connected and which browser and profile Auren uses; `auren browser use helium School`
+  pins one. Auren works in its own tabs. Browser tools cannot currently claim standalone web-app
+  windows; those use screen control.
 - **Mouse control:** your user needs write access to `/dev/uinput` through your system's device
   permissions. Check with `test -w /dev/uinput`. Without access, mouse and Excalidraw tools are hidden;
   screenshots and keyboard tools can still be offered. Device access must be configured separately.
@@ -119,6 +133,11 @@ rm -f ~/.config/omarchy/plugins/kvm404.auren ~/.local/bin/auren ~/.local/bin/aur
 rm -rf ~/.local/share/auren
 systemctl --user daemon-reload
 ```
+
+If Auren set up the browser tools, also remove the manifests it wrote: the
+`NativeMessagingHosts/com.ifuryst.open_browser_use.extension.json` files under `~/.config` whose
+`path` points into `~/.local/share/auren/obu`, then remove the extension in your browser if you don't
+use it otherwise.
 
 Remove the bindings you added to Hyprland. Your settings, API key, history, logs, and cached profile
 remain. See [Privacy](privacy.md#local-storage-and-removal) to delete them. Substitute your XDG paths

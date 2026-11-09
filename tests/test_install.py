@@ -143,3 +143,50 @@ def test_doctor_notices_commands_systemd_cant_see(monkeypatch):
     assert doctor._command("Brain", "claude", "the brain", svc_path=None).status == doctor.OK
     monkeypatch.setattr(doctor.shutil, "which", lambda cmd, path=None: None)
     assert doctor._command("Optional", "herdr", "agents", svc_path=None, required=False).status == doctor.WARN
+
+
+# --- the installer's browser question ---------------------------------------------------------------
+
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+INSTALL = Path(__file__).parents[1] / "install.sh"
+
+
+def _browsers_block() -> str:
+    text = INSTALL.read_text()
+    return text[text.index("# >>> browsers"):text.index("# <<< browsers")]
+
+
+def test_the_installers_browser_list_matches_auren_s():
+    from auren.hands import browsers
+    rows = re.findall(r'^  "([^"]+)"$', _browsers_block(), re.M)
+    table = [tuple(r.split("|")) for r in rows]
+    assert table == [(k.key, k.name, " ".join(k.desktop_ids), " ".join(k.commands)) for k in browsers.KINDS]
+
+
+def _pick(tmp_path, commands: dict[str, str]) -> tuple[str, str, str]:
+    """Run install.sh's pick_browser with only these commands on PATH (name -> what it prints)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for name, out in commands.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\necho {out}\n")
+        (bin_dir / name).chmod(0o755)
+    script = _browsers_block() + '\npick_browser\nprintf "%s|%s|%s" "$browser_key" "$browser_name" "$browser_is_default"\n'
+    out = subprocess.run(["/usr/bin/bash", "-c", script], capture_output=True, text=True,
+                         env={"PATH": str(bin_dir)}, check=True).stdout
+    return tuple(out.split("|"))
+
+
+def test_the_installer_names_the_browser_it_would_set_up(tmp_path):
+    # Omarchy: xdg-settings names Omarchy's launcher, omarchy-cmd-default-browser the real one
+    assert _pick(tmp_path, {"omarchy-cmd-default-browser": "helium.desktop", "xdg-settings": "omarchy-browser.desktop",
+                            "helium-browser": "", "chromium": ""}) == ("helium", "Helium", "yes")
+
+
+def test_the_installer_falls_back_to_an_installed_chromium_browser(tmp_path):
+    assert _pick(tmp_path, {"xdg-settings": "firefox.desktop", "brave": ""}) == ("brave", "Brave", "")
+
+
+def test_the_installer_finds_no_browser_without_a_chromium_one(tmp_path):
+    assert _pick(tmp_path, {"xdg-settings": "firefox.desktop", "firefox": ""}) == ("", "", "")

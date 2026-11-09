@@ -231,13 +231,13 @@ def obsidian() -> list[str]:
 
 def bookmark_file() -> tuple[str, Path] | None:
     """The browser tools' browser and its Bookmarks file."""
-    from ..hands import browsers
+    from ..hands import browser
     try:
-        kind = browsers.resolve()
-    except browsers.UnknownBrowser:
+        link = browser._browser()           # the same browser and profile the tools would use
+    except browser.BrowserError:
         return None
-    profile = browsers.profile_dir(kind)
-    return (kind.name, profile / "Bookmarks") if profile else None
+    profile = link.profile_path()
+    return (link.label(), profile / "Bookmarks") if profile else None
 
 
 @soft

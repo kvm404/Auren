@@ -47,6 +47,9 @@ cd auren && ./install.sh
 3. If you only use Codex, run `auren config set brain.mode codex`.
 4. Run `systemctl --user restart auren auren-mascot`, then `auren doctor`.
 
+The installer asks whether to set up the browser tools, so Auren can work in your own logged-in
+browser. To set them up later, run `auren browser setup` or ask Auren.
+
 The [install guide](docs/install.md) covers optional extras, troubleshooting and removal.
 
 ## Using it
@@ -63,6 +66,7 @@ Things to try:
 - "Open Obsidian on workspace 2."
 - "Play some lofi on Spotify."
 - "Draw how login works in Excalidraw."
+- "Find the cheapest flight to Goa next Friday." (with the browser tools)
 - "Ask Codex to fix the failing tests in my project."
 
 If something doesn't work, run `auren doctor`.
