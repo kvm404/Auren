@@ -7,11 +7,13 @@ folder. Every profile with the extension gets its own host and socket, and nothi
 says which browser or profile it is.
 
 So Auren looks at every live socket:
-- it asks the host for the extension's instance id (`info`), and finds the profile whose extension storage
-  holds that id: that names the browser and the profile at once (Open Browser Use does the same, for
-  Chrome only);
-- if no storage holds it, the host's parent process names the browser, and if only one profile of that
-  browser has the extension, that's the profile.
+- it asks the host for the extension's instance id (`info`), and finds the profiles whose extension storage
+  holds that id (Open Browser Use does the same, for Chrome only);
+- the host's parent process names the browser. That matters: a profile imported or copied from another
+  browser carries the extension's storage, so the same id can be in a Brave and a Helium profile;
+- of that browser's profiles holding the id, the one whose storage changed last; if none holds it and only
+  one of its profiles has the extension, that one. Without a parent to go by, only running browsers count,
+  and a socket that still can't be told apart is left unused rather than mislabelled.
 Then every command goes to that exact socket (`--socket`), so two browsers or two profiles never get mixed up,
 whichever socket folders the user's hosts use.
 
@@ -270,7 +272,7 @@ class Conn:
 
 
 _scan: tuple[float, list[Conn]] | None = None
-_known: dict[str, tuple[str, str | None]] = {}        # instance id -> (browser key, profile folder)
+_known: dict[str, tuple[str, str | None]] = {}        # socket -> (browser key, profile folder), for its life
 
 
 def run(binary: str, *args: str, timeout: float = 10) -> dict:
@@ -336,24 +338,39 @@ def _browser_above(pid: int | None) -> browsers.Kind | None:
     return None
 
 
+def _storage_time(p: Profile) -> float:
+    """When the profile's extension storage last changed (a connecting extension writes to it)."""
+    times = [os.stat(f).st_mtime for f in glob.glob(str(p.path / "Local Extension Settings" / EXTENSION_ID / "*"))
+             if os.path.isfile(f)]
+    return max(times, default=0.0)
+
+
 def _identify(sock: str, instance: str) -> tuple[browsers.Kind, Profile | None] | None:
-    if instance in _known:
-        key, folder = _known[instance]
+    """The browser and profile behind a host. The instance id can be in more than one profile: a profile
+    imported or copied from another browser brings the extension's storage along, id and all. So every
+    profile holding it is a candidate, and the browser that started the host decides between them."""
+    if sock in _known:
+        key, folder = _known[sock]
         kind = browsers.BY_KEY[key]
         prof = next((p for p in profiles(kind) if p.dir == folder), None) if folder else None
         return kind, prof
-    for kind in browsers.KINDS:
-        for p in profiles(kind):
-            if _holds(p, instance):
-                _known[instance] = (kind.key, p.dir)
-                return kind, p
-    kind = _browser_above(_listener_pid(sock))
-    if kind is None:
-        return None
-    candidates = with_extension(kind)
-    prof = candidates[0] if len(candidates) == 1 else None
-    if prof:
-        _known[instance] = (kind.key, prof.dir)
+    holders = [p for kind in browsers.KINDS for p in profiles(kind) if _holds(p, instance)]
+    started_by = _browser_above(_listener_pid(sock))
+    if started_by is not None:
+        mine = [p for p in holders if p.kind == started_by]
+        if not mine:                    # its storage doesn't name it yet: one profile with the extension is it
+            ext = with_extension(started_by)
+            mine = ext if len(ext) == 1 else []
+        kind = started_by
+    else:
+        running = [p for p in holders if browsers.running(p.kind)]
+        mine = running or holders
+        kinds = {p.kind for p in mine}
+        if len(kinds) != 1:
+            return None                 # can't tell which browser this is: better unused than mislabelled
+        kind = kinds.pop()
+    prof = max(mine, key=_storage_time) if mine else None
+    _known[sock] = (kind.key, prof.dir if prof else None)
     return kind, prof
 
 
@@ -392,6 +409,9 @@ def connections(fresh: bool = False) -> list[Conn]:
                 continue
             found.append(Conn(sock, who[0], who[1], instance, since))
     found.sort(key=lambda c: -c.since)
+    live = {c.socket for c in found}
+    for sock in [s for s in _known if s not in live]:
+        del _known[sock]
     _scan = (time.monotonic(), found)
     return found
 

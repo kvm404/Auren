@@ -88,6 +88,38 @@ def test_an_unknown_instance_is_told_by_the_browser_that_started_it(machine, mon
     assert c.socket == sock and c.kind == HELIUM and c.profile is None      # two Helium profiles have it
 
 
+def _copy_of_kvm_in_brave(machine):
+    """Brave's profile holding the same instance id as Helium's kvm (it was imported from there)."""
+    store = machine["brave"] / "Profile 2" / "Local Extension Settings" / EXT
+    store.mkdir(parents=True)
+    (store / "000005.ldb").write_bytes(b"instanceId" + b"iid-kvm")
+    (machine["brave"] / "Profile 2" / "Extensions" / EXT).mkdir(parents=True)
+    ls = json.loads((machine["brave"] / "Local State").read_text())
+    ls["profile"]["info_cache"]["Profile 2"] = {"name": "Kvm"}
+    (machine["brave"] / "Local State").write_text(json.dumps(ls))
+
+
+def test_the_same_instance_id_in_two_browsers_goes_by_the_browser_that_started_the_host(machine, monkeypatch):
+    _copy_of_kvm_in_brave(machine)
+    machine["add"]("kvm", "iid-kvm")
+    monkeypatch.setattr(hosts, "_browser_above", lambda pid: HELIUM)
+    [c] = hosts.connections()
+    assert (c.kind, c.profile.name) == (HELIUM, "kvm")
+    assert b._browser().label() == "Helium (kvm)"
+
+
+def test_without_its_parent_only_a_running_browser_counts(machine):
+    _copy_of_kvm_in_brave(machine)
+    machine["add"]("kvm", "iid-kvm")
+    machine["running"].add("helium")
+    [c] = hosts.connections()
+    assert (c.kind, c.profile.name) == (HELIUM, "kvm")
+    machine["running"].add("brave")                 # both running: it can't tell, so it isn't used
+    hosts.forget_scan()
+    hosts._known.clear()
+    assert hosts.connections() == []
+
+
 def test_choosing_prefers_the_default_browser_then_the_last_used_profile(machine):
     machine["add"]("kvm", "iid-kvm")
     machine["add"]("school", "iid-school")
