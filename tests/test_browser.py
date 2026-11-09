@@ -288,7 +288,7 @@ def test_unknown_browsers_are_refused():
 
 # --- the integration and the setup tool -------------------------------------------------------------------
 
-def test_browser_tools_are_offered_while_not_set_up_but_not_when_off(tmp_path, monkeypatch):
+def test_browser_tools_are_offered_while_not_set_up_but_not_when_off(tmp_path, machine, monkeypatch):
     monkeypatch.setattr(integrations, "_installed", lambda name: (False, "not set up") if name == "browser" else (True, ""))
     rt = tools.Runtime(tmp_path / "t.sock")
     assert {"browser_open", "browser_setup"} <= set(rt.offered())
@@ -297,6 +297,15 @@ def test_browser_tools_are_offered_while_not_set_up_but_not_when_off(tmp_path, m
     settings.save({"integrations.browser": False})
     integrations._cache.clear()
     assert "browser_open" not in rt.offered() and "browser_setup" in rt.offered()
+
+
+def test_without_a_chromium_browser_the_browser_tools_arent_offered(tmp_path, machine, monkeypatch):
+    monkeypatch.setattr(integrations, "_installed", lambda name: (False, "no Chromium browser") if name == "browser" else (True, ""))
+    rt = tools.Runtime(tmp_path / "t.sock")
+    assert "browser_open" in rt.offered()
+    machine["installed"].clear()
+    integrations._cache.clear()
+    assert "browser_open" not in rt.offered()
 
 
 def test_browser_setup_asks_then_sets_up_and_turns_the_tools_on(tmp_path, machine, monkeypatch):

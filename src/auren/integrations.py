@@ -87,9 +87,16 @@ def active(name: str) -> bool:
 
 
 def offered(name: str) -> bool:
-    """Its tools (and rules) are offered to the brain: it's on, or missing but offered anyway."""
+    """Its tools (and rules) are offered to the brain: it's on, or missing but it can be set up here."""
     st = state(name)[0]
-    return st == "on" or (st == "missing" and INTEGRATIONS[name].offer_unset)
+    return st == "on" or (st == "missing" and INTEGRATIONS[name].offer_unset and _can_set_up(name))
+
+
+def _can_set_up(name: str) -> bool:
+    if name == "browser":           # Open Browser Use needs a Chromium browser to be set up in
+        from .hands import browsers
+        return any(browsers.installed(k) and not browsers.flatpak(k) for k in browsers.KINDS)
+    return True
 
 
 def hidden_tools() -> set[str]:

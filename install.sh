@@ -60,20 +60,74 @@ if [[ $mode == check ]]; then
 fi
 ((missing == 0)) || { warn "install the missing commands first"; exit 1; }
 
+# ---- which browser the browser tools would use --------------------------------------------------
+# >>> browsers: the Chromium browsers Auren knows, in step with KINDS in src/auren/hands/browsers.py
+# (tests/test_install.py checks). key|name|launchers (.desktop ids)|commands
+chromium_browsers=(
+  "chrome|Google Chrome|google-chrome google-chrome-stable com.google.Chrome|google-chrome-stable google-chrome"
+  "chromium|Chromium|chromium chromium-browser org.chromium.Chromium|chromium chromium-browser"
+  "brave|Brave|brave-browser brave com.brave.Browser|brave brave-browser"
+  "helium|Helium|helium-browser helium net.imput.helium|helium-browser helium"
+  "edge|Microsoft Edge|microsoft-edge microsoft-edge-stable|microsoft-edge-stable microsoft-edge"
+  "vivaldi|Vivaldi|vivaldi-stable vivaldi|vivaldi-stable vivaldi"
+)
+# pick_browser: sets browser_key and browser_name (empty: no Chromium browser installed), and
+# browser_is_default (yes when it's the default browser). Like `auren browser setup` with no browser
+# named: the default browser if it's one of these, else the first one installed.
+pick_browser() {
+  local default="" entry key name ids cmds id cmd
+  if command -v omarchy-cmd-default-browser >/dev/null; then default=$(omarchy-cmd-default-browser 2>/dev/null || true); fi
+  if [[ -z $default || $default == omarchy-browser.desktop ]] && command -v xdg-settings >/dev/null; then
+    default=$(xdg-settings get default-web-browser 2>/dev/null || true)
+  fi
+  [[ $default == omarchy-browser.desktop ]] && default=""
+  default=${default%.desktop}
+  browser_key="" browser_name="" browser_is_default=""
+  for pass in default first; do
+    for entry in "${chromium_browsers[@]}"; do
+      IFS='|' read -r key name ids cmds <<<"$entry"
+      local have=""
+      for cmd in $cmds; do command -v "$cmd" >/dev/null && { have=1; break; }; done
+      [[ -n $have ]] || continue
+      if [[ $pass == default ]]; then
+        for id in $ids; do
+          if [[ $id == "$default" ]]; then browser_key=$key browser_name=$name browser_is_default=yes; return; fi
+        done
+      else
+        browser_key=$key browser_name=$name
+        return
+      fi
+    done
+  done
+}
+# <<< browsers
+
 # ---- questions, asked now so the rest runs on its own ------------------------------------------
 # Browser tools: kept as they are when they already work (or were turned off), and never asked on an update.
 if [[ $browser == ask && -n ${AUREN_UPDATE:-} ]]; then
   browser=keep
-elif [[ $browser == ask ]]; then
-  if [[ -x $share/venv/bin/auren ]] && "$share/venv/bin/auren" browser status >/dev/null 2>&1; then
-    browser=keep
-  elif [[ -t 0 ]]; then
+elif [[ $browser == ask && -x $share/venv/bin/auren ]] && "$share/venv/bin/auren" browser status >/dev/null 2>&1; then
+  browser=keep
+fi
+if [[ $browser == ask || $browser == yes ]]; then
+  pick_browser
+  if [[ -z $browser_key ]]; then
+    # Nothing to set it up in: don't ask, and say why once.
+    [[ $browser == yes ]] && warn "no Chromium browser is installed (Chrome, Chromium, Brave, Helium, Edge or Vivaldi): skipping the browser tools"
+    browser=none
+  elif [[ $browser == ask && -t 0 ]]; then
     say "Browser tools (optional)"
     echo "Auren can work in your own logged-in browser: read pages, click through sites, fill forms, download."
-    echo "This downloads Open Browser Use and opens its extension's page in your browser, where you click Add."
-    read -rp "Set up the browser tools? [Y/n] " answer
+    if [[ -n $browser_is_default ]]; then
+      echo "This sets them up in $browser_name, your default browser: it downloads Open Browser Use and opens"
+    else
+      echo "Your default browser isn't one Auren can use (it needs a Chromium browser), so this sets them up in"
+      echo "$browser_name, which is installed too: it downloads Open Browser Use and opens"
+    fi
+    echo "its extension's page there, where you click Add."
+    read -rp "Set up the browser tools in $browser_name? [Y/n] " answer
     case "${answer,,}" in ""|y|yes) browser=yes ;; *) browser=no ;; esac
-  else
+  elif [[ $browser == ask ]]; then
     browser=later
   fi
 fi
@@ -198,14 +252,14 @@ fi
 case $browser in
   yes)
     say "Browser tools"
-    "$share/venv/bin/auren" browser setup --yes || warn "the browser tools aren't working yet: auren browser setup"
+    "$share/venv/bin/auren" browser setup "$browser_key" --yes || warn "the browser tools aren't working yet: auren browser setup"
     ;;
   no)
     "$share/venv/bin/auren" config set integrations.browser false >/dev/null
     say "Browser tools: off (auren browser setup turns them on)"
     ;;
   later)
-    warn "the browser tools aren't set up: run auren browser setup (or ./install.sh --browser)"
+    warn "the browser tools aren't set up: run auren browser setup $browser_key (or ./install.sh --browser)"
     ;;
 esac
 
