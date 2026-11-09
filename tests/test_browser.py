@@ -83,7 +83,7 @@ def test_each_socket_is_matched_to_its_browser_and_profile(machine):
 
 def test_an_unknown_instance_is_told_by_the_browser_that_started_it(machine, monkeypatch):
     sock = machine["add"]("x", "iid-elsewhere")
-    monkeypatch.setattr(hosts, "_browser_above", lambda pid: HELIUM)
+    monkeypatch.setattr(hosts, "_browser_above", lambda pid: (HELIUM, False))
     c = hosts.connections()[0]
     assert c.socket == sock and c.kind == HELIUM and c.profile is None      # two Helium profiles have it
 
@@ -102,7 +102,7 @@ def _copy_of_kvm_in_brave(machine):
 def test_the_same_instance_id_in_two_browsers_goes_by_the_browser_that_started_the_host(machine, monkeypatch):
     _copy_of_kvm_in_brave(machine)
     machine["add"]("kvm", "iid-kvm")
-    monkeypatch.setattr(hosts, "_browser_above", lambda pid: HELIUM)
+    monkeypatch.setattr(hosts, "_browser_above", lambda pid: (HELIUM, False))
     [c] = hosts.connections()
     assert (c.kind, c.profile.name) == (HELIUM, "kvm")
     assert b._browser().label() == "Helium (kvm)"
@@ -118,6 +118,49 @@ def test_without_its_parent_only_a_running_browser_counts(machine):
     hosts.forget_scan()
     hosts._known.clear()
     assert hosts.connections() == []
+
+
+def test_two_browsers_sharing_an_instance_id_are_both_seen(machine, monkeypatch):
+    _copy_of_kvm_in_brave(machine)
+    helium = machine["add"]("h", "iid-kvm")
+    brave = machine["add"]("b", "iid-kvm")
+    parent = {helium: (HELIUM, False), brave: (BRAVE, False)}
+    monkeypatch.setattr(hosts, "_listener_pid", lambda sock: sock)
+    monkeypatch.setattr(hosts, "_browser_above", lambda sock: parent[sock])
+    found = {(c.kind.key, c.profile.name) for c in hosts.connections()}
+    assert found == {("helium", "kvm"), ("brave", "Kvm")}
+    assert hosts.choose("brave").conn.socket == brave
+
+
+def test_a_host_with_its_own_data_folder_isnt_used(machine, monkeypatch):
+    machine["add"]("x", "iid-elsewhere")
+    monkeypatch.setattr(hosts, "_browser_above", lambda pid: (BRAVE, True))
+    assert hosts.connections() == []
+
+
+def test_a_custom_user_data_dir_is_told_from_the_browsers_own(machine, monkeypatch):
+    args = {1: [b"brave", b"--user-data-dir=/tmp/throwaway", b""], 2: [b"brave", b""],
+            3: [b"brave", f"--user-data-dir={machine['brave']}".encode(), b""]}
+    monkeypatch.setattr(hosts, "_cmdline", lambda pid: args[pid])
+    assert hosts._own_data_dir(1, BRAVE) and not hosts._own_data_dir(2, BRAVE) and not hosts._own_data_dir(3, BRAVE)
+
+
+def test_a_host_of_unknown_profile_isnt_taken_for_the_one_wanted(machine, monkeypatch):
+    machine["add"]("x", "iid-new")                  # its storage doesn't name it, and Helium has two profiles
+    monkeypatch.setattr(hosts, "_browser_above", lambda pid: (HELIUM, False))
+    [c] = hosts.connections()
+    assert c.kind == HELIUM and c.profile is None and hosts._known == {}      # looked at again next time
+    settings.save({"browser.profile": "kvm"})
+    t = hosts.choose()
+    assert t.conn is None and t.profile.name == "kvm"
+    assert not hosts.matches(c, HELIUM, t.profile) and hosts.matches(c, HELIUM, None)
+
+
+def test_a_profile_that_doesnt_exist_is_an_error(machine):
+    machine["add"]("s", "iid-school")
+    settings.save({"browser.profile": "Shcool"})
+    with pytest.raises(b.BrowserError, match="no profile called 'Shcool'.*School"):
+        b._browser()
 
 
 def test_choosing_prefers_the_default_browser_then_the_last_used_profile(machine):
@@ -162,6 +205,16 @@ def test_a_closed_browser_is_started_in_its_profile_and_waited_for(machine, monk
     assert calls[0][-2:] == ["--socket", sock["path"]] and "auren-helium" in calls[0]
 
 
+def test_opening_a_tab_tries_again_once_when_no_tab_comes_back(machine, monkeypatch):
+    machine["add"]("s", "iid-school")
+    replies = iter(['{"result": {}}', '{"error": {"message": "createTab response did not include numeric tab id"}}',
+                    '{"result": {"tab": {"id": 9}}}'])
+    monkeypatch.setattr(b.subprocess, "run", lambda cmd, **kw: type("P", (), {"returncode": 0, "stdout": next(replies), "stderr": ""})())
+    monkeypatch.setattr(b, "_wait_ready", lambda link, tab: None)
+    monkeypatch.setattr(b, "browser_read", lambda tab=None: "page")
+    assert b.browser_open("example.com") == "(tab 9 in Helium (School))\npage"
+
+
 def test_running_but_the_extension_never_connects(machine, monkeypatch):
     machine["running"].add("helium")
     link = b._browser()
@@ -197,6 +250,22 @@ def test_a_dead_socket_is_found_again(machine, monkeypatch):
     assert sockets == [old, new]
 
 
+def test_the_snapshots_bookmarks_come_from_the_profile_in_use(machine):
+    from auren.profile import collect
+    machine["add"]("k", "iid-kvm")                       # only kvm is connected, though School was used last
+    label, path = collect.bookmark_file()
+    assert label == "Helium (kvm)" and path == machine["helium"] / "Default" / "Bookmarks"
+
+
+def test_the_integration_check_reads_only_files(machine, monkeypatch):
+    def no_scan(*a, **k):
+        raise AssertionError("scanned the sockets")
+    monkeypatch.setattr(hosts, "connections", no_scan)
+    assert hosts.set_up_somewhere()
+    machine["installed"].discard("helium")
+    assert not hosts.set_up_somewhere()
+
+
 def test_bookmarks_come_from_the_profile_in_use(machine):
     (machine["helium"] / "Profile 1" / "Bookmarks").write_text(json.dumps({"roots": {"bookmark_bar": {
         "type": "folder", "name": "Bar", "children": [{"type": "url", "name": "Lectures", "url": "https://school.example"}]}}}))
@@ -214,6 +283,17 @@ def test_registering_writes_a_manifest_only_where_none_works(machine):
     assert m["name"] == hosts.HOST_NAME
     path.write_text(json.dumps({"path": "/gone/open-browser-use"}))     # a broken one is replaced
     assert hosts.register(BRAVE, binary) is True
+
+
+def test_socket_folders_expand_variables(machine, monkeypatch):
+    monkeypatch.setenv("AUREN_TEST_RUN", "/tmp/obu-test-run")
+    script = machine["host"].with_name("run-host.sh")
+    script.write_text('#!/bin/sh\nexec open-browser-use host --socket-dir "$AUREN_TEST_RUN/obu"\n')
+    script.chmod(0o755)
+    (machine["helium"] / "NativeMessagingHosts" / f"{hosts.HOST_NAME}.json").write_text(json.dumps({"path": str(script)}))
+    settings.save({"browser.sockets": {"brave": "$NOT_SET_ANYWHERE/obu"}})
+    dirs = hosts.socket_dirs()
+    assert "/tmp/obu-test-run/obu" in dirs and not any("$" in d for d in dirs)
 
 
 def test_host_scripts_name_their_socket_folders(machine):
@@ -252,6 +332,17 @@ def test_the_binary_is_downloaded_once_and_checked(machine, monkeypatch):
     hosts.install_binary()
     assert len(fetched) == 2                    # the second install found it there
     assert fetched[0].endswith(f"open-browser-use-cli-{hosts.VERSION}-linux-amd64.tar.gz")
+
+
+def test_a_broken_download_is_a_setup_error(machine, monkeypatch):
+    import http.client
+
+    def fetch(url):
+        raise http.client.IncompleteRead(b"half")
+    monkeypatch.setattr(hosts, "_fetch", fetch)
+    monkeypatch.setattr(hosts, "_arch", lambda: "amd64")
+    with pytest.raises(hosts.SetupError, match="couldn't download"):
+        hosts.install_binary()
 
 
 def test_setup_registers_and_opens_the_store_page(machine, monkeypatch):

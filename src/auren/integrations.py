@@ -60,15 +60,13 @@ def _installed(name: str) -> tuple[bool, str]:
     if name == "herdr":
         return (True, "") if shutil.which("herdr") else (False, "herdr isn't installed")
     if name == "browser":
-        from .hands import browsers, obu
+        # Files only: this runs for every tool call. Which browser and profile is decided when a tool runs.
+        from .hands import obu
         if obu.cli() is None:
-            return False, "Open Browser Use isn't set up (auren browser setup)"
-        try:
-            kind = obu.choose().kind
-        except browsers.UnknownBrowser as e:
-            return False, str(e)
-        why = obu.not_set_up(kind)
-        return (True, "") if why is None else (False, f"{why} (auren browser setup)")
+            return False, "Open Browser Use isn't installed (auren browser setup)"
+        if not obu.set_up_somewhere():
+            return False, "no browser has Open Browser Use and its extension yet (auren browser setup)"
+        return True, ""
     if name == "screen":
         return (True, "") if os.access("/dev/uinput", os.W_OK) else (False, "/dev/uinput isn't writable")
     raise KeyError(name)

@@ -112,7 +112,7 @@ _COMMAND_KINDS: dict[str, re.Pattern] = {
       | \bgh\s+repo\s+delete\b
     """, re.X | re.I),
     AUREN: re.compile(r"""
-        \bauren-ctl\s+(?!status\b)|\bauren\s+(ask|chat|config|update)\b   # answering for the user, speaking as
+        \bauren-ctl\s+(?!status\b)|\bauren\s+(ask|chat|config|update|browser\s+(setup|use))\b   # answering for the user, speaking as
       | \bauren(\.sock|/auren\.sock)|\btools\.sock|\.config/auren\b             # them, or changing how much
       | -m\s+auren\b|\b(from|import)\s+auren\b                          # it asks
     """, re.X | re.I),

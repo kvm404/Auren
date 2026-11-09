@@ -125,7 +125,7 @@ if [[ $browser == ask || $browser == yes ]]; then
       echo "$browser_name, which is installed too: it downloads Open Browser Use and opens"
     fi
     echo "its extension's page there, where you click Add."
-    read -rp "Set up the browser tools in $browser_name? [Y/n] " answer
+    read -rp "Set up the browser tools in $browser_name? [Y/n] " answer || answer=n   # end of input: no
     case "${answer,,}" in ""|y|yes) browser=yes ;; *) browser=no ;; esac
   elif [[ $browser == ask ]]; then
     browser=later

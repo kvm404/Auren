@@ -24,8 +24,10 @@ host yet (a manifest that already works is left alone), and opens the extension'
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -35,6 +37,8 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -59,6 +63,10 @@ CACHE_FOR = 3.0         # seconds a scan of the sockets is reused
 
 
 class SetupError(RuntimeError):
+    pass
+
+
+class UnknownProfile(browsers.UnknownBrowser):
     pass
 
 
@@ -113,7 +121,7 @@ def install_binary() -> Path:
     url = RELEASE.format(v=VERSION, arch=arch)
     try:
         data = _fetch(url)
-    except OSError as e:
+    except (OSError, http.client.HTTPException) as e:
         raise SetupError(f"couldn't download Open Browser Use ({e})") from None
     digest = hashlib.sha256(data).hexdigest()
     if digest != SHA256[arch]:
@@ -127,10 +135,16 @@ def install_binary() -> Path:
     except tarfile.TarError as e:
         raise SetupError(f"the Open Browser Use download is broken ({e})") from None
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(".open-browser-use.tmp")
-    tmp.write_bytes(binary)
-    tmp.chmod(0o755)
-    os.replace(tmp, target)                 # a running host keeps its old file; new ones start this one
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".open-browser-use.")     # two setups at once don't collide
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(binary)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, target)             # a running host keeps its old file; new ones start this one
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     (target.parent / "VERSION").write_text(VERSION + "\n")
     return target
 
@@ -189,7 +203,8 @@ def socket_dirs() -> list[str]:
             dirs += re.findall(r"--socket-dir[= ]+[\"']?([^\s\"']+)", head.decode(errors="replace"))
     seen: list[str] = []
     for d in dirs:
-        if d not in seen:
+        d = os.path.expanduser(os.path.expandvars(d))
+        if d not in seen and "$" not in d:          # a variable this process doesn't have can't be looked in
             seen.append(d)
     return seen
 
@@ -322,8 +337,9 @@ def _parent(pid: int) -> int | None:
         return None
 
 
-def _browser_above(pid: int | None) -> browsers.Kind | None:
-    """The browser that started a host: the first ancestor whose program is one we know."""
+def _browser_above(pid: int | None) -> tuple[browsers.Kind, bool] | None:
+    """The browser that started a host: the first ancestor whose program is one we know, and whether it
+    runs with its own --user-data-dir (a separate browser, not the user's profiles)."""
     for _ in range(4):
         pid = _parent(pid) if pid else None
         if not pid or pid <= 1:
@@ -334,8 +350,24 @@ def _browser_above(pid: int | None) -> browsers.Kind | None:
             continue
         kind = next((k for k in browsers.KINDS if exe in k.processes or exe in k.commands), None)
         if kind:
-            return kind
+            return kind, _own_data_dir(pid, kind)
     return None
+
+
+def _cmdline(pid: int) -> list[bytes]:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return []
+
+
+def _own_data_dir(pid: int, kind: browsers.Kind) -> bool:
+    for a in _cmdline(pid):
+        if a.startswith(b"--user-data-dir="):
+            given = os.path.realpath(os.path.expanduser(a.split(b"=", 1)[1].decode(errors="replace")))
+            base = browsers.config_dir(kind)
+            return base is None or given != os.path.realpath(base)
+    return False
 
 
 def _storage_time(p: Profile) -> float:
@@ -355,7 +387,10 @@ def _identify(sock: str, instance: str) -> tuple[browsers.Kind, Profile | None] 
         prof = next((p for p in profiles(kind) if p.dir == folder), None) if folder else None
         return kind, prof
     holders = [p for kind in browsers.KINDS for p in profiles(kind) if _holds(p, instance)]
-    started_by = _browser_above(_listener_pid(sock))
+    above = _browser_above(_listener_pid(sock))
+    if above is not None and above[1]:
+        return None                     # a browser with its own data folder: none of the profiles Auren knows
+    started_by = above[0] if above else None
     if started_by is not None:
         mine = [p for p in holders if p.kind == started_by]
         if not mine:                    # its storage doesn't name it yet: one profile with the extension is it
@@ -370,7 +405,8 @@ def _identify(sock: str, instance: str) -> tuple[browsers.Kind, Profile | None] 
             return None                 # can't tell which browser this is: better unused than mislabelled
         kind = kinds.pop()
     prof = max(mine, key=_storage_time) if mine else None
-    _known[sock] = (kind.key, prof.dir if prof else None)
+    if prof is not None:                # an unknown profile is looked at again next time, not remembered
+        _known[sock] = (kind.key, prof.dir)
     return kind, prof
 
 
@@ -388,8 +424,16 @@ def _sockets() -> list[str]:
     return out
 
 
+_lock = threading.Lock()        # tools run in parallel threads: one scan at a time
+
+
 def connections(fresh: bool = False) -> list[Conn]:
-    """Every live host, newest first."""
+    """Every live host, newest first: at most one per browser and profile (the newest)."""
+    with _lock:
+        return _connections(fresh)
+
+
+def _connections(fresh: bool) -> list[Conn]:
     global _scan
     if not fresh and _scan and time.monotonic() - _scan[0] < CACHE_FOR:
         return _scan[1]
@@ -398,8 +442,9 @@ def connections(fresh: bool = False) -> list[Conn]:
     if binary:
         for sock in _sockets():
             instance = _instance(binary, sock)
-            if not instance or any(c.instance == instance for c in found):
+            if not instance:
                 continue
+            # Not skipped when another socket has the same id: a copied profile in another browser shares it.
             who = _identify(sock, instance)
             if who is None:
                 continue
@@ -409,11 +454,24 @@ def connections(fresh: bool = False) -> list[Conn]:
                 continue
             found.append(Conn(sock, who[0], who[1], instance, since))
     found.sort(key=lambda c: -c.since)
+    seen: set[tuple] = set()
+    unique = []
+    for c in found:
+        key = (c.kind.key, c.profile.dir if c.profile else c.socket)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    found = unique
     live = {c.socket for c in found}
     for sock in [s for s in _known if s not in live]:
         del _known[sock]
     _scan = (time.monotonic(), found)
     return found
+
+
+def matches(c: Conn, kind: browsers.Kind, profile: Profile | None) -> bool:
+    """The connection is that browser, and that profile when one is wanted (an unknown profile isn't it)."""
+    return c.kind == kind and (profile is None or (c.profile is not None and c.profile.dir == profile.dir))
 
 
 def forget_scan() -> None:
@@ -457,15 +515,17 @@ def ready(kind: browsers.Kind) -> bool:
 def choose(name: str | None = None, profile: str | None = None) -> Target:
     """Which browser and profile the browser tools use.
 
-    A browser or profile named (by the brain, or browser.name / browser.profile in config) is kept to.
+    A browser (named by the brain or browser.name) and a profile (named by browser.profile, or the caller)
+    are kept to; a profile that doesn't exist is an error, not ignored.
     Otherwise: a connected one, preferring the default browser, then its last-used profile, then the
     newest; if none is connected, the default browser if it's set up, else the first that is.
     """
     from ..settings import current as settings
     configured = str(settings()["browser.name"]).lower()
     want_kind = browsers.resolve(name) if (name or configured != "auto") else None
-    # browser.profile belongs to the configured browser (or, with browser.name auto, to whichever is used)
-    same = want_kind is None or configured == "auto" or browsers.resolve(configured) == want_kind
+    # browser.profile belongs to the configured browser, or with browser.name auto to the one picked here:
+    # not to a browser the brain names for one request
+    same = (configured == "auto" and not name) or (configured != "auto" and browsers.resolve(configured) == want_kind)
     saved = str(settings()["browser.profile"])
     want_profile = profile or (saved if saved != "auto" and same else None)
     default = browsers.default_kind()
@@ -486,11 +546,22 @@ def choose(name: str | None = None, profile: str | None = None) -> Target:
         kind = default if default and default in set_up else (set_up[0] if set_up else default or browsers.resolve())
     if want_profile:
         prof = find_profile(kind, want_profile)
+        if prof is None:
+            names = ", ".join(p.label() for p in profiles(kind)) or "none yet"
+            raise UnknownProfile(f"{kind.name} has no profile called {want_profile!r} (its profiles: {names}); "
+                                 "fix browser.profile, or: auren browser use auto")
     else:
         ext = with_extension(kind)
         last = _last_used(kind)
         prof = next((p for p in ext if p.dir == last), ext[0] if ext else None)
     return Target(kind, prof)
+
+
+def set_up_somewhere() -> bool:
+    """Some installed browser has a host registered and the extension: from files alone, no sockets asked
+    (cheap enough for every tool call's integration check)."""
+    return cli() is not None and any(browsers.installed(k) and registered(k) and with_extension(k)
+                                     for k in browsers.KINDS)
 
 
 def not_set_up(kind: browsers.Kind, profile: Profile | None = None) -> str | None:
@@ -499,8 +570,7 @@ def not_set_up(kind: browsers.Kind, profile: Profile | None = None) -> str | Non
         return f"{kind.name} isn't installed"
     if cli() is None:
         return "Open Browser Use isn't installed"
-    if any(c.kind == kind and (profile is None or c.profile is None or c.profile.dir == profile.dir)
-           for c in connections()):
+    if any(matches(c, kind, profile) for c in connections()):
         return None                     # connected proves it, whatever the files say
     if not registered(kind):
         return f"Open Browser Use isn't registered with {kind.name}"
@@ -587,7 +657,7 @@ def wait_for(kind: browsers.Kind, profile: Profile | None, seconds: float) -> Co
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         for c in connections(fresh=True):
-            if c.kind == kind and (profile is None or c.profile is None or c.profile.dir == profile.dir):
+            if matches(c, kind, profile):
                 return c
         time.sleep(1)
     return None

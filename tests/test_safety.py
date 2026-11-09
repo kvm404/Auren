@@ -372,3 +372,10 @@ def test_where_a_terminal_runs_is_unknown_so_a_relative_delete_asks():
 def test_what_the_third_review_of_the_reader_found(command, folder, kinds):
     risk = safety.assess_command(command, folder)
     assert (set(risk.kinds) if risk else set()) == kinds
+
+
+def test_auren_browser_setup_through_the_shell_asks():
+    for cmd in ("auren browser setup --yes", "auren browser use brave", "~/.local/bin/auren browser setup helium"):
+        risk = safety.assess_command(cmd, "/home/u")
+        assert risk and safety.AUREN in risk.kinds, cmd
+    assert safety.assess_command("auren browser", "/home/u") is None          # just looking

@@ -123,10 +123,7 @@ def ensure_connected(link: Link, wait: float = CONNECT_WAIT) -> None:
 
 
 def _live(link: Link, fresh: bool = False) -> hosts.Conn | None:
-    for c in hosts.connections(fresh=fresh):
-        if c.kind == link.kind and (link.profile is None or c.profile is None or c.profile.dir == link.profile.dir):
-            return c
-    return None
+    return next((c for c in hosts.connections(fresh=fresh) if hosts.matches(c, link.kind, link.profile)), None)
 
 
 class _NotConnected(BrowserError):
@@ -175,7 +172,6 @@ def _eval(browser: Link, tab: int, js: str, timeout: float = 30):
     r = obu(browser, "cdp", "--tab-id", str(tab), "--method", "Runtime.evaluate", "--params", params, timeout=timeout)
     if r.get("exceptionDetails"):     # reply shape: {"result": {"type", "value"}, "exceptionDetails"?}
         raise BrowserError("page script failed: " + str(r["exceptionDetails"].get("text"))[:200])
-    return (r.get("result") or {}).get("value")
     return (r.get("result") or {}).get("value")
 
 
@@ -301,7 +297,15 @@ def browser_open(url: str, browser: str = "") -> str:
     elif not re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I):
         url = "https://" + url
     obu(b, "name-session", "--name", "auren")
-    r = obu(b, "open-tab", "--url", url, timeout=40)
+    try:
+        r = obu(b, "open-tab", "--url", url, timeout=40)
+    except BrowserError as e:
+        # Seen once right after the user closed and reopened profiles: the extension's createTab came back
+        # without a tab. It didn't happen again, so one more try.
+        if "tab id" not in str(e):
+            raise
+        time.sleep(1)
+        r = obu(b, "open-tab", "--url", url, timeout=40)
     tab = (r.get("tab") or {}).get("id")
     if not tab:
         raise BrowserError(f"couldn't open a tab: {str(r)[:200]}")
@@ -495,7 +499,7 @@ def bookmarks(query: str = "", browser: str = "") -> str:
         ("\n(open one with browser_open('bookmark:<name>'))")
 
 
-def _bookmark_url(name: str, browser: str) -> str:
+def _bookmark_url(name: str, browser: Link) -> str:
     want = name.strip().lower()
     marks = _bookmarks(browser)
     for test in (lambda n: n.lower() == want, lambda n: n.lower().endswith("/" + want), lambda n: want in n.lower()):

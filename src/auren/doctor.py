@@ -185,7 +185,8 @@ def checks() -> list[Check]:
             out.append(Check(g, i.what, OK, "turned off"))
         elif st == "missing":
             wanted = integrations.settings()[f"integrations.{name}"] is True
-            left = "its tools offer to set it up" if i.offer_unset else "its tools are left out"
+            left = ("its tools offer to set it up" if i.offer_unset and integrations._can_set_up(name)
+                    else "its tools are left out")
             out.append(Check(g, i.what, FAIL if wanted else WARN, f"{why}: {left}", fixes[name]))
         elif name == "herdr" and _run(["herdr", "workspace", "list"])[0] != 0:
             out.append(Check(g, i.what, WARN, "installed but not running", "open it: omarchy-launch-terminal herdr"))
