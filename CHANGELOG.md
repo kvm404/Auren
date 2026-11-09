@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 ### Added
 
@@ -19,7 +19,6 @@
   first browser installed, because `xdg-settings` names Omarchy's launcher script.
 - When the browser tools aren't set up, they're still offered, so Auren can say what's missing and
   offer to set them up. With `integrations.browser = false` they stay hidden.
-
 - The bar plugin's ID is now `kvm404.auren` (it was `krvm.auren`). Installing or updating moves the
   widget over in the same place on your bar. If you call the panel from a script or key binding,
   use `omarchy-shell kvm404.auren toggle`.

@@ -38,7 +38,7 @@ Ask all your questions at the start, then install everything in one go.
 ### By hand
 
 ```bash
-git clone --branch v0.1.3 --depth 1 https://github.com/kvm404/Auren.git auren
+git clone --branch v0.1.4 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren && ./install.sh
 ```
 
