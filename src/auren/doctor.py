@@ -173,11 +173,11 @@ def checks() -> list[Check]:
 
     # --- optional integrations ------------------------------------------------------------------------
     from . import integrations
-    from .hands import browsers
+    from .hands import obu
 
     g = "Optional"
     fixes = {"herdr": "https://herdr.dev, or turn it off: auren config set integrations.herdr false",
-             "browser": "install Open Browser Use and its extension, or: auren config set integrations.browser false",
+             "browser": "auren browser setup, or turn it off: auren config set integrations.browser false",
              "screen": "add a udev rule giving your user access to /dev/uinput (see README)"}
     for name, i in integrations.INTEGRATIONS.items():
         st, why = integrations.state(name)
@@ -185,16 +185,19 @@ def checks() -> list[Check]:
             out.append(Check(g, i.what, OK, "turned off"))
         elif st == "missing":
             wanted = integrations.settings()[f"integrations.{name}"] is True
-            out.append(Check(g, i.what, FAIL if wanted else WARN, f"{why}: its tools are left out", fixes[name]))
+            left = "its tools offer to set it up" if i.offer_unset else "its tools are left out"
+            out.append(Check(g, i.what, FAIL if wanted else WARN, f"{why}: {left}", fixes[name]))
         elif name == "herdr" and _run(["herdr", "workspace", "list"])[0] != 0:
             out.append(Check(g, i.what, WARN, "installed but not running", "open it: omarchy-launch-terminal herdr"))
         elif name == "browser":
-            kind = browsers.resolve()
-            profile = browsers.profile_dir(kind)
-            out.append(Check(g, i.what, OK if profile else WARN,
-                             f"{kind.name}, profile {profile.name if profile else 'not found'}, "
-                             f"sockets in {browsers.socket_dir(kind)}",
-                             "" if profile else "open the browser once, or set browser.profile"))
+            target = obu.choose()
+            binary = obu.cli() or ""
+            if binary != str(obu.own_binary()) and svc is not None and not shutil.which(Path(binary).name, path=svc):
+                out.append(Check(g, i.what, WARN, f"{binary} isn't in the PATH systemd services get",
+                                 "auren browser setup (installs Auren's own copy)"))
+            else:
+                out.append(Check(g, i.what, OK, target.label() + (" (connected)" if target.conn else
+                                 " (not connected: it opens when needed)")))
         else:
             out.append(Check(g, i.what, OK, "on"))
     agent = integrations.default_agent()

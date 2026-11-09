@@ -11,7 +11,7 @@ receive data as described below. Auren has no separate telemetry or analytics se
 | Claude Code or Codex's model provider | Your transcript or typed request, conversation context, a compact machine profile, personal instructions, routines, and results of tools the model calls |
 | Selected model provider, when screen tools are used | Requested screenshots, including visible app and browser content |
 | Claude Code's model provider, for the full-access send judge | The last six conversation lines, the proposed message and destination, and a screenshot for a screen-based send |
-| GitHub | Release checks and source downloads; authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh` login when available |
+| GitHub | Release checks and source downloads; authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh` login when available. Browser setup downloads the Open Browser Use release from github.com/iFurySt/open-browser-use |
 | Voice model host | The Supertonic model download during setup or `auren voice-model` |
 
 Browser actions use your real logged-in browser through Open Browser Use. Normal site requests,

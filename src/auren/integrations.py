@@ -2,7 +2,9 @@
 
 Each integration is in one of three states:
 - enabled: config.toml's `integrations.<name>` isn't false ("auto" or true);
-- installed: what it needs is on this machine. Only then are its tools and its rules offered to the brain;
+- installed: what it needs is on this machine. Only then are its tools and its rules offered to the brain,
+  except for the browser: its tools are offered whenever it's enabled, so that when it isn't set up they
+  can say so and the brain can offer browser_setup;
 - ready: checked when a tool runs (the browser may be closed at login and opened later), and the tool says
   what's wrong.
 
@@ -25,6 +27,7 @@ class Integration:
     name: str
     what: str
     tools: frozenset[str]
+    offer_unset: bool = False       # its tools are offered while it's missing too (they explain how to set it up)
 
 
 INTEGRATIONS = {
@@ -32,7 +35,7 @@ INTEGRATIONS = {
                          frozenset({"list_agents", "read_agent", "prompt_agent", "start_agent", "show_agent"})),
     "browser": Integration("browser", "browser tools (Open Browser Use)",
                            frozenset({"browser_open", "browser_read", "browser_click", "browser_type", "browser_scroll",
-                                      "browser_close", "browser_bookmarks", "recent_downloads"})),
+                                      "browser_close", "browser_bookmarks", "recent_downloads"}), offer_unset=True),
     "screen": Integration("screen", "mouse control",
                           frozenset({"click_at", "drag_at", "scroll_at", "excalidraw_draw", "excalidraw_read",
                                      "spotify_play"})),
@@ -57,14 +60,15 @@ def _installed(name: str) -> tuple[bool, str]:
     if name == "herdr":
         return (True, "") if shutil.which("herdr") else (False, "herdr isn't installed")
     if name == "browser":
-        if not shutil.which("open-browser-use"):
-            return False, "Open Browser Use isn't installed"
-        from .hands import browsers
+        from .hands import browsers, obu
+        if obu.cli() is None:
+            return False, "Open Browser Use isn't set up (auren browser setup)"
         try:
-            kind = browsers.resolve()
+            kind = obu.choose().kind
         except browsers.UnknownBrowser as e:
             return False, str(e)
-        return (True, "") if browsers.installed(kind) else (False, f"{kind.name} isn't installed")
+        why = obu.not_set_up(kind)
+        return (True, "") if why is None else (False, f"{why} (auren browser setup)")
     if name == "screen":
         return (True, "") if os.access("/dev/uinput", os.W_OK) else (False, "/dev/uinput isn't writable")
     raise KeyError(name)
@@ -82,9 +86,15 @@ def active(name: str) -> bool:
     return state(name)[0] == "on"
 
 
+def offered(name: str) -> bool:
+    """Its tools (and rules) are offered to the brain: it's on, or missing but offered anyway."""
+    st = state(name)[0]
+    return st == "on" or (st == "missing" and INTEGRATIONS[name].offer_unset)
+
+
 def hidden_tools() -> set[str]:
     """Tools of integrations that are off or missing: the brain isn't offered them."""
-    return {t for n, i in INTEGRATIONS.items() if not active(n) for t in i.tools}
+    return {t for n, i in INTEGRATIONS.items() if not offered(n) for t in i.tools}
 
 
 # --- coding agents ------------------------------------------------------------------------------

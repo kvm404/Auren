@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import safety
+from . import integrations, safety
 from .brain.judge import Judge
 from .hands import browser as web
 from .hands import desktop, excalidraw, herdr, screen, shell, spotify
@@ -881,6 +881,45 @@ def browser_bookmarks(query: str = "", browser_name: str = "") -> str:
 def recent_downloads(minutes: int = 30, browser_name: str = "") -> str:
     """Files downloaded recently (path and size)."""
     return _run(web.recent_downloads, browser_name, minutes)
+
+
+@tool()
+def browser_setup(browser: str = "") -> str:
+    """Set up the browser tools (Open Browser Use) in the user's browser, or in the one named (chrome, brave,
+    helium, ...). It asks the user itself, then downloads Open Browser Use, registers it with the browser and
+    opens the extension's Web Store page there: the user clicks Add, and the browser tools work from then on.
+    Call it when a browser tool says Open Browser Use isn't set up and the task needs the browser, or when the
+    user asks for browser tools. Just call it: don't ask in words first."""
+    from .hands import browsers, obu
+    try:
+        kind = obu.setup_choice(browser or None)
+    except browsers.UnknownBrowser as e:
+        return f"error: {e}"
+    off = integrations.settings()["integrations.browser"] is False
+    conn = next((c for c in obu.connections(fresh=True) if c.kind == kind), None)
+    if conn and not off:
+        return f"the browser tools are already set up and connected: {conn.label()}"
+    question = (f"Set up browser tools in {kind.name}? I'll download Open Browser Use {obu.VERSION} from GitHub, "
+                f"register it with {kind.name} and open its extension's Web Store page for you to add.")
+    return _gate({safety.SYSTEM}, question, lambda: _browser_setup(kind, off))
+
+
+def _browser_setup(kind, was_off: bool) -> str:
+    from . import settings as config
+    from .hands import obu
+    try:
+        result = obu.setup(kind)
+    except obu.SetupError as e:
+        return f"error: {e}"
+    if was_off:
+        config.save({"integrations.browser": "auto"})
+    integrations._cache.clear()
+    out = result.summary()
+    if was_off:
+        out += ". The browser tools were turned off: they're on now, from the next fresh conversation (Super+Shift+A)"
+    elif result.opened_store:
+        out += ". Once the user has added it, browser_open works"
+    return out
 
 
 # --- screen control: see the screen, use the mouse and keyboard (fallback) ------------------------------

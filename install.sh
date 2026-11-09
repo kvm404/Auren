@@ -4,6 +4,7 @@
 #   ./install.sh            install into ~/.local/share/auren (a copy: the checkout can move or go)
 #   ./install.sh --dev      the same, but linked to this checkout: code changes need only a restart
 #   ./install.sh --check    only report what's missing (auren doctor, once installed)
+#   --browser / --no-browser   set up the browser tools (Open Browser Use) or turn them off, without asking
 #
 # Layout (see docs/architecture.md):
 #   ~/.local/share/auren/venv/          the Python environment, with auren and auren-ctl
@@ -23,12 +24,16 @@ units="$config/systemd/user"
 plugins="$config/omarchy/plugins"
 userbin="$HOME/.local/bin"
 mode=install
-case "${1:-}" in
-  --dev) mode=dev ;;
-  --check) mode=check ;;
-  "") ;;
-  *) echo "usage: $0 [--dev|--check]" >&2; exit 2 ;;
-esac
+browser=ask
+for arg in "$@"; do
+  case "$arg" in
+    --dev) mode=dev ;;
+    --check) mode=check ;;
+    --browser) browser=yes ;;
+    --no-browser) browser=no ;;
+    *) echo "usage: $0 [--dev|--check] [--browser|--no-browser]" >&2; exit 2 ;;
+  esac
+done
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
@@ -54,6 +59,24 @@ if [[ $mode == check ]]; then
   exit 1
 fi
 ((missing == 0)) || { warn "install the missing commands first"; exit 1; }
+
+# ---- questions, asked now so the rest runs on its own ------------------------------------------
+# Browser tools: kept as they are when they already work (or were turned off), and never asked on an update.
+if [[ $browser == ask && -n ${AUREN_UPDATE:-} ]]; then
+  browser=keep
+elif [[ $browser == ask ]]; then
+  if [[ -x $share/venv/bin/auren ]] && "$share/venv/bin/auren" browser status >/dev/null 2>&1; then
+    browser=keep
+  elif [[ -t 0 ]]; then
+    say "Browser tools (optional)"
+    echo "Auren can work in your own logged-in browser: read pages, click through sites, fill forms, download."
+    echo "This downloads Open Browser Use and opens its extension's page in your browser, where you click Add."
+    read -rp "Set up the browser tools? [Y/n] " answer
+    case "${answer,,}" in ""|y|yes) browser=yes ;; *) browser=no ;; esac
+  else
+    browser=later
+  fi
+fi
 
 # ---- Python environment ------------------------------------------------------------------------
 say "Python environment: $share/venv"
@@ -170,6 +193,21 @@ PY
   # the running shell keeps the panel it loaded (auren update restarts it itself)
   [[ -z $had_plugin || -n ${AUREN_UPDATE:-} ]] || warn "the bar plugin was replaced: omarchy restart shell (loads the new panel)"
 fi
+
+# ---- browser tools (Open Browser Use) -----------------------------------------------------------
+case $browser in
+  yes)
+    say "Browser tools"
+    "$share/venv/bin/auren" browser setup --yes || warn "the browser tools aren't working yet: auren browser setup"
+    ;;
+  no)
+    "$share/venv/bin/auren" config set integrations.browser false >/dev/null
+    say "Browser tools: off (auren browser setup turns them on)"
+    ;;
+  later)
+    warn "the browser tools aren't set up: run auren browser setup (or ./install.sh --browser)"
+    ;;
+esac
 
 # ---- what's installed, for auren update ----------------------------------------------------------
 # Written last, so it only names an install that finished.
