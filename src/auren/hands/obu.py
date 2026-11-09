@@ -108,7 +108,9 @@ def _arch() -> str:
 
 
 def _fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=60) as r:       # noqa: S310 - a fixed https URL
+    # 15 s per step: GitHub's download host has several addresses, and one that doesn't answer from some
+    # networks would otherwise hold the setup for a minute before the next is tried.
+    with urllib.request.urlopen(url, timeout=15) as r:       # noqa: S310 - a fixed https URL
         return r.read()
 
 

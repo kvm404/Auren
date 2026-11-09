@@ -103,6 +103,7 @@ def setup(name: str | None, yes: bool, open_store: bool, wait: float) -> int:
                   "so it connects to the newly registered host.")
         print(f"Waiting up to {wait:.0f} s for the extension to connect…", flush=True)
 
+    print("Downloading Open Browser Use…" if obu.installed_version() != obu.VERSION else "", end="", flush=True)
     try:
         result = obu.setup(kind, open_store=open_store, wait=wait, on_wait=waiting)
     except obu.SetupError as e:
