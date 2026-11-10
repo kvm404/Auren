@@ -5,6 +5,7 @@
 #   ./install.sh --dev      the same, but linked to this checkout: code changes need only a restart
 #   ./install.sh --check    only report what's missing (auren doctor, once installed)
 #   --browser / --no-browser   set up the browser tools (Open Browser Use) or turn them off, without asking
+#   --keys=super / --keys=alt / --no-keys   add the talk keys to bindings.lua, or only print them, without asking
 #
 # Layout (see docs/architecture.md):
 #   ~/.local/share/auren/venv/          the Python environment, with auren and auren-ctl
@@ -13,7 +14,8 @@
 #   ~/.local/share/auren/bin/auren-ctl  what key bindings call
 #   ~/.local/share/auren/models/        the voice model
 #
-# It doesn't edit your Hyprland config: it prints the key bindings and the layer rule to add.
+# In a terminal it asks which talk keys to add to ~/.config/hypr/bindings.lua (backed up first);
+# otherwise it prints them. It never touches the rest of your Hyprland config.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,13 +27,17 @@ plugins="$config/omarchy/plugins"
 userbin="$HOME/.local/bin"
 mode=install
 browser=ask
+keys=ask
 for arg in "$@"; do
   case "$arg" in
     --dev) mode=dev ;;
     --check) mode=check ;;
     --browser) browser=yes ;;
     --no-browser) browser=no ;;
-    *) echo "usage: $0 [--dev|--check] [--browser|--no-browser]" >&2; exit 2 ;;
+    --keys=super) keys=super ;;
+    --keys=alt) keys=alt ;;
+    --no-keys) keys=print ;;
+    *) echo "usage: $0 [--dev|--check] [--browser|--no-browser] [--keys=super|--keys=alt|--no-keys]" >&2; exit 2 ;;
   esac
 done
 
@@ -102,6 +108,38 @@ pick_browser() {
 }
 # <<< browsers
 
+# ---- the talk keys -----------------------------------------------------------------------------
+# >>> keys (tests/test_install.py runs these)
+bindings="$config/hypr/bindings.lua"
+# keys_lines <super|alt>: Auren's lines for bindings.lua. Super+A frees Omarchy's own uses of the keys
+# first: Hyprland runs every binding on a key, so without the unbinds both would fire.
+keys_lines() {
+  local ctl="$share/bin/auren-ctl"
+  echo "-- Auren voice assistant: press to start talking, press again to send."
+  if [[ $1 == super ]]; then
+    echo 'hl.unbind("SUPER + A")          -- was: Select all (Omarchy 4.5; Ctrl+A still selects all)'
+    echo 'hl.unbind("SUPER + SHIFT + A")  -- was: ChatGPT web app'
+    echo "o.bind(\"SUPER + A\", \"Auren: talk (press again to send)\", \"$ctl talk\")"
+    echo "o.bind(\"SUPER + SHIFT + A\", \"Auren: talk in a fresh conversation\", \"$ctl talk-fresh\")"
+  else
+    echo "o.bind(\"SUPER + ALT + A\", \"Auren: talk (press again to send)\", \"$ctl talk\")"
+    echo "o.bind(\"SUPER + CTRL + ALT + A\", \"Auren: talk in a fresh conversation\", \"$ctl talk-fresh\")"
+  fi
+}
+# keys_bound: some Hyprland config file already runs Auren's talk command
+keys_bound() { grep -rqs --include='*.lua' --include='*.conf' 'auren-ctl talk' "$config/hypr"; }
+# own_super_a: the user bound Super+A or Super+Shift+A to something of their own (Omarchy's defaults
+# live elsewhere, so they don't count)
+own_super_a() { grep -Eqs '^[[:space:]]*o\.bind\("SUPER \+ (SHIFT \+ )?A"' "$bindings"; }
+# add_keys <super|alt>: back up bindings.lua the way Omarchy does (bindings.lua.bak.<time>), then add
+# Auren's lines at the end. Sets keys_backup.
+add_keys() {
+  keys_backup="$bindings.bak.$(date +%s)"
+  cp -p "$bindings" "$keys_backup"
+  { echo; keys_lines "$1"; } >>"$bindings"
+}
+# <<< keys
+
 # ---- questions, asked now so the rest runs on its own ------------------------------------------
 # Browser tools: kept as they are when they already work (or were turned off), and never asked on an update.
 if [[ $browser == ask && -n ${AUREN_UPDATE:-} ]]; then
@@ -130,6 +168,27 @@ if [[ $browser == ask || $browser == yes ]]; then
   elif [[ $browser == ask ]]; then
     browser=later
   fi
+fi
+
+# Talk keys: never added twice, nor on an update; without a terminal (or bindings.lua) they're printed.
+if [[ $keys != print ]] && keys_bound; then
+  keys=keep
+elif [[ ! -f $bindings ]]; then
+  [[ $keys == ask ]] || warn "no $bindings to add the talk keys to: they're printed at the end"
+  keys=print
+elif [[ $keys == ask && ( ! -t 0 || -n ${AUREN_UPDATE:-} ) ]]; then
+  keys=print
+elif [[ $keys == ask ]]; then
+  if own_super_a; then suggest=2; else suggest=1; fi
+  say "Talk keys"
+  echo "Auren starts listening when you press its key. This adds the key to $bindings"
+  echo "(after backing it up):"
+  echo "  1) Super+A, and Super+Shift+A for a fresh conversation. They replace Omarchy's Select all"
+  echo "     (Ctrl+A still works) and its ChatGPT key."
+  echo "  2) Super+Alt+A and Super+Ctrl+Alt+A, keeping Omarchy's keys as they are."
+  echo "  3) Skip: print the lines and I'll add them myself."
+  read -rp "Which keys? [$suggest] " answer || answer=3   # end of input: skip
+  case "${answer:-$suggest}" in 1) keys=super ;; 2) keys=alt ;; *) keys=print ;; esac
 fi
 
 # ---- Python environment ------------------------------------------------------------------------
@@ -286,15 +345,26 @@ else
   warn "not a git checkout: auren update can't tell which version this is"
 fi
 
-# ---- Hyprland (printed, not edited) ------------------------------------------------------------
+# ---- Hyprland: the talk keys --------------------------------------------------------------------
+case $keys in
+  super|alt)
+    add_keys "$keys"
+    say "Talk keys: added to $bindings (the old file is ${keys_backup##*/})"
+    keys_lines "$keys" | sed -n 's/^o\.bind("\([^"]*\)", "Auren: \([^"]*\)".*/  \1: \2/p'
+    hyprctl reload >/dev/null 2>&1 || true   # in case automatic reloading is off
+    ;;
+  keep)
+    say "Talk keys: already in your Hyprland config"
+    ;;
+  print)
+    echo
+    say "Add to $bindings:"
+    keys_lines super
+    say "To keep Omarchy's Select all and ChatGPT keys, use these instead:"
+    keys_lines alt | tail -n +2
+    ;;
+esac
 cat <<EOF
-
-$(say "Add to ~/.config/hypr/bindings.lua (the unbinds free Omarchy's own uses of these keys; unbinding a free key is harmless):")
-hl.unbind("SUPER + A")          -- was: Select all (Omarchy 4.5; Ctrl+A still selects all)
-hl.unbind("SUPER + SHIFT + A")  -- was: ChatGPT web app
-o.bind("SUPER + A", "Auren: talk (press again to send)", "$share/bin/auren-ctl talk")
-o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "$share/bin/auren-ctl talk-fresh")
-$(say "To keep those, use SUPER + ALT + A and SUPER + CTRL + ALT + A instead (free on Omarchy 4.5), without the unbinds.")
 
 $(say "Optional: add to ~/.config/hypr/hyprland.lua to skip mascot layer animations:")
 hl.layer_rule({ match = { namespace = "^auren-mascot" }, no_anim = true, animation = "none" })

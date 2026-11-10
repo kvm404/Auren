@@ -16,8 +16,11 @@ Follow the [README installation steps](../README.md#install). A normal install i
 `./install.sh --dev` links the runtime and UI to your checkout.
 
 The installer enables `auren.service` and `auren-mascot.service` for your graphical session and
-registers the `kvm404.auren` bar plugin. It prints Hyprland bindings instead of editing your config.
-It does not install system packages or grant device access.
+registers the `kvm404.auren` bar plugin. It asks which talk keys to use and adds them to
+`~/.config/hypr/bindings.lua`, after saving a copy as `bindings.lua.bak.<time>`; it doesn't touch the
+rest of your Hyprland config. Without a terminal it prints the lines instead. `--keys=super`,
+`--keys=alt` or `--no-keys` answers without asking. It does not install system packages or grant
+device access.
 
 ## For coding agents
 
@@ -61,18 +64,18 @@ anything else unless something fails.
 1. Install the missing packages with pacman. If you can't run `sudo` yourself, give the user one
    command for all of them.
 2. Check out the release's exact tag in a temporary folder and run `./install.sh --browser` (or
-   `--no-browser` if the user didn't want the browser tools); a normal install, not `--dev`. It
+   `--no-browser` if the user didn't want the browser tools) with `--keys=super` or `--keys=alt`
+   for the chosen talk keys; a normal install, not `--dev`. It adds the keys to `bindings.lua`
+   after a backup, and leaves them alone if Auren is already bound. It
    downloads a 380 MB voice model. With `--browser`, tell the user just before it gets there to click
    Add on the Web Store page that opens; it waits up to three minutes. If no window could open, run
    `auren browser setup --yes` afterwards instead.
 3. Write `ASSEMBLYAI_API_KEY=...` to `~/.config/auren/secrets.env` (mode 600) without printing it, or
    tell the user the exact file and line to add.
-4. Back up `~/.config/hypr/bindings.lua`, then add the binding lines `install.sh` printed for the
-   chosen keys. Don't change the user's other shortcuts.
-5. Turn off the other extras the user didn't want with `auren config set integrations.<name> false`
+4. Turn off the other extras the user didn't want with `auren config set integrations.<name> false`
    (`herdr` or `screen`). If only Codex works, run `auren config set brain.mode codex`.
    Keep the default `ask` approval level.
-6. Run `auren doctor` and fix what it reports. Restart Auren, then check that it speaks with
+5. Run `auren doctor` and fix what it reports. Restart Auren, then check that it speaks with
    `auren-ctl say "Hi, I'm Auren"`.
 
 ### 4. Finish

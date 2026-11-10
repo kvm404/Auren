@@ -71,10 +71,10 @@ def _version(text: str) -> tuple[int, ...]:
 
 # Hyprland's modmask bits, in the order key names are written (Super+Ctrl+Alt+A)
 MODS = ((64, "Super"), (1, "Shift"), (4, "Ctrl"), (8, "Alt"))
-TALK_KEYS = {"talk": "Super+A", "talk-fresh": "Super+Shift+A"}           # what install.sh prints
+TALK_KEYS = {"talk": "Super+A", "talk-fresh": "Super+Shift+A"}           # what install.sh adds
 SPARE_KEYS = {"talk": "Super+Alt+A", "talk-fresh": "Super+Ctrl+Alt+A"}    # its alternative, free on Omarchy 4.5
 NO_TALK = "no binding named \"Auren: talk …\" (doctor finds Auren's keys by the names install.sh gives them)"
-NO_TALK_FIX = "add the bindings ./install.sh prints to ~/.config/hypr/bindings.lua, keeping their names"
+NO_TALK_FIX = "run ./install.sh again to add them, or add the lines it prints to ~/.config/hypr/bindings.lua"
 
 
 def _key_name(b: dict) -> str:

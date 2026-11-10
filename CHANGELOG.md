@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The installer asks which keys start Auren (Super+A, or Super+Alt+A to keep Omarchy's Select all)
+  and adds them to `~/.config/hypr/bindings.lua`, after saving a copy as `bindings.lua.bak.<time>`.
+  It doesn't ask again once Auren is bound, or during `auren update`. `--keys=super`, `--keys=alt`
+  and `--no-keys` answer without asking.
+
 ## 0.1.4
 
 ### Added
