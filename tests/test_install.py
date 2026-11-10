@@ -190,3 +190,67 @@ def test_the_installer_falls_back_to_an_installed_chromium_browser(tmp_path):
 
 def test_the_installer_finds_no_browser_without_a_chromium_one(tmp_path):
     assert _pick(tmp_path, {"xdg-settings": "firefox.desktop", "firefox": ""}) == ("", "", "")
+
+
+def _keys(tmp_path, script: str, bindings: str | None = None) -> subprocess.CompletedProcess:
+    """Run install.sh's talk-key helpers against a bindings.lua in a temporary config folder."""
+    text = INSTALL.read_text()
+    block = text[text.index("# >>> keys"):text.index("# <<< keys")]
+    hypr = tmp_path / "config/hypr"
+    hypr.mkdir(parents=True, exist_ok=True)
+    if bindings is not None:
+        (hypr / "bindings.lua").write_text(bindings)
+    env = {"PATH": "/usr/bin", "config": str(tmp_path / "config"), "share": "/opt/auren"}
+    head = 'config="$config" share="$share"\n'
+    return subprocess.run(["/usr/bin/bash", "-c", head + block + script], capture_output=True, text=True, env=env)
+
+
+def test_the_installer_adds_the_talk_keys_after_a_backup(tmp_path):
+    original = '-- my keys\no.bind("SUPER + T", "Terminal", { omarchy = "terminal" })\n'
+    assert _keys(tmp_path, "keys_bound", original).returncode == 1
+    assert _keys(tmp_path, "add_keys super").returncode == 0
+    hypr = tmp_path / "config/hypr"
+    [backup] = hypr.glob("bindings.lua.bak.*")
+    assert backup.read_text() == original
+    added = (hypr / "bindings.lua").read_text()
+    assert added.startswith(original)
+    assert 'hl.unbind("SUPER + A")' in added
+    assert 'o.bind("SUPER + A", "Auren: talk (press again to send)", "/opt/auren/bin/auren-ctl talk")' in added
+    assert 'o.bind("SUPER + SHIFT + A", "Auren: talk in a fresh conversation", "/opt/auren/bin/auren-ctl talk-fresh")' in added
+    assert _keys(tmp_path, "keys_bound").returncode == 0      # so a second run doesn't add them again
+
+
+def test_the_spare_talk_keys_leave_omarchy_s_alone(tmp_path):
+    out = _keys(tmp_path, "keys_lines alt").stdout
+    assert "unbind" not in out
+    assert '"SUPER + ALT + A"' in out and '"SUPER + CTRL + ALT + A"' in out
+
+
+@pytest.mark.parametrize(("bindings", "own"), [
+    ('o.bind("SUPER + A", "Notes", "obsidian")\n', True),
+    ('  o.bind("SUPER + SHIFT + A", "Chat", "chat")\n', True),
+    ('-- o.bind("SUPER + A", "Notes", "obsidian")\n', False),         # commented out
+    ('o.bind("SUPER + ALT + A", "Notes", "obsidian")\n', False),
+    ('hl.bind("SUPER+A", "obsidian")\n', True),
+])
+def test_the_installer_suggests_the_spare_keys_when_super_a_is_yours(tmp_path, bindings, own):
+    assert (_keys(tmp_path, "own_super_a", bindings).returncode == 0) == own
+
+
+@pytest.mark.parametrize(("line", "bound"), [
+    ('o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n', True),
+    ('hl.bind("SUPER + ALT + A", "/x/auren-ctl talk-fresh")\n', True),
+    ('bind = SUPER, A, exec, /x/auren-ctl talk\n', True),
+    ('-- o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n', False),  # commented out
+])
+def test_the_installer_knows_when_auren_is_bound(tmp_path, line, bound):
+    assert (_keys(tmp_path, "keys_bound", line).returncode == 0) == bound
+
+
+def test_a_linked_bindings_file_counts(tmp_path):
+    dots = tmp_path / "dots.lua"
+    dots.write_text('o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n')
+    hypr = tmp_path / "config/hypr"
+    hypr.mkdir(parents=True)
+    (hypr / "bindings.lua").symlink_to(dots)
+    assert _keys(tmp_path, "keys_bound").returncode == 0
