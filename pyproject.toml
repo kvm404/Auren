@@ -1,6 +1,6 @@
 [project]
 name = "auren"
-version = "0.1.4"
+version = "0.1.5"
 description = "Voice assistant for an Omarchy/Hyprland laptop"
 readme = "README.md"
 license = "MIT"
