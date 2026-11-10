@@ -231,6 +231,26 @@ def test_the_spare_talk_keys_leave_omarchy_s_alone(tmp_path):
     ('  o.bind("SUPER + SHIFT + A", "Chat", "chat")\n', True),
     ('-- o.bind("SUPER + A", "Notes", "obsidian")\n', False),         # commented out
     ('o.bind("SUPER + ALT + A", "Notes", "obsidian")\n', False),
+    ('hl.bind("SUPER+A", "obsidian")\n', True),
 ])
 def test_the_installer_suggests_the_spare_keys_when_super_a_is_yours(tmp_path, bindings, own):
     assert (_keys(tmp_path, "own_super_a", bindings).returncode == 0) == own
+
+
+@pytest.mark.parametrize(("line", "bound"), [
+    ('o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n', True),
+    ('hl.bind("SUPER + ALT + A", "/x/auren-ctl talk-fresh")\n', True),
+    ('bind = SUPER, A, exec, /x/auren-ctl talk\n', True),
+    ('-- o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n', False),  # commented out
+])
+def test_the_installer_knows_when_auren_is_bound(tmp_path, line, bound):
+    assert (_keys(tmp_path, "keys_bound", line).returncode == 0) == bound
+
+
+def test_a_linked_bindings_file_counts(tmp_path):
+    dots = tmp_path / "dots.lua"
+    dots.write_text('o.bind("SUPER + A", "Auren: talk", "/x/auren-ctl talk")\n')
+    hypr = tmp_path / "config/hypr"
+    hypr.mkdir(parents=True)
+    (hypr / "bindings.lua").symlink_to(dots)
+    assert _keys(tmp_path, "keys_bound").returncode == 0

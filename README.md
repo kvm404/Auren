@@ -42,9 +42,9 @@ git clone --branch v0.1.4 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren && ./install.sh
 ```
 
-The installer asks two questions: which keys start Auren (it adds them to
-`~/.config/hypr/bindings.lua` after a backup), and whether to set up the browser tools, so Auren can
-work in your own logged-in browser. Then:
+The installer asks two questions: whether to set up the browser tools, so Auren can work in your own
+logged-in browser, and which keys start Auren (it adds them to `~/.config/hypr/bindings.lua` after a
+backup). Then:
 
 1. Put `ASSEMBLYAI_API_KEY=your-key` in `~/.config/auren/secrets.env`.
 2. If you only use Codex, run `auren config set brain.mode codex`.

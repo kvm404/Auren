@@ -126,11 +126,17 @@ keys_lines() {
     echo "o.bind(\"SUPER + CTRL + ALT + A\", \"Auren: talk in a fresh conversation\", \"$ctl talk-fresh\")"
   fi
 }
-# keys_bound: some Hyprland config file already runs Auren's talk command
-keys_bound() { grep -rqs --include='*.lua' --include='*.conf' 'auren-ctl talk' "$config/hypr"; }
+# keys_bound: a binding (not a comment) in some Hyprland config file already runs Auren's talk command.
+# -R: dotfile managers link these files in.
+keys_bound() {
+  grep -RqsE --include='*.lua' --include='*.conf' \
+    '^[[:space:]]*(o\.bind|hl\.bind|bind[a-z]*[[:space:]]*=).*auren-ctl talk' "$config/hypr"
+}
 # own_super_a: the user bound Super+A or Super+Shift+A to something of their own (Omarchy's defaults
 # live elsewhere, so they don't count)
-own_super_a() { grep -Eqs '^[[:space:]]*o\.bind\("SUPER \+ (SHIFT \+ )?A"' "$bindings"; }
+own_super_a() {
+  grep -Eqs '^[[:space:]]*(o|hl)\.bind\([[:space:]]*"SUPER[[:space:]]*\+[[:space:]]*(SHIFT[[:space:]]*\+[[:space:]]*)?A"' "$bindings"
+}
 # add_keys <super|alt>: back up bindings.lua the way Omarchy does (bindings.lua.bak.<time>), then add
 # Auren's lines at the end. Sets keys_backup.
 add_keys() {
@@ -183,8 +189,8 @@ elif [[ $keys == ask ]]; then
   say "Talk keys"
   echo "Auren starts listening when you press its key. This adds the key to $bindings"
   echo "(after backing it up):"
-  echo "  1) Super+A, and Super+Shift+A for a fresh conversation. They replace Omarchy's Select all"
-  echo "     (Ctrl+A still works) and its ChatGPT key."
+  echo "  1) Super+A, and Super+Shift+A for a fresh conversation. They replace whatever is on those"
+  echo "     keys: on Omarchy, Select all (Ctrl+A still works) and the ChatGPT app."
   echo "  2) Super+Alt+A and Super+Ctrl+Alt+A, keeping Omarchy's keys as they are."
   echo "  3) Skip: print the lines and I'll add them myself."
   read -rp "Which keys? [$suggest] " answer || answer=3   # end of input: skip
