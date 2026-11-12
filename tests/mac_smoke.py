@@ -42,7 +42,7 @@ def mascot() -> None:
         p.kill()
         out = p.communicate()[0]
         print(out)
-        assert alive, "the mascot's host exited"
+        assert alive, f"the mascot's host exited ({p.returncode})"
         assert "couldn't load" not in out and ".qml:" not in out, out      # QML warnings name file:line
     print("mascot: ok")
 

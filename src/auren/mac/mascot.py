@@ -172,6 +172,9 @@ def main() -> int:
         @Slot(QObject)
         def pin(self, window) -> None:
             """Float above everything on every Space, full-screen apps too (Qt has no flag for it)."""
+            from PySide6.QtGui import QGuiApplication
+            if QGuiApplication.platformName() != "cocoa":     # offscreen (tests): winId isn't an NSView
+                return
             try:
                 import objc
                 from AppKit import (
