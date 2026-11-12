@@ -39,7 +39,7 @@ import time
 
 from . import notice
 from .brain import Brain, BrainError, Interrupted
-from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
+from .config import LOCK, MAC, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
 from .ears import Listening, vocabulary
 from .live import Level, describe, notice_kind
 from .profile import Profile
@@ -278,6 +278,12 @@ class Daemon:
                                "voice": self.voice_on, "safety": self.tools.level})
         if cmd == "reload":
             return self._reload()
+        if cmd == "permissions" and MAC:          # macOS asks this process, the one that needs them
+            from .mac import permissions
+            ask = permissions.status if arg.strip() == "status" else permissions.request
+            now = await asyncio.get_running_loop().run_in_executor(None, ask)
+            return json.dumps({**now, "program": permissions.program(),
+                               "talk_keys": bool(getattr(self, "_hotkeys", None))})
         if cmd == "quit":
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
@@ -299,6 +305,8 @@ class Daemon:
         if not changed:
             return "Auren picked up the new words" if vocab_changed else "no changes"
         old, self.settings = self.settings, new
+        if MAC and (new["keys.talk"], new["keys.talk_fresh"]) != (old["keys.talk"], old["keys.talk_fresh"]):
+            self._listen_for_keys()
         if new["safety"] != old["safety"]:
             self.tools.set_level(new["safety"])
         if self.voice:
@@ -674,6 +682,16 @@ class Daemon:
         with (STATE_DIR / "history.jsonl").open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def _listen_for_keys(self) -> None:
+        """macOS: the talk keys come from an event tap here (on Omarchy they are Hyprland bindings). A press
+        goes through the socket, like auren-ctl's."""
+        from .ctl import send
+        from .mac import hotkey
+        if getattr(self, "_hotkeys", None):
+            self._hotkeys.stop()
+        self._hotkeys = hotkey.start({"talk": self.settings["keys.talk"], "talk-fresh": self.settings["keys.talk_fresh"]},
+                                     lambda command: send(command, timeout=10))
+
     # --- server -------------------------------------------------------------------------------
 
     async def serve(self) -> None:
@@ -698,6 +716,8 @@ class Daemon:
         self.set_state("starting")
         asyncio.create_task(self.warm_up())
         log.info("listening on %s", SOCKET)
+        if MAC:
+            self._listen_for_keys()
         async with server:
             await server.serve_forever()
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Auren runs on Apple Silicon Macs with macOS 14 or newer, as a preview. `./install-macos.sh` installs
+  it with two launch agents (the daemon and the mascot), Control+Option+A as the talk key
+  (`keys.talk`), the robot in a floating window and its controls in the menu bar. Screen control,
+  windows, apps, the clipboard, Spotify, the browser tools and coding agents (in herdr, or a new
+  terminal window without it) use macOS's own interfaces. `auren permissions` asks for the
+  microphone, Accessibility and Screen Recording, and `auren doctor` checks them. See
+  [docs/macos.md](docs/macos.md).
+
 ## 0.1.5
 
 ### Added

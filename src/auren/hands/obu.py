@@ -36,6 +36,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -672,3 +673,7 @@ def version_of(binary: str) -> str:
         return "?"
     m = re.search(r"\d+\.\d+\.\d+", out)
     return m.group(0) if m else (out[:20] or "?")
+
+
+if sys.platform == "darwin":
+    from ..mac.obu import *  # noqa: E402, F403 - the darwin build, lsof and ps

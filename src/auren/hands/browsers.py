@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,3 +157,7 @@ def flatpak(kind: Kind) -> bool:
         return False
     path = os.path.realpath(shutil.which(cmd) or "")
     return "/flatpak/" in path
+
+
+if sys.platform == "darwin":
+    from ..mac.browsers import *  # noqa: E402, F403 - app bundles and ~/Library/Application Support

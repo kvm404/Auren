@@ -54,6 +54,12 @@ To set up the browser tools later, run `auren browser setup` or ask Auren.
 
 The [install guide](docs/install.md) covers optional extras, troubleshooting and removal.
 
+### On a Mac (preview)
+
+Auren also runs on Apple Silicon Macs with macOS 14 or newer: run `./install-macos.sh` instead, and
+press Control+Option+A to talk. [Auren on macOS](docs/macos.md) covers the permissions it needs and
+what differs from Omarchy.
+
 ## Using it
 
 | | |

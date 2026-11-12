@@ -33,7 +33,7 @@ from urllib.parse import urlencode
 import numpy as np
 import websockets
 
-from .config import CONFIG_DIR, DATA, secret
+from .config import CONFIG_DIR, DATA, MAC, secret
 from .live import loudness
 
 USER_VOCAB = CONFIG_DIR / "vocab.txt"     # the user's own words (names, projects), most important first
@@ -116,9 +116,13 @@ class Listening:
             raise RuntimeError("no AssemblyAI key (ASSEMBLYAI_API_KEY in ~/.config/auren/secrets.env)")
         self.opened_at = time.perf_counter()
         # The mic starts first so nothing said while the socket connects is lost.
-        self.mic = await asyncio.create_subprocess_exec(
-            "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        if MAC:
+            from .mac.audio import Mic
+            self.mic = Mic(RATE)
+        else:
+            self.mic = await asyncio.create_subprocess_exec(
+                "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         self._tasks.append(asyncio.create_task(self._read_mic()))
         self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(connection_params(self.vocab))}", key)))
 

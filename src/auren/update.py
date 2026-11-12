@@ -48,6 +48,7 @@ LOG = STATE_DIR / "update.log"
 NOTIFIED = STATE_DIR / "update-notified"           # the newest version a notification was sent for
 LOCK = RUNTIME_DIR / "update.lock"
 UNITS = ("auren", "auren-mascot")
+INSTALLER = "install-macos.sh" if sys.platform == "darwin" else "install.sh"
 # What the Omarchy shell loads: the bar plugin, and the mascot's QML, which the panel imports for its
 # live mascot. A change in either needs the shell restarted (it keeps what it already loaded).
 SHELL_PATHS = ("omarchy-plugin", "mascot")
@@ -306,6 +307,9 @@ def start() -> dict:
         if not got or _updating():              # a check is running (try again in a moment), or an update
             return status()
         data = _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
+        if sys.platform == "darwin":               # no systemd: a process of its own, outside Auren's launch agent
+            from .mac.update import spawn
+            return spawn(data, _write, _kept)
         env = [f"--setenv={k}" for k in PASS_ENV if k in os.environ]    # a name alone: the value from here
         cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit=auren-update-{os.getpid()}-{int(time.time())}",
                "--description=Auren update", *env, sys.executable, "-m", "auren.cli", "update", "run"]
@@ -340,6 +344,9 @@ def _step(text: str) -> None:
 
 
 def _systemctl(*args: str) -> int:
+    if sys.platform == "darwin":
+        from .mac.update import launchctl_like
+        return launchctl_like(*args)
     return subprocess.run(["systemctl", "--user", *args], capture_output=True).returncode
 
 
@@ -362,7 +369,8 @@ def _install(repo: Path, dev: bool) -> None:
     """Run install.sh, in its own process group so a timeout stops everything it started (uv, downloads)."""
     _log(f"install.sh{' --dev' if dev else ''} from {repo}")
     with LOG.open("a") as out:
-        p = subprocess.Popen(["bash", str(repo / "install.sh"), *(["--dev"] if dev else [])], cwd=repo,
+        script = INSTALLER if (repo / INSTALLER).exists() else "install.sh"
+        p = subprocess.Popen(["bash", str(repo / script), *(["--dev"] if dev else [])], cwd=repo,
                              env={**os.environ, "AUREN_UPDATE": "1"}, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         try:
@@ -423,6 +431,8 @@ def run() -> int:
 
 
 def _restart_shell() -> None:
+    if sys.platform == "darwin":
+        return                                 # the mascot (and its menu) restarted with the services
     try:
         subprocess.Popen(["omarchy", "restart", "shell"], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -443,7 +453,7 @@ def _update() -> tuple[str, bool]:
         _dev_ready(repo, target)
     elif not _has(repo, before):               # _fetch couldn't recover the installed commit for rollback
         raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
-                          "update from your checkout instead (git pull && ./install.sh)")
+                          f"update from your checkout instead (git pull && ./{INSTALLER})")
     plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
                                      *SHELL_PATHS]).returncode != 0
     _step("Waiting for Auren to finish…")
@@ -469,7 +479,7 @@ def _update() -> tuple[str, bool]:
                 _back(repo, dev, back_to)
                 _install(repo, dev)
             except UpdateError as again:
-                raise UpdateError(f"{e}. Going back failed too ({again}): run ./install.sh in "
+                raise UpdateError(f"{e}. Going back failed too ({again}): run ./{INSTALLER} in "
                                   f"{info.get('source') or 'your checkout'}") from e
             raise UpdateError(f"{e}. Auren is back on {back_to[:7]}.") from e
     except Exception as e:                     # whatever happened, Auren is started again below
@@ -481,7 +491,9 @@ def _update() -> tuple[str, bool]:
             _systemctl("disable", unit)
     stuck = [u for u, was in running.items()   # as they were; restart: their files changed
              if _systemctl("restart" if was else "stop", u) or (was and not _started(u))]
-    trouble = f" {' and '.join(stuck)} didn't start: see its log (journalctl --user -u {stuck[0]})." if stuck else ""
+    where = ("~/.local/state/auren/" + ("daemon" if stuck[0] == "auren" else "mascot") + ".out.log"
+             if sys.platform == "darwin" else f"journalctl --user -u {stuck[0]}") if stuck else ""
+    trouble = f" {' and '.join(stuck)} didn't start: see its log ({where})." if stuck else ""
     if failure:
         raise UpdateError(str(failure) + trouble) from failure
     new = _commits(repo, target, 1)[0]

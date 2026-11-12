@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import MODELS_DIR
+from .config import MAC, MODELS_DIR
 from .live import envelope
 
 LATENCY = 0.12        # pw-cat's start-up and buffering, roughly
@@ -132,9 +132,13 @@ class Voice:
         """Blocking. Returns False if it was interrupted."""
         with self._lock:
             self._stop.clear()
-            self._player = subprocess.Popen(
-                ["pw-cat", "--playback", "--raw", "--format", "f32", "--channels", "1", "--rate", str(self.rate),
-                 "--media-role", "Assistant", "-"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            if MAC:
+                from .mac.audio import Player
+                self._player = Player(self.rate)
+            else:
+                self._player = subprocess.Popen(
+                    ["pw-cat", "--playback", "--raw", "--format", "f32", "--channels", "1", "--rate", str(self.rate),
+                     "--media-role", "Assistant", "-"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
             self._timeline = []
             clock = threading.Thread(target=self._follow, daemon=True)
             clock.start()

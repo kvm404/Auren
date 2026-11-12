@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import socketserver
+import sys
 import threading
 import time
 import traceback
@@ -651,6 +652,8 @@ def start_agent(kind: str = "", folder: str = "~", name: str = "", task: str = "
     (like "lecture-notes"). The user's view switches to the new tab so they can watch (the result's
     `view` says whether they can see it; don't claim it's showing otherwise). For big jobs keep
     wait=False and tell the user it's running."""
+    if sys.platform == "darwin" and not active("herdr"):
+        return _run(desktop.start_in_terminal, kind, folder, task)
     out = _run(herdr.start_agent, kind, folder, name, task, wait, timeout_s, show=True)
     if out.startswith("error:"):
         return out
@@ -924,9 +927,22 @@ def _browser_setup(kind, was_off: bool) -> str:
 
 # --- screen control: see the screen, use the mouse and keyboard (fallback) ------------------------------
 
-RISKY_KEYS = {"alt+f4", "ctrl+q", "ctrl+w", "ctrl+shift+w", "ctrl+shift+q", "shift+delete", "super+q"}
+RISKY_KEYS = {"alt+f4", "ctrl+q", "ctrl+w", "ctrl+shift+w", "ctrl+shift+q", "shift+delete", "super+q",
+              # macOS: quit, close, close all, delete in Finder, force quit, log out, empty the Trash
+              "cmd+q", "cmd+w", "cmd+shift+w", "cmd+alt+w", "cmd+backspace", "cmd+delete", "cmd+alt+backspace",
+              "cmd+alt+delete", "cmd+alt+escape", "cmd+alt+esc", "cmd+shift+q", "cmd+alt+shift+q",
+              "cmd+shift+backspace", "cmd+shift+delete", "cmd+alt+shift+backspace", "cmd+alt+shift+delete"}
 ENTER = {"enter", "return", "kp_enter"}
-_MOD_NAMES = {"control": "ctrl", "win": "super"}
+_MOD_NAMES = {"control": "ctrl", "win": "super", "command": "cmd", "option": "alt", "opt": "alt", "meta": "cmd"}
+if sys.platform == "darwin":            # mac/screen.py presses Super and Win as Cmd
+    _MOD_NAMES |= {"super": "cmd", "win": "cmd"}
+_RISKY = {frozenset(k.split("+")) for k in RISKY_KEYS}
+
+
+def _risky(keys: str) -> bool:
+    """A combo that quits, closes or deletes, in any order of its modifiers and under any of their names."""
+    parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
+    return frozenset(_MOD_NAMES.get(p, p) for p in parts) in _RISKY
 
 
 def _enter(keys: str, terminal: bool) -> str:
@@ -1202,7 +1218,7 @@ def press_keys(keys: str) -> str:
     window = screen.key_target()            # where the keys will go (the window auren last clicked, if recent)
     if held := _held(window):
         return held
-    if keys.strip().lower().replace(" ", "") in RISKY_KEYS:
+    if _risky(keys):
         def check() -> None:
             if screen.key_target() != window:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
