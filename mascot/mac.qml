@@ -91,7 +91,7 @@ Item {
     id: win
     title: "Auren mascot"
     transientParent: null      // shown by itself: the root is an Item, not a window
-    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
+    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
            | Qt.NoDropShadowWindowHint
     color: "transparent"
     width: root.mascot.implicitWidth
@@ -222,7 +222,7 @@ Item {
     transientParent: null
     title: "Auren bubble"
     visible: win.visible && root.bubbleText !== ""
-    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
+    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
            | Qt.NoDropShadowWindowHint | (root.awaiting ? 0 : Qt.WindowTransparentForInput)
     color: "transparent"
     onVisibleChanged: if (visible) auren.pin(bubbleWin)

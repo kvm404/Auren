@@ -192,9 +192,11 @@ def main() -> int:
                                           | NSWindowCollectionBehaviorStationary
                                           | NSWindowCollectionBehaviorFullScreenAuxiliary)
                 ns.setHasShadow_(False)
-                ns.setHidesOnDeactivate_(False)     # Qt.Tool makes an NSPanel, which hides when Auren isn't active
-            except Exception:  # noqa: BLE001 - not on macOS (tests), or AppKit changed: an ordinary window then
-                pass
+                ns.setHidesOnDeactivate_(False)     # Auren is never the active app: it must not hide then
+                if window.isVisible():
+                    ns.orderFrontRegardless()      # in front even though Auren isn't the active app
+            except Exception as e:  # noqa: BLE001 - AppKit changed: an ordinary window then, said in the log
+                print(f"auren mascot: couldn't pin {window.title()}: {e!r}", file=sys.stderr, flush=True)
 
         def set_hidden(self, hidden: bool) -> None:
             self.savePlace(self._place.get("x", -1), self._place.get("y", -1), self._place.get("size", 1), hidden)
