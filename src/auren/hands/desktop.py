@@ -19,6 +19,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -487,3 +488,7 @@ def system_info(what: str) -> str:
         a = live["audio"]
         return f"volume {a['volume_percent']}%" + (" (muted)" if a["muted"] else "")
     raise DesktopError("ask for battery, memory, time, disk, network, cpu, volume or media")
+
+
+if sys.platform == "darwin":
+    from ..mac.desktop import *  # noqa: E402, F403 - the macOS versions of the functions above

@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import shutil
+import sys
 import time
 
 from . import clipboard, desktop, screen
@@ -428,6 +429,8 @@ def check_mermaid(text: str) -> str:
 # --- the clipboard -------------------------------------------------------------------------------------
 
 def _need_clipboard() -> None:
+    if sys.platform == "darwin":            # macOS has its own clipboard and key events
+        return
     missing = [c for c in ("wl-copy", "wl-paste", "wtype") if not shutil.which(c)]
     if missing:
         raise ExcalidrawError(f"drawing in Excalidraw needs {' and '.join(missing)} (install wl-clipboard and wtype)")
@@ -437,7 +440,7 @@ def _copy(data: bytes) -> None:
     try:
         clipboard.copy(data)
     except clipboard.ClipboardError:
-        raise ExcalidrawError("couldn't put the drawing on the clipboard (wl-copy failed)") from None
+        raise ExcalidrawError("couldn't put the drawing on the clipboard (copying failed)") from None
 
 
 def _copied(sentinel: str, timeout: float, old: set[str] = frozenset()) -> list[dict] | None:
@@ -447,7 +450,7 @@ def _copied(sentinel: str, timeout: float, old: set[str] = frozenset()) -> list[
     before it lands, and it must never be taken for the paste (it would be deleted when the paste is moved)."""
     end = time.monotonic() + timeout
     while True:
-        screen.press_keys("ctrl+c")
+        screen.press_keys(f"{screen.MOD}+c")
         time.sleep(0.3)
         text = clipboard.text()
         if text and text != sentinel:
@@ -555,7 +558,7 @@ def _overlap(a: tuple, b: tuple, margin: float = 40) -> bool:
 def _paste(payload: str, pt: tuple[int, int], timeout: float, old: set[str]) -> list[dict] | None:
     _copy(payload.encode())
     screen.hover(*pt)                        # Excalidraw pastes where the pointer last was
-    screen.press_keys("ctrl+v")
+    screen.press_keys(f"{screen.MOD}+v")
     time.sleep(0.4)
     return _copied(payload, timeout, old)
 
@@ -642,7 +645,7 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
     try:
         _copy(probe.encode())
         w, pt, opened = _ready(open_it=True)
-        screen.press_keys("ctrl+a")
+        screen.press_keys(f"{screen.MOD}+a")
         time.sleep(0.1)
         existing = _copied(probe, 2) or []
         screen.press_keys("Escape")
@@ -671,7 +674,7 @@ def draw(elements: list | None = None, mermaid: str = "", clear: bool = False, p
             raise ExcalidrawError("Excalidraw couldn't read that Mermaid definition: check its syntax")
         if clear:
             # only now the new drawing is known to paste: empty the canvas (it with it) and paste it again
-            screen.press_keys("ctrl+a")
+            screen.press_keys(f"{screen.MOD}+a")
             screen.press_keys("Delete")
             _drawn.clear()
             old |= {x.get("id") for x in landed}
@@ -711,7 +714,7 @@ def scene() -> list[dict]:
     try:
         _copy(probe.encode())
         _ready(open_it=False)
-        screen.press_keys("ctrl+a")
+        screen.press_keys(f"{screen.MOD}+a")
         time.sleep(0.1)
         elements = _copied(probe, 2) or []
         screen.press_keys("Escape")

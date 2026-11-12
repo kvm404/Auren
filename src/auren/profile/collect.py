@@ -20,6 +20,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -396,3 +397,13 @@ def collect(names: dict) -> dict:
             out[key] = value
         out.setdefault("_timing_ms", {})[key] = round((time.perf_counter() - start) * 1000)
     return out
+
+
+if sys.platform == "darwin":                 # the macOS collectors (mac/profile.py)
+    from ..mac import profile as _mac
+    DESKTOP_DIRS = _mac.APP_DIRS
+    STATIC = {**STATIC, "machine": _mac.machine, "defaults": _mac.defaults, "apps": _mac.apps,
+              "keybindings": _mac.keybindings, "shell": _mac.shell, "omarchy_commands": _mac.omarchy_commands,
+              "services": _mac.services, "packages": _mac.packages, "obsidian_vaults": _mac.obsidian}
+    LIVE = {"now": now, "desktop": _mac.desktop, "herdr": herdr, "audio": _mac.audio, "media": _mac.media,
+            "power": _mac.power, "memory": _mac.memory}

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,13 @@ def _installed(name: str) -> tuple[bool, str]:
             return False, "no browser has Open Browser Use and its extension yet (auren browser setup)"
         return True, ""
     if name == "screen":
+        if sys.platform == "darwin":
+            from .mac.windows import trusted
+            try:
+                ok = trusted()
+            except Exception:  # noqa: BLE001 - pyobjc missing
+                ok = False
+            return (True, "") if ok else (False, "Auren isn't allowed under Privacy & Security → Accessibility")
         return (True, "") if os.access("/dev/uinput", os.W_OK) else (False, "/dev/uinput isn't writable")
     raise KeyError(name)
 
@@ -99,7 +107,10 @@ def _can_set_up(name: str) -> bool:
 
 def hidden_tools() -> set[str]:
     """Tools of integrations that are off or missing: the brain isn't offered them."""
-    return {t for n, i in INTEGRATIONS.items() if not offered(n) for t in i.tools}
+    hidden = {t for n, i in INTEGRATIONS.items() if not offered(n) for t in i.tools}
+    if sys.platform == "darwin":
+        hidden.discard("start_agent")       # without herdr it opens the agent in a terminal window
+    return hidden
 
 
 # --- coding agents ------------------------------------------------------------------------------

@@ -29,3 +29,15 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
       - run: python3 tests/test_mascot_bubble.py
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - run: bash -n install-macos.sh
+      - run: uv run pytest -q tests/test_mac.py
+      - run: uv run python tests/mac_smoke.py

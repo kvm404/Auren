@@ -12,6 +12,7 @@ Excalidraw (drawings go in and out as clipboard JSON).
 from __future__ import annotations
 
 import subprocess
+import sys
 
 TEXT = "text/plain;charset=utf-8"
 _TEXT = (TEXT, "text/plain", "UTF8_STRING")
@@ -77,3 +78,7 @@ def restore(saved: tuple[str, bytes] | None, ours: bytes | None = None) -> None:
             copy(data, None if kind in _TEXT or kind.startswith("text/plain") else kind, sensitive=False)
     except (OSError, subprocess.SubprocessError, ClipboardError):
         pass
+
+
+if sys.platform == "darwin":
+    from ..mac.clipboard import *  # noqa: E402, F403 - the macOS pasteboard

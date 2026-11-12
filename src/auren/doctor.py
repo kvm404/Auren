@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,6 +117,9 @@ def talk_keys(binds: list[dict]) -> list[Check]:
 
 
 def checks() -> list[Check]:
+    if sys.platform == "darwin":
+        from .mac.doctor import checks as mac_checks
+        return mac_checks()
     out: list[Check] = []
     svc = service_path()
     if svc is None:
@@ -150,6 +154,41 @@ def checks() -> list[Check]:
     name = next((ln.split("=", 1)[1].strip().strip('"') for ln in mic.splitlines() if "node.description" in ln), "")
     out.append(Check(g, "microphone", OK, name or "default source") if code == 0 else
                Check(g, "microphone", FAIL, "no default microphone", "pick one in Omarchy's audio settings"))
+    out += _shared(svc)
+
+    # --- install ----------------------------------------------------------------------------------
+    g = "Install"
+    ctl = DATA_HOME / "bin/auren-ctl"
+    out.append(Check(g, "auren-ctl", OK, str(ctl)) if os.access(ctl, os.X_OK) else
+               Check(g, "auren-ctl", FAIL, f"{ctl} missing", "./install.sh"))
+    code, raw = _run(["hyprctl", "binds", "-j"])
+    try:
+        binds = json.loads(raw) if code == 0 else None
+    except json.JSONDecodeError:
+        binds = None
+    if isinstance(binds, list):          # no Hyprland: the Desktop group already says so
+        out += talk_keys(binds)
+    units = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
+    for unit in ("auren", "auren-mascot"):
+        f = units / f"{unit}.service"
+        if not f.exists():
+            out.append(Check(g, unit, FAIL, "service not installed", "./install.sh"))
+            continue
+        exe = next((ln.split("=", 1)[1].split()[0] for ln in f.read_text().splitlines() if ln.startswith("ExecStart=")), "")
+        state = _run(["systemctl", "--user", "is-active", unit])[1] or "unknown"
+        if exe and not os.access(exe, os.X_OK):
+            out.append(Check(g, unit, FAIL, f"its program {exe} is missing", "./install.sh"))
+        else:
+            out.append(Check(g, unit, OK if state == "active" else WARN, state,
+                             "" if state == "active" else f"systemctl --user start {unit}"))
+    return out
+
+
+def _shared(svc: str | None, mac: bool = False) -> list[Check]:
+    """The checks that are the same on Omarchy and macOS: the speech key, the voice, the brains, the
+    optional integrations."""
+    out: list[Check] = []
+    g = "Audio"
     has_key = bool(secret("ASSEMBLYAI_API_KEY"))
     out.append(Check(g, "speech-to-text key", OK, "AssemblyAI") if has_key else
                Check(g, "speech-to-text key", FAIL, "no AssemblyAI key",
@@ -178,8 +217,11 @@ def checks() -> list[Check]:
     g = "Optional"
     fixes = {"herdr": "https://herdr.dev, or turn it off: auren config set integrations.herdr false",
              "browser": "auren browser setup, or turn it off: auren config set integrations.browser false",
-             "screen": "add a udev rule giving your user access to /dev/uinput (see README)"}
+             "screen": ("auren permissions, then turn Auren on under Privacy & Security → Accessibility" if mac
+                        else "add a udev rule giving your user access to /dev/uinput (see README)")}
     for name, i in integrations.INTEGRATIONS.items():
+        if mac and name == "screen":        # its Accessibility check runs here, in the terminal: the Permissions
+            continue                        # section has the daemon's own
         st, why = integrations.state(name)
         if st == "off":
             out.append(Check(g, i.what, OK, "turned off"))
@@ -189,12 +231,13 @@ def checks() -> list[Check]:
                     else "its tools are left out")
             out.append(Check(g, i.what, FAIL if wanted else WARN, f"{why}: {left}", fixes[name]))
         elif name == "herdr" and _run(["herdr", "workspace", "list"])[0] != 0:
-            out.append(Check(g, i.what, WARN, "installed but not running", "open it: omarchy-launch-terminal herdr"))
+            out.append(Check(g, i.what, WARN, "installed but not running",
+                             "open it: run herdr in a terminal" if mac else "open it: omarchy-launch-terminal herdr"))
         elif name == "browser":
             target = obu.choose()
             binary = obu.cli() or ""
             if binary != str(obu.own_binary()) and svc is not None and not shutil.which(Path(binary).name, path=svc):
-                out.append(Check(g, i.what, WARN, f"{binary} isn't in the PATH systemd services get",
+                out.append(Check(g, i.what, WARN, f"{binary} isn't in the PATH Auren's services get",
                                  "auren browser setup (installs Auren's own copy)"))
             else:
                 out.append(Check(g, i.what, OK, target.label() + (" (connected)" if target.conn else
@@ -210,31 +253,6 @@ def checks() -> list[Check]:
                      ", ".join(str(f).replace(str(Path.home()), "~") for f in folders) or "none found",
                      "" if folders else 'auren config set projects.folders "~/where/they/are"'))
 
-    # --- install ----------------------------------------------------------------------------------
-    g = "Install"
-    ctl = DATA_HOME / "bin/auren-ctl"
-    out.append(Check(g, "auren-ctl", OK, str(ctl)) if os.access(ctl, os.X_OK) else
-               Check(g, "auren-ctl", FAIL, f"{ctl} missing", "./install.sh"))
-    code, raw = _run(["hyprctl", "binds", "-j"])
-    try:
-        binds = json.loads(raw) if code == 0 else None
-    except json.JSONDecodeError:
-        binds = None
-    if isinstance(binds, list):          # no Hyprland: the Desktop group already says so
-        out += talk_keys(binds)
-    units = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
-    for unit in ("auren", "auren-mascot"):
-        f = units / f"{unit}.service"
-        if not f.exists():
-            out.append(Check(g, unit, FAIL, "service not installed", "./install.sh"))
-            continue
-        exe = next((ln.split("=", 1)[1].split()[0] for ln in f.read_text().splitlines() if ln.startswith("ExecStart=")), "")
-        state = _run(["systemctl", "--user", "is-active", unit])[1] or "unknown"
-        if exe and not os.access(exe, os.X_OK):
-            out.append(Check(g, unit, FAIL, f"its program {exe} is missing", "./install.sh"))
-        else:
-            out.append(Check(g, unit, OK if state == "active" else WARN, state,
-                             "" if state == "active" else f"systemctl --user start {unit}"))
     return out
 
 

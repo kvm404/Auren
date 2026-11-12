@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import quote
@@ -207,3 +208,7 @@ def act(action: str, query: str = "") -> str:
         open_uri(query)
         return f"opened {query} in Spotify"
     raise SpotifyError("action must be play, search, now_playing or open")
+
+
+if sys.platform == "darwin":
+    from ..mac.spotify import *  # noqa: E402, F403 - AppleScript instead of MPRIS

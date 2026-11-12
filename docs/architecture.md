@@ -6,8 +6,11 @@ design was agreed on 2026-10-12; release preparation is tracked through pull req
 
 ## Scope
 
-- **Target: Omarchy only** (Hyprland, Wayland, PipeWire, the `omarchy-*` commands, the Omarchy shell).
+- **Target: Omarchy** (Hyprland, Wayland, PipeWire, the `omarchy-*` commands, the Omarchy shell).
   Relying on Omarchy is a feature: Auren behaves like the desktop already does.
+- **macOS preview** (Apple Silicon, macOS 14+). The Mac code lives in `src/auren/mac/`: a Linux module
+  that differs ends with `if sys.platform == "darwin": from ..mac.<name> import *`, and the Mac module's
+  `__all__` names exactly what it replaces. Everything else is shared. See [macos.md](macos.md).
 - **Kept as is:** the pipeline (daemon: ears → brain → voice), tools over MCP, the mascot and bar
   plugin reading the state file, Python + uv, Quickshell. The folder layout stays; files are
   restructured when they are touched.
