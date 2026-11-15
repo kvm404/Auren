@@ -179,9 +179,10 @@ def show_herdr(w: dict | None = None) -> bool:
     return True
 
 
-def start_in_terminal(kind: str, folder: str, task: str = "") -> str:
-    """Without herdr: start a coding agent in a new terminal window, with its first task."""
-    from ..hands.herdr import KINDS
+def start_in_terminal(kind: str, folder: str, task: str = "", model: str = "", effort: str = "") -> str:
+    """Without herdr: start a coding agent in a new terminal window, with its first task (and the model and
+    effort asked for), in a folder it trusts already."""
+    from ..hands.herdr import KINDS, HerdrError, agent_flags, trust_folder
     from ..integrations import AGENT_COMMANDS, agent_installed, default_agent
     asked = (kind or default_agent()).strip().lower()
     kind = KINDS.get(asked)                 # only coding agents: never just any command that's installed
@@ -193,8 +194,14 @@ def start_in_terminal(kind: str, folder: str, task: str = "") -> str:
     path = Path(folder).expanduser()
     if not path.is_dir():
         raise DesktopError(f"{path} isn't a folder")
-    app = terminal_run(command + (f" {shlex.quote(task)}" if task else ""), path, title=kind)
-    return json.dumps({"started": kind, "folder": str(path), "where": f"a new {app} window",
+    try:
+        flags, chosen = agent_flags(kind, model, effort)
+    except HerdrError as e:
+        raise DesktopError(str(e)) from None
+    trust_folder(kind, str(path))
+    line = shlex.join([command, *flags, *([task] if task else [])])
+    app = terminal_run(line, path, title=kind)
+    return json.dumps({"started": kind, **chosen, "folder": str(path), "where": f"a new {app} window",
                        "note": "herdr isn't installed, so Auren can't read or prompt this agent later: the user "
                                "follows it in that window"})
 

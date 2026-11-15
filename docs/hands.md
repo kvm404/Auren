@@ -30,11 +30,31 @@ The tools the brain uses to act. Each group is a Python module in `src/auren/han
 | `list_agents()` | Every running agent: kind, status (idle, working, blocked, done), folder, workspace and tab; Auren's own marked |
 | `read_agent(agent, hint)` | The agent pane's recent output |
 | `prompt_agent(agent, text, hint, wait)` | Send a prompt, after switching the user's view to the agent (see below). With `wait`, return the agent's reply (the text after the echoed prompt, minus the TUI footer) once it settles |
-| `start_agent(kind, folder, name, task, wait)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab once the agent is running |
+| `start_agent(kind, folder, name, task, wait, model, effort)` | New tab in `auren`, start the agent there, optionally give it a first task. The user's view switches to the new tab once the agent is running. `model` and `effort` are taken as said (see below) |
 | `run_command(command, folder, name, wait)` | New tab in `auren`, run a shell command; the exit code comes from a split marker (`echo "AUREN""_EXIT=$?"`), so the typed command never matches it |
 | `job_status(job, wait_s)` | Wait for a command job to finish; exit code and output |
 | `close_job(job)` | Close one of Auren's own tabs |
 | `show_agent(agent, hint)` | Switch herdr's view to that pane and bring herdr's window up |
+
+**Model, effort and folder trust** (`herdr.agent_flags`, `herdr.trust_folder`). A model or effort the
+user names goes on the agent's command line: Claude Code gets `--model` and `--effort` (low, medium,
+high, xhigh, max), Codex gets `--model` and `-c model_reasoning_effort=…` (minimal to xhigh; "max"
+means xhigh). Spoken names are turned into what the CLI takes: "Opus 5.5" becomes `claude-opus-5-5`,
+"sonnet" stays the alias for the latest, "GPT 6.1 Sol" becomes `gpt-6.1-sol`, and "extra high"
+becomes `xhigh`. Gemini and Antigravity (`agy`) take a model but no effort. OpenCode's TUI has no `--model`, so it takes neither. An agent or level that can't take
+what was asked is an error before any tab opens, so the agent never starts with something else
+quietly. The result says what it was started with.
+
+Claude Code and Codex ask whether to trust a folder the first time they run in it, and herdr counts
+the agent as ready while it asks, so the task used to land in that question. Auren marks the folder
+trusted first, the way answering yes does: `projects[folder].hasTrustDialogAccepted` in
+`~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), and a `[projects."folder"]
+trust_level = "trusted"` entry in `~/.codex/config.toml` (or `$CODEX_HOME`). A folder Codex already
+has an entry for, trusted or not, is left alone, and a config that can't be read isn't written. If
+the question shows anyway, Auren moves to the "Yes" option and presses Enter. It doesn't press Enter
+alone, because Claude Code highlights "No, exit" first. Choices it can't read are reported for the
+user to answer. Trusting a folder lets its project settings, hooks and MCP servers run, so this only
+happens for folders Auren starts an agent in at the user's request.
 
 **Watching agents work.** Giving an agent a task (`start_agent`, `prompt_agent`) brings it in front of the
 user: herdr's view switches to the agent's tab (`herdr tab focus` / `herdr agent focus`) and

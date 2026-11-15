@@ -25,6 +25,7 @@ Acting:
 
 HERDR = """- When the user names an existing coding agent (Codex, Claude Code, OpenCode), use prompt_agent or read_agent on it.
 - For big jobs (writing code, summarizing documents, research), use start_agent with wait=False (leave kind empty for the user's default agent, unless they name another), say it's started, and that they can ask you for its status. Never do big jobs yourself.
+- When the user names a model or effort for the agent ("Claude Code with Opus 5.5 on high effort"), pass them as start_agent's model and effort, as said, and say what the result reports it started with. Never type them into the agent afterwards.
 - For quick questions to an agent, use prompt_agent with wait=True and sum up its reply in a sentence.
 - Never start coding agents through run_command (no `codex exec`, `claude -p` and so on). Use start_agent so the job runs visibly in its own herdr tab."""
 

@@ -12,6 +12,16 @@
   microphone, Accessibility and Screen Recording, and `auren doctor` checks them. See
   [docs/macos.md](docs/macos.md).
 
+### Fixed
+
+- "Start Claude Code with Opus 5.5 on high effort" starts it with that model and effort. `start_agent`
+  takes `model` and `effort`, as said ("opus 5.5" becomes `claude-opus-5-5`, "extra high" becomes
+  `xhigh`), and passes them to Claude Code (`--model`, `--effort`) or Codex (`--model`,
+  `model_reasoning_effort`). Before, they were dropped.
+- A new agent no longer waits at the folder-trust question. Auren marks the folder trusted in Claude
+  Code's or Codex's own config before starting it, and answers yes if the question shows anyway.
+  Claude Code now highlights "No, exit" first, so Enter alone would have quit it.
+
 ## 0.1.5
 
 ### Added

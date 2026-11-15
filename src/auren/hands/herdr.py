@@ -21,7 +21,9 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -247,6 +249,180 @@ def _wait_for_shell(pane_id: str, timeout: float = 10) -> None:
         time.sleep(0.2)
 
 
+# --- launching an agent: model, effort, folder trust ------------------------------------
+
+# Effort words as spoken -> each CLI's levels.
+_EFFORT_WORDS = {"min": "minimal", "minimum": "minimal", "minimal": "minimal", "low": "low", "med": "medium",
+                 "medium": "medium", "normal": "medium", "high": "high", "x high": "xhigh", "x-high": "xhigh",
+                 "xhigh": "xhigh", "extra high": "xhigh", "very high": "xhigh", "max": "max", "maximum": "max",
+                 "highest": "max"}
+EFFORTS = {"claude": ("low", "medium", "high", "xhigh", "max"),
+           "codex": ("minimal", "low", "medium", "high", "xhigh")}
+_CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+
+
+def _effort(kind: str, effort: str) -> str:
+    said = " ".join(effort.lower().replace("effort", "").split())
+    level = _EFFORT_WORDS.get(said, said)
+    levels = EFFORTS[kind]
+    if kind == "claude" and level == "minimal":
+        level = "low"
+    if kind == "codex" and level == "max":
+        level = "xhigh"             # Codex's highest
+    if level not in levels:
+        raise HerdrError("bad_effort", f"{kind} takes effort {', '.join(levels)}, not {effort!r}")
+    return level
+
+
+def claude_model(model: str) -> str:
+    """A Claude model as said -> what `claude --model` takes: "Opus 5.5" -> claude-opus-5-5, "sonnet" ->
+    sonnet (the latest), a full id as is."""
+    m = model.strip().lower()
+    if m.startswith("claude-") or "/" in m:
+        return m.replace(" ", "")
+    words = re.sub(r"\bclaude\b", " ", m).replace("point", ".").strip()
+    hit = re.fullmatch(rf"({'|'.join(_CLAUDE_FAMILIES)})\s*-?\s*(\d+)(?:\s*[.\- ]\s*(\d+))?(\[1m\])?", words)
+    if hit:
+        family, major, minor, ctx = hit.groups()
+        return f"claude-{family}-{major}" + (f"-{minor}" if minor else "") + (ctx or "")
+    return re.sub(r"\s+", "-", words)
+
+
+def codex_model(model: str) -> str:
+    """A Codex model as said -> its slug: "GPT 6.1 Sol" -> gpt-6.1-sol."""
+    m = " ".join(model.strip().lower().replace(" point ", ".").split())
+    m = re.sub(r"\bgpt\s*-?\s*(?=\d)", "gpt-", m)
+    return re.sub(r"\s*-?\s+", "-", m)
+
+
+def agent_flags(kind: str, model: str = "", effort: str = "") -> tuple[list[str], dict]:
+    """Command-line flags that start `kind` with that model and effort, and what they set."""
+    model, effort = model.strip(), effort.strip()
+    args: list[str] = []
+    chosen: dict = {}
+    if kind == "claude":
+        if model:
+            chosen["model"] = claude_model(model)
+            args += ["--model", chosen["model"]]
+        if effort:
+            chosen["effort"] = _effort(kind, effort)
+            args += ["--effort", chosen["effort"]]
+    elif kind == "codex":
+        if model:
+            chosen["model"] = codex_model(model)
+            args += ["--model", chosen["model"]]
+        if effort:
+            chosen["effort"] = _effort(kind, effort)
+            args += ["-c", f"model_reasoning_effort={chosen['effort']}"]
+    else:
+        if effort:
+            raise HerdrError("no_effort", f"Auren can't set the effort of {kind}; only Claude Code's and Codex's")
+        if model:
+            if kind not in ("gemini", "agy"):      # OpenCode's TUI has no --model, so it would fail to start
+                raise HerdrError("no_model", f"Auren can't pick the model of {kind} when starting it; only Claude "
+                                             "Code's, Codex's, Gemini's and Antigravity's (agy)")
+            chosen["model"] = model.replace(" ", "-")
+            args += ["--model", chosen["model"]]
+    return args, chosen
+
+
+def _claude_config() -> Path:
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(d) / ".claude.json" if d else Path.home() / ".claude.json"
+
+
+def _codex_config() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def trust_folder(kind: str, cwd: str) -> bool:
+    """Mark `cwd` trusted in the agent's own config, the way answering "Yes, I trust this folder" does,
+    so it starts without asking. Only Claude Code and Codex ask. True if something was written."""
+    if kind == "claude":
+        path = _claude_config()
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            return False                        # never overwrite a config we can't read
+        project = data.setdefault("projects", {}).setdefault(cwd, {})
+        if project.get("hasTrustDialogAccepted"):
+            return False
+        project["hasTrustDialogAccepted"] = True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False))
+        return True
+    if kind == "codex":
+        path = _codex_config()
+        try:
+            text = path.read_text() if path.exists() else ""
+            projects = tomllib.loads(text).get("projects", {})
+        except (OSError, tomllib.TOMLDecodeError):
+            return False
+        if cwd in projects:                     # trusted already, or the user said no: theirs to keep
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        _write_atomic(path, f'{text}{sep}[projects.{json.dumps(cwd)}]\ntrust_level = "trusted"\n')
+        return True
+    return False
+
+
+# The folder-trust question Claude Code and Codex ask on their first start in a folder.
+_TRUST_PROMPT = re.compile(r"trust (this|the) (folder|files|contents|directory)|Do you trust|Quick safety check", re.I)
+_OPTION = re.compile(r"^\s*([❯›>])?\s*(?:\d+\.\s*)?(Yes|No)\b", re.I)
+
+
+def _trust_keys(text: str) -> list[str] | None:
+    """The keys that answer yes to a trust question on screen: arrows from the highlighted option to the
+    "Yes" one, then Enter. [] if there's no question; None if it can't be read (no guessing: Enter on
+    the wrong option quits the agent, and Claude Code highlights "No, exit" first)."""
+    lines = text.splitlines()[-30:]
+    if not _TRUST_PROMPT.search("\n".join(lines)):
+        return []
+    options = [m for m in map(_OPTION.match, lines) if m]
+    cursor = next((i for i, m in enumerate(options) if m.group(1)), None)
+    yes = next((i for i, m in enumerate(options) if m.group(2).lower() == "yes"), None)
+    if cursor is None or yes is None:
+        return None
+    step = "down" if yes > cursor else "up"
+    return [step] * abs(yes - cursor) + ["enter"]
+
+
+def _accept_trust_prompt(pane_id: str) -> bool:
+    """If the agent is asking whether to trust its folder, answer yes. True if it was asked."""
+    for _ in range(2):
+        try:
+            keys = _trust_keys(screen(pane_id, 40))
+        except HerdrError:
+            return False
+        if keys == []:
+            return False
+        if keys is None:
+            raise HerdrError("trust_prompt", "the agent is asking whether to trust its folder and Auren couldn't "
+                                             "read the choices; the user has to answer it in herdr")
+        herdr("pane", "send-keys", pane_id, *keys)
+        time.sleep(1.5)
+        try:
+            if _trust_keys(screen(pane_id, 40)) == []:
+                return True
+        except HerdrError:
+            return True
+    raise HerdrError("trust_prompt", "the agent still asks whether to trust its folder; the user has to answer it in herdr")
+
+
 # --- tools ---------------------------------------------------------------------------
 
 def list_agents() -> str:
@@ -296,10 +472,12 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
 
 def start_agent(kind: str = "", cwd: str = "~", name: str = "", task: str = "",
                 wait: bool = False, timeout_s: int = 1800, agent_args: list[str] | None = None,
-                show: bool = False) -> dict:
+                show: bool = False, model: str = "", effort: str = "") -> dict:
     """Start a new agent in its own tab of the auren workspace, optionally with a first task. show:
     switch the user's view to the new tab once the agent runs (not before: keys the user is still
-    typing would land in the tab's shell). kind: empty for the user's default agent."""
+    typing would land in the tab's shell). kind: empty for the user's default agent. model, effort:
+    as the user said them ("opus 5.5", "high"); empty for the agent's own default. The folder is
+    trusted first, so the agent doesn't stop to ask."""
     if not kind.strip():
         from ..integrations import default_agent
         kind = default_agent()
@@ -307,17 +485,28 @@ def start_agent(kind: str = "", cwd: str = "~", name: str = "", task: str = "",
     cwd = str(Path(os.path.expanduser(cwd)).resolve())
     if not Path(cwd).is_dir():
         raise HerdrError("bad_cwd", f"folder does not exist: {cwd}")
+    flags, chosen = agent_flags(kind, model, effort)       # a model or effort it can't take fails before a tab opens
     taken = {a.name for a in agents() if a.name} | {j.name for j in jobs()}
     name = _slug(name or _task_name(task) or Path(cwd).name or kind, taken)
+    try:
+        trust_folder(kind, cwd)
+    except OSError:
+        pass                                   # it asks instead; answered below
     tab_id, pane_id = _new_tab(name, cwd)
     all_jobs = _load_jobs()
     all_jobs[name] = Job(name=name, tab_id=tab_id, pane_id=pane_id, cwd=cwd, kind=kind, task=task)
     _save_jobs(all_jobs)
     _wait_for_shell(pane_id)
-    herdr("agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", "60000",
-          *(["--", *agent_args] if agent_args else []), timeout=90)
+    args = [*flags, *(agent_args or [])]
+    try:
+        herdr("agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", "60000",
+              *(["--", *args] if args else []), timeout=90)
+    except HerdrError:
+        if not _accept_trust_prompt(pane_id):  # stuck at the trust question: answer it and go on
+            raise
+    _accept_trust_prompt(pane_id)
     view = _show("tab", "focus", tab_id) if show else ""
-    out = {"job": name, "kind": kind, "cwd": cwd, "tab": tab_id, "pane": pane_id, "status": "started"}
+    out = {"job": name, "kind": kind, "cwd": cwd, "tab": tab_id, "pane": pane_id, "status": "started", **chosen}
     if view:
         out["view"] = view
     if task:

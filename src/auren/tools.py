@@ -646,15 +646,17 @@ def prompt_agent(agent: str, text: str, hint: str = "", wait: bool = True, timeo
 
 @tool()
 def start_agent(kind: str = "", folder: str = "~", name: str = "", task: str = "",
-                wait: bool = False, timeout_s: int = 180) -> str:
+                wait: bool = False, timeout_s: int = 180, model: str = "", effort: str = "") -> str:
     """Start a new coding agent (leave kind empty for the user's default agent, or name one: claude, codex,
     opencode, agy, grok...) in its own tab of auren's herdr workspace, in a folder, optionally with a first task. name: a short job name for the task
-    (like "lecture-notes"). The user's view switches to the new tab so they can watch (the result's
+    (like "lecture-notes"). model and effort: only when the user names them, as they said them (model
+    "opus 5.5", "sonnet", "gpt 6.1 sol"; effort low, medium, high, xhigh, max); the result says what the
+    agent was started with. The folder is trusted for the agent, so it starts without asking. The user's view switches to the new tab so they can watch (the result's
     `view` says whether they can see it; don't claim it's showing otherwise). For big jobs keep
     wait=False and tell the user it's running."""
     if sys.platform == "darwin" and not active("herdr"):
-        return _run(desktop.start_in_terminal, kind, folder, task)
-    out = _run(herdr.start_agent, kind, folder, name, task, wait, timeout_s, show=True)
+        return _run(desktop.start_in_terminal, kind, folder, task, model, effort)
+    out = _run(herdr.start_agent, kind, folder, name, task, wait, timeout_s, show=True, model=model, effort=effort)
     if out.startswith("error:"):
         return out
     d = json.loads(out)
