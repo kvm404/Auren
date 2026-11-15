@@ -3,6 +3,7 @@
     com.auren.daemon   `auren daemon`   ~/Library/LaunchAgents/com.auren.daemon.plist
     com.auren.mascot   `auren mascot`   ~/Library/LaunchAgents/com.auren.mascot.plist
 
+Both run through Auren.app when it's installed (mac/app.py), so macOS gives the permissions to Auren.
 Both start at login and are started again if they crash (KeepAlive on a failed exit). `stop` unloads one
 until it's started again or the next login; `auren-ctl quit` and the menu's Quit end the daemon cleanly.
 
@@ -20,6 +21,7 @@ import time
 from pathlib import Path
 
 from ..config import DATA_HOME, STATE_DIR
+from . import app
 
 AGENTS_DIR = Path.home() / "Library/LaunchAgents"
 LABELS = {"daemon": "com.auren.daemon", "mascot": "com.auren.mascot"}
@@ -50,12 +52,14 @@ def plist(name: str, path: str | None = None) -> dict:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "Label": LABELS[name],
-        "ProgramArguments": [str(DATA_HOME / "venv/bin/auren"), name],
+        # Through Auren.app when it's there, so the permissions are Auren's (mac/app.py)
+        "ProgramArguments": [str(app.executable()), name] if app.installed() else [str(DATA_HOME / "venv/bin/auren"), name],
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 10,
         "ProcessType": "Interactive",          # the mic and the voice want low latency
         "EnvironmentVariables": {"PATH": ":".join(seen), "PYTHONUNBUFFERED": "1",
+                                 "AUREN_PYTHON": str(DATA_HOME / "venv/bin/python"),
                                  **({"LANG": os.environ["LANG"]} if os.environ.get("LANG") else {"LANG": "en_US.UTF-8"})},
         "StandardOutPath": str(STATE_DIR / f"{name}.out.log"),
         "StandardErrorPath": str(STATE_DIR / f"{name}.out.log"),

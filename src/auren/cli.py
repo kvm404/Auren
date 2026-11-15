@@ -10,6 +10,8 @@
   auren ask "open whatsapp"   # one request
 
 macOS only:
+  auren open                  # start Auren and show its setup window (what opening Auren.app does)
+  auren app install|uninstall # Auren.app in ~/Applications (install-macos.sh builds it)
   auren mascot                # the mascot and the menu bar icon (the com.auren.mascot launch agent runs this)
   auren service install|start|stop|restart|status   # the launch agents (install.sh sets them up)
   auren permissions           # ask for the Microphone, Accessibility and Screen Recording permissions
@@ -67,6 +69,27 @@ def _permissions() -> int:
     return 0
 
 
+def _app(args: list[str]) -> int:
+    from .mac import app
+    what = args[0] if args else "status"
+    if what == "install":
+        try:
+            built = app.install(force="--force" in args)
+        except app.AppError as e:
+            print(f"auren app: {e}", file=sys.stderr)
+            return 1
+        print(f"{'built' if built else 'up to date:'} {app.APP}")
+        return 0
+    if what == "uninstall":
+        app.uninstall()
+        return 0
+    if what == "status":
+        print(f"{app.APP}: " + ("up to date" if app.current() else "out of date" if app.installed() else "not installed"))
+        return 0
+    print("auren app install [--force]|uninstall|status")
+    return 2
+
+
 def _service(args: list[str]) -> int:
     from .mac import service
     what = args[0] if args else "status"
@@ -103,6 +126,8 @@ def main() -> None:
     sub.add_parser("update").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("browser", add_help=False).add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("mascot")
+    sub.add_parser("open")
+    sub.add_parser("app").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("permissions")
     sub.add_parser("service").add_argument("args", nargs=argparse.REMAINDER)
     dmn = sub.add_parser("daemon")
@@ -118,7 +143,7 @@ def main() -> None:
     if a.cmd == "daemon":
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
-    if a.cmd in ("mascot", "permissions", "service"):
+    if a.cmd in ("mascot", "permissions", "service", "open", "app"):
         if sys.platform != "darwin":
             print(f"auren {a.cmd} is for macOS; on Omarchy the mascot, permissions and services are set up by install.sh")
             return 2
@@ -127,6 +152,11 @@ def main() -> None:
             return mascot_main()
         if a.cmd == "permissions":
             return _permissions()
+        if a.cmd == "open":
+            from .mac.app import open_app
+            return open_app()
+        if a.cmd == "app":
+            return _app(a.args)
         return _service(a.args)
     if a.cmd == "doctor":
         from .doctor import main as doctor_main

@@ -53,9 +53,29 @@ def status() -> dict[str, bool | str]:
 
 
 def program() -> str:
-    """The program macOS asks about: this Python, as Settings lists it."""
+    """The program macOS asks about, as Settings lists it: Auren.app when Auren runs through it, else Python."""
     import os
-    return os.path.realpath(sys.executable)
+    return os.environ.get("AUREN_APP") or os.path.realpath(sys.executable)
+
+
+def request_one(name: str) -> dict[str, bool | str]:
+    """Ask for one permission: macOS shows its prompt, which also adds Auren to that Settings list, so the
+    user only has to turn it on. Then open the Settings page if it's still missing."""
+    if name == "microphone":
+        if microphone() == "not asked":
+            try:
+                from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+                AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda granted: None)
+            except Exception:  # noqa: BLE001
+                pass
+        elif microphone() != "granted":
+            subprocess.Popen(["open", PANES["microphone"]])
+    elif name == "accessibility" and not accessibility(prompt=True):
+        subprocess.Popen(["open", PANES["accessibility"]])
+    elif name == "screen" and not screen_recording():
+        screen_recording(prompt=True)
+        subprocess.Popen(["open", PANES["screen"]])
+    return status()
 
 
 def request() -> dict[str, bool | str]:

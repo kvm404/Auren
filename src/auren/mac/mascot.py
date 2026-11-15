@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from ..config import CONFIG_DIR, DATA_HOME, RUNTIME_DIR, STATE_DIR, STATE_FILE
@@ -61,17 +62,25 @@ def run_ctl(command: str) -> None:
 
 
 def main() -> int:
-    from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
+    from PySide6.QtCore import Property, QMetaObject, QObject, Qt, QTimer, QUrl, Signal, Slot
     from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
     from .. import settings as auren_settings
     from . import service
+    from . import setup as auren_setup
+    from .app import SETUP_REQUEST
+
+    def background(fn, *args) -> None:
+        """launchctl and the daemon's socket can take seconds: never on the window's thread."""
+        threading.Thread(target=fn, args=args, daemon=True).start()
 
     class Bridge(QObject):
         changed = Signal()
         levelChanged = Signal()
+        setupChanged = Signal()
+        checked = Signal("QVariant")        # from the checking thread to this one
 
         def __init__(self):
             super().__init__()
@@ -82,6 +91,13 @@ def main() -> int:
             self._prefs = dict(PREF_DEFAULTS)
             self._place = {"x": -1, "y": -1, "size": 1, "hidden": False}
             self._key = "⌃⌥A"
+            self._setup_open = False
+            self._setup: dict = {"running": True, "microphone": "unknown", "accessibility": False, "screen": False,
+                                 "talkKeys": False, "key": False, "claude": False, "codex": False, "brain": "auto",
+                                 "brainReady": False, "ready": False, "restart": False}
+            self._checking = False
+            self._first_check = True
+            self.checked.connect(self._take_check)
             self.reload_files()
 
         def reload_files(self) -> None:
@@ -94,6 +110,9 @@ def main() -> int:
             self.changed.emit()
 
         def poll_state(self) -> None:
+            if SETUP_REQUEST.exists():           # Auren.app was opened (auren open)
+                SETUP_REQUEST.unlink(missing_ok=True)
+                self.openSetup()
             try:
                 raw = STATE_FILE.read_text()
             except OSError:
@@ -167,7 +186,7 @@ def main() -> int:
 
         @Slot()
         def startDaemon(self) -> None:
-            service.start("daemon")
+            background(service.start, "daemon")
 
         @Slot(QObject)
         def pin(self, window) -> None:
@@ -198,6 +217,99 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001 - AppKit changed: an ordinary window then, said in the log
                 print(f"auren mascot: couldn't pin {window.title()}: {e!r}", file=sys.stderr, flush=True)
 
+        # ---- the setup window ----------------------------------------------------------------
+        def check(self) -> None:
+            """Ask for every step's state, on a thread; while the window is open, or once at start."""
+            if self._checking or not (self._setup_open or self._first_check):
+                return
+            self._checking = True
+
+            def run():
+                try:
+                    result = auren_setup.check()
+                except Exception as e:  # noqa: BLE001 - the window keeps its last state
+                    print(f"auren mascot: setup check failed: {e!r}", file=sys.stderr, flush=True)
+                    result = None
+                self.checked.emit(result)
+            background(run)
+
+        def _take_check(self, result) -> None:
+            self._checking = False
+            if result is None:
+                return
+            first, self._first_check = self._first_check, False
+            self._setup = result
+            self.setupChanged.emit()
+            if first and not result.get("ready") and not auren_setup.done():
+                self.openSetup()                 # the first run: show what's left
+
+        @Property(bool, notify=setupChanged)
+        def setupOpen(self):
+            return self._setup_open
+
+        @Property("QVariant", notify=setupChanged)
+        def setup(self):
+            return self._setup
+
+        @Property(str, notify=setupChanged)
+        def brainText(self):
+            return auren_setup.brain_text({"claude": False, "codex": False, **self._setup})[0]
+
+        @Property(str, notify=setupChanged)
+        def brainAction(self):
+            return auren_setup.brain_text({"claude": False, "codex": False, **self._setup})[1]
+
+        @Slot()
+        def openSetup(self) -> None:
+            self._setup_open = True
+            self.setupChanged.emit()
+            self.check()
+            try:                                 # an accessory app has to bring itself forward
+                from AppKit import NSApplication
+                NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            except Exception:  # noqa: BLE001 - not on macOS (tests)
+                pass
+
+        @Slot()
+        def closeSetup(self) -> None:
+            if self._setup.get("ready"):
+                auren_setup.mark_done()
+            self._setup_open = False
+            self.setupChanged.emit()
+
+        @Slot(str)
+        def allow(self, name: str) -> None:
+            run_ctl(f"permissions {name}")
+
+        @Slot(str, result=str)
+        def saveKey(self, value: str) -> str:
+            why = auren_setup.save_key(value)
+            if not why:
+                self._setup = {**self._setup, "key": True}
+                self.setupChanged.emit()
+                self.check()
+            return why
+
+        @Slot(str)
+        def useBrain(self, mode: str) -> None:
+            run_ctl(f"brain {mode}")
+            self._setup = {**self._setup, "brain": mode}
+            self.setupChanged.emit()
+
+        @Slot()
+        def copyInstall(self) -> None:
+            QApplication.clipboard().setText(auren_setup.INSTALL_CODEX)
+
+        @Slot(str)
+        def openUrl(self, url: str) -> None:
+            subprocess.Popen(["open", url])
+
+        @Slot()
+        def restart(self) -> None:
+            self._setup = {**self._setup, "running": False, "restart": False}
+            self.setupChanged.emit()
+            background(service.restart, "daemon")
+
         def set_hidden(self, hidden: bool) -> None:
             self.savePlace(self._place.get("x", -1), self._place.get("y", -1), self._place.get("size", 1), hidden)
 
@@ -222,9 +334,10 @@ def main() -> int:
     if not engine.rootObjects():
         print(f"auren mascot: couldn't load {qml}", file=sys.stderr)
         return 1
+    engine.load(QUrl.fromLocalFile(str(qml.with_name("mac-setup.qml"))))
 
     timers = []
-    for ms, fn in ((250, bridge.poll_state), (50, bridge.poll_level), (2000, bridge.reload_files)):
+    for ms, fn in ((250, bridge.poll_state), (50, bridge.poll_level), (2000, bridge.reload_files), (1200, bridge.check)):
         t = QTimer()
         t.timeout.connect(fn)
         t.start(ms)
@@ -288,10 +401,15 @@ def main() -> int:
     item("Reset size and place", lambda: (_write_json(PLACE, {"x": -1, "y": -1, "size": 1, "hidden": False}),
                                           bridge.reload_files()), mascot_menu)
     menu.addSeparator()
-    item("Check setup (auren doctor)", lambda: service.open_in_terminal("auren doctor"))
+    item("Set up Auren…", bridge.openSetup)
     item("Edit settings", lambda: subprocess.Popen(["open", "-t", str(CONFIG_DIR / "config.toml")]))
-    item("Restart Auren", lambda: (service.restart("daemon")))
-    item("Quit Auren", lambda: (service.stop("daemon"), app.quit()))
+    item("Restart Auren", bridge.restart)
+
+    def quit_auren() -> None:
+        tray.hide()
+        background(lambda: (service.stop("daemon"),
+                            QMetaObject.invokeMethod(app, "quit", Qt.ConnectionType.QueuedConnection)))
+    item("Quit Auren", quit_auren)
 
     def refresh() -> None:
         try:

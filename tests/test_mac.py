@@ -120,3 +120,118 @@ def test_a_coding_agent_opens_with_its_own_command(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "terminal_run", lambda line, path, title: ran.append(line) or "Terminal")
     out = json.loads(desktop.start_in_terminal("cursor", str(tmp_path), "fix the 'tests'"))
     assert out["started"] == "cursor" and ran == ["cursor-agent 'fix the '\"'\"'tests'\"'\"''"]
+
+
+# --- Auren.app and its setup window ----------------------------------------------------------------
+
+def test_the_app_icon_is_a_valid_icns_with_every_size():
+    import struct
+
+    from auren.mac import app
+    data = (app.SOURCE / "Auren.icns").read_bytes()
+    assert data[:4] == b"icns" and struct.unpack(">I", data[4:8])[0] == len(data)
+    kinds, i = [], 8
+    while i < len(data):
+        kind, n = data[i:i + 4], struct.unpack(">I", data[i + 4:i + 8])[0]
+        assert data[i + 8:i + 12] == b"\x89PNG"
+        kinds.append(kind)
+        i += n
+    assert sorted(kinds) == sorted(k for k, _ in app.ICNS_TYPES)
+
+
+def test_the_app_names_auren_and_asks_for_the_microphone_in_its_own_words():
+    import plistlib
+
+    from auren.mac import app
+    info = plistlib.loads((app.SOURCE / "Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == app.BUNDLE_ID and info["CFBundleExecutable"] == "Auren"
+    assert info["LSUIElement"] is True and info["NSMicrophoneUsageDescription"]
+    assert info["NSAppleEventsUsageDescription"]
+
+
+def test_the_app_is_rebuilt_only_when_its_sources_change(tmp_path, monkeypatch):
+    from auren.mac import app
+    built = []
+
+    def fake_build(dest, source=app.SOURCE):
+        (dest / "Contents/MacOS").mkdir(parents=True)
+        exe = dest / "Contents/MacOS/Auren"
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        built.append(dest)
+    monkeypatch.setattr(app, "build", fake_build)
+    monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: None)
+    target, stamp = tmp_path / "Applications/Auren.app", tmp_path / "app.sha256"
+    assert app.install(app=target, stamp=stamp) is True
+    assert app.install(app=target, stamp=stamp) is False          # same sources: the permissions stay
+    stamp.write_text("something older\n")
+    assert app.install(app=target, stamp=stamp) is True
+    assert len(built) == 2 and app.installed(target)
+
+
+def test_the_launch_agents_run_through_the_app_when_it_is_there(monkeypatch, tmp_path):
+    from auren.mac import app
+    monkeypatch.setattr(service, "DATA_HOME", tmp_path / "share")
+    monkeypatch.setattr(service, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(app, "installed", lambda *a: True)
+    p = service.plist("mascot")
+    assert p["ProgramArguments"] == [str(app.executable()), "mascot"]
+    assert p["EnvironmentVariables"]["AUREN_PYTHON"] == str(tmp_path / "share/venv/bin/python")
+    monkeypatch.setattr(app, "installed", lambda *a: False)
+    assert service.plist("mascot")["ProgramArguments"][0] == str(tmp_path / "share/venv/bin/auren")
+
+
+def _setup_check(monkeypatch, status, found=(), brain="auto", key=True):
+    from auren import config, settings
+    from auren.mac import setup
+    monkeypatch.setattr(config, "secret", lambda name: "k" if key else None)
+    monkeypatch.setattr(settings, "current", lambda: {"brain": brain})
+    return setup.check(status, which=lambda name: f"/opt/homebrew/bin/{name}" if name in found else None)
+
+
+ALLOWED = {"microphone": "granted", "accessibility": True, "screen": False, "talk_keys": True}
+
+
+def test_setup_is_ready_with_the_permissions_a_key_and_a_brain(monkeypatch):
+    s = _setup_check(monkeypatch, ALLOWED, found=("codex",))
+    assert s["ready"] and s["brainReady"] and not s["restart"] and s["running"]
+
+
+@pytest.mark.parametrize("change", [{"microphone": "not asked"}, {"accessibility": False}])
+def test_setup_is_not_ready_without_the_microphone_or_accessibility(monkeypatch, change):
+    assert not _setup_check(monkeypatch, {**ALLOWED, **change}, found=("codex",))["ready"]
+
+
+def test_setup_needs_a_key_and_a_brain(monkeypatch):
+    assert not _setup_check(monkeypatch, ALLOWED, found=("codex",), key=False)["ready"]
+    assert not _setup_check(monkeypatch, ALLOWED, found=())["ready"]
+    assert not _setup_check(monkeypatch, ALLOWED, found=("codex",), brain="claude")["brainReady"]
+
+
+def test_setup_says_when_auren_is_off_or_needs_a_restart(monkeypatch):
+    from auren.mac import setup
+    monkeypatch.setattr(setup, "_daemon_status", lambda: None)
+    off = _setup_check(monkeypatch, None, found=("codex",))
+    assert not off["running"] and not off["ready"] and not off["restart"]
+    restart = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False}, found=("codex",))
+    assert restart["restart"]
+
+
+@pytest.mark.parametrize("found,brain,action", [
+    ((), "auto", "copy"), (("codex",), "claude", "codex"), (("claude",), "codex", "claude"),
+    (("codex",), "auto", ""), (("claude", "codex"), "auto", ""),
+])
+def test_the_brain_row_offers_what_fixes_it(found, brain, action):
+    from auren.mac import setup
+    text, got = setup.brain_text({"claude": "claude" in found, "codex": "codex" in found, "brain": brain})
+    assert got == action and text
+
+
+def test_the_key_is_saved_privately_and_replaces_an_old_one(tmp_path):
+    from auren.mac import setup
+    path = tmp_path / "secrets.env"
+    path.write_text("OTHER=1\nASSEMBLYAI_API_KEY=old\n")
+    assert setup.save_key("  0123456789abcdef0123456789abcdef \n", path) == ""
+    assert path.read_text() == "OTHER=1\nASSEMBLYAI_API_KEY=0123456789abcdef0123456789abcdef\n"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert setup.save_key("not a key!", path) != ""

@@ -9,7 +9,8 @@ expect rough edges and please report them.
 - An Apple Silicon Mac (M1 or newer) on macOS 14 Sonoma or newer. The voice model's runtime has no
   build for Intel Macs.
 - [uv](https://docs.astral.sh/uv/): `brew install uv`.
-- Claude Code or Codex, signed in.
+- Claude Code or Codex, signed in (`brew install --cask codex`, then `codex` once).
+- Apple's Command Line Tools, to build Auren.app (Homebrew installs them; else `xcode-select --install`).
 - An [AssemblyAI](https://www.assemblyai.com/) API key.
 - Optional: [herdr](https://herdr.dev) for coding agents in tabs (without it Auren starts them in a
   new terminal window), a Chromium browser (Chrome, Brave, Edge, Chromium, Helium or Vivaldi) for the
@@ -24,27 +25,42 @@ cd auren && ./install-macos.sh
 
 The installer asks whether to set up the browser tools and which keys start Auren (Control+Option+A
 by default, Control+Option+Shift+A for a fresh conversation). It installs into
-`~/.local/share/auren`, links `auren` and `auren-ctl` into `~/.local/bin`, downloads the voice model
-and adds two launch agents that start at login:
+`~/.local/share/auren`, links `auren` and `auren-ctl` into `~/.local/bin`, downloads the voice model,
+builds **Auren.app** in `~/Applications`, and adds two launch agents that start at login and run
+Auren through the app:
 
 | Agent | Runs | Log |
 |---|---|---|
-| `com.auren.daemon` | `auren daemon`: listening, the brain, the tools, the talk keys | `~/.local/state/auren/daemon.out.log` |
-| `com.auren.mascot` | `auren mascot`: the robot and the menu bar icon | `~/.local/state/auren/mascot.out.log` |
+| `com.auren.daemon` | `Auren daemon`: listening, the brain, the tools, the talk keys | `~/.local/state/auren/daemon.out.log` |
+| `com.auren.mascot` | `Auren mascot`: the robot, the menu bar icon, the setup window | `~/.local/state/auren/mascot.out.log` |
 
-Then:
+Then it opens Auren, and Auren's setup window takes over: each step has one button.
 
-1. Put `ASSEMBLYAI_API_KEY=your-key` in `~/.config/auren/secrets.env` (or store it in the keychain:
-   `security add-generic-password -s auren -a assemblyai_api_key -w`).
-2. If you only use Codex, run `auren config set brain.mode codex`.
-3. Run `auren service restart`, then `auren doctor`.
+| Step | |
+|---|---|
+| Microphone | **Allow**, then allow in the macOS prompt |
+| Accessibility | **Allow** opens the Settings list with Auren already in it: switch it on |
+| Screen Recording | Optional, the same way; Auren restarts to use it |
+| Speech to text | Paste an AssemblyAI key and **Save** |
+| Brain | Shows Claude Code or Codex; if neither is installed, copies the install command |
+
+The window comes back from the menu bar icon (**Set up Auren…**), from opening Auren.app in Finder or
+Spotlight, or with `auren open`. `auren doctor` checks the same things in a terminal.
 
 `./install-macos.sh --dev` links the checkout instead of copying it, for working on Auren.
 
-## Permissions
+## Auren.app
 
-macOS asks before a program can use the microphone, watch the keyboard, control the mouse or see the
-screen. Auren needs:
+macOS gives a permission to the app responsible for a process. Auren is Python, so without an app
+Settings lists a `python3.12` in a hidden folder, and any Python update loses the permissions. Auren.app
+is a tiny launcher (`src/auren/mac/app/launcher.c`) with Auren's name, icon and the text of its
+permission prompts. It runs Auren's Python as its child, so Settings lists **Auren**, and Python can
+change underneath without macOS noticing.
+
+It's signed ad hoc on your Mac, and macOS ties the permissions to that signature, so the installer
+rebuilds it only when the launcher's sources change (`auren app status` says whether they did).
+Updating Auren's Python code never touches it. The icon is the Auren robot, rendered from
+`mascot/app-icon.qml` by `python -m auren.mac.app icon`.
 
 | Permission | For |
 |---|---|
@@ -53,24 +69,15 @@ screen. Auren needs:
 | Screen Recording | Looking at the screen (the `look` tool) |
 | Automation (asked per app) | Volume, Spotify and Music, dark mode, notifications, the terminal |
 
-`auren permissions` asks for them. The program macOS asks about is the Python inside Auren's
-environment (`auren permissions` prints its path), not "Auren": in **System Settings → Privacy &
-Security**, turn on the entry for that Python under Accessibility and Screen Recording. If it isn't
-listed, click **+**, press Cmd+Shift+G and paste the path. Restart Auren afterwards
-(`auren service restart`): macOS applies Accessibility and Screen Recording to new processes only.
-
-`auren doctor` shows which permissions are missing.
-
 ## Using it
 
 Press **Control+Option+A** anywhere and talk; press it again to send (or let auto-send do it). The
 robot sits in a corner of the screen and floats over every Space; drag it anywhere and scroll on it
 to resize it. Its menu bar icon has the same controls as Omarchy's bar plugin: talk, stop, voice,
-brain, safety level, mascot, and opening `auren doctor`.
+brain, safety level, mascot, and the setup window.
 
 `auren config set keys.talk cmd+shift+space` (and `keys.talk_fresh`) changes the keys; the daemon
 picks them up without a restart.
-
 ## How the pieces map
 
 | Omarchy | macOS |
@@ -81,7 +88,7 @@ picks them up without a restart.
 | Workspaces | Spaces, switched with Control+arrows (no API to move windows between Spaces) |
 | `grim` + `ydotool`/`wtype` | `screencapture` + Quartz mouse and key events |
 | `wl-copy` / `wl-paste` | NSPasteboard |
-| systemd user units | launch agents |
+| systemd user units | launch agents, running through Auren.app |
 | Quickshell mascot + bar plugin | `mascot/mac.qml` in a PySide6 host + a menu bar icon |
 | `notify-send`, the OSD | Notification Center (`osascript`) |
 | `$XDG_RUNTIME_DIR/auren` | `~/Library/Application Support/auren-runtime/auren` |
@@ -98,8 +105,8 @@ what it replaces, so everything else (the brain, safety, speech, the tool defini
 - Windows can't be moved to another Space; `move_window` only raises them.
 - Brightness keys need a built-in display (or `brew install brightness`).
 - The mascot's bubble is a copy of the one in `mascot/shell.qml`: change both.
-- Permissions belong to the venv's Python, so updating Python (a new uv-managed Python) can make
-  macOS ask again.
+- Auren.app is signed ad hoc, not by a registered developer, so it can't be passed to another Mac as
+  a download yet: each Mac builds its own with the installer.
 
 ## Updating and removing
 
@@ -107,8 +114,9 @@ what it replaces, so everything else (the brain, safety, speech, the tool defini
 
 ```bash
 auren service uninstall
+auren app uninstall
 rm -rf ~/.local/share/auren ~/.local/bin/auren ~/.local/bin/auren-ctl
 rm -rf ~/.config/auren ~/.local/state/auren ~/.cache/auren      # your settings and history too
 ```
 
-Then remove the Python entries in System Settings → Privacy & Security.
+Then remove Auren from the lists in System Settings → Privacy & Security.

@@ -8,9 +8,12 @@
   it with two launch agents (the daemon and the mascot), Control+Option+A as the talk key
   (`keys.talk`), the robot in a floating window and its controls in the menu bar. Screen control,
   windows, apps, the clipboard, Spotify, the browser tools and coding agents (in herdr, or a new
-  terminal window without it) use macOS's own interfaces. `auren permissions` asks for the
-  microphone, Accessibility and Screen Recording, and `auren doctor` checks them. See
-  [docs/macos.md](docs/macos.md).
+  terminal window without it) use macOS's own interfaces. See [docs/macos.md](docs/macos.md).
+- On the Mac, Auren is an app: the installer builds Auren.app in `~/Applications`, with the robot as
+  its icon, and Auren runs through it. Settings lists the permissions under Auren, not a Python in a
+  hidden folder. Opening the app (or **Set up Auren…** in the menu bar) shows a setup window that
+  asks for the microphone, Accessibility and Screen Recording, takes the AssemblyAI key and checks
+  for Claude Code or Codex, one button each.
 
 ### Fixed
 

@@ -13,7 +13,8 @@
 #   ~/.local/share/auren/mascot/        the mascot's QML (run by `auren mascot`, with PySide6)
 #   ~/.local/share/auren/bin/auren-ctl  what the mascot and the menu call
 #   ~/.local/share/auren/models/        the voice model
-#   ~/Library/LaunchAgents/com.auren.daemon.plist, com.auren.mascot.plist   start at login
+#   ~/Applications/Auren.app            the app: macOS gives the permissions to it (src/auren/mac/app.py)
+#   ~/Library/LaunchAgents/com.auren.daemon.plist, com.auren.mascot.plist   start at login, through Auren.app
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,6 +111,8 @@ elif [[ $keys == ask ]]; then
 fi
 
 # ---- Python environment ------------------------------------------------------------------------
+had_app=false
+[[ -x "$HOME/Applications/Auren.app/Contents/MacOS/Auren" ]] && had_app=true
 say "Python environment: $share/venv"
 mkdir -p "$share/bin"
 sync=(uv sync --project "$repo" --frozen --no-dev)
@@ -131,7 +134,6 @@ mkdir -p "$config/auren"
 if [[ ! -f "$config/auren/secrets.env" ]]; then
   install -m 600 /dev/null "$config/auren/secrets.env"
   echo "ASSEMBLYAI_API_KEY=" >"$config/auren/secrets.env"
-  warn "add your AssemblyAI key to $config/auren/secrets.env"
 fi
 case $keys in
   default)
@@ -146,6 +148,18 @@ esac
 say "Voice model"
 "$auren" voice-model || warn "no voice model: Auren will answer in text until 'auren voice-model' works"
 
+# ---- Auren.app -----------------------------------------------------------------------------------
+# Built only when its launcher changed: a new build is a new app to macOS, which then asks for the
+# permissions again.
+say "Auren.app"
+app_built=false
+if out=$("$auren" app install); then
+  echo "$out"
+  [[ $out == built* ]] && app_built=true
+else
+  warn "no Auren.app: the permissions will be listed under Python (install Apple's tools: xcode-select --install)"
+fi
+
 # ---- launch agents -----------------------------------------------------------------------------
 say "Services: com.auren.daemon, com.auren.mascot"
 # The PATH they get: this shell's, so the brains (claude, codex), herdr and Homebrew's tools are found.
@@ -153,7 +167,11 @@ AUREN_PATH="$PATH" "$auren" service install >/dev/null
 if [[ -n ${AUREN_UPDATE:-} ]]; then
   :   # auren update stopped them, and starts them again as they were
 elif "$auren" service status | grep -q running; then
-  warn "Auren is running the old version: auren service restart (when Auren is idle)"
+  if $app_built; then
+    "$auren" service restart     # now through the new Auren.app
+  else
+    warn "Auren is running the old version: auren service restart (when Auren is idle)"
+  fi
 else
   "$auren" service start || warn "the services didn't start: see ~/.local/state/auren/daemon.out.log"
 fi
@@ -192,14 +210,20 @@ case $browser in
     warn "the browser tools aren't set up: run auren browser setup (or ./install-macos.sh --browser)" ;;
 esac
 
-# ---- permissions -------------------------------------------------------------------------------
-if [[ -z ${AUREN_UPDATE:-} && -t 0 ]]; then
-  say "Permissions"
-  echo "macOS asks before an app can use the microphone, the keyboard and mouse, or see the screen."
-  echo "Auren asks now: allow each one (in Settings, turn on the Python that Auren runs as)."
-  sleep 2
-  "$auren" permissions || warn "run auren permissions once Auren is running"
+# ---- setup -------------------------------------------------------------------------------------
+# Auren.app's setup window asks for the permissions, the AssemblyAI key and the brain, one click each.
+if [[ -z ${AUREN_UPDATE:-} ]]; then
+  if [[ -x "$HOME/Applications/Auren.app/Contents/MacOS/Auren" ]]; then
+    say "Opening Auren: its setup window takes it from here"
+    if $app_built && $had_app; then
+      echo "Auren.app changed, so macOS asks for its permissions again."
+    elif $app_built; then
+      echo "If Settings still lists python3.12 from before, you can remove it: Auren.app has its own entries now."
+    fi
+    sleep 2                      # the mascot's process starts first: it shows the window
+    open "$HOME/Applications/Auren.app"
+  else
+    echo
+    "$auren" doctor || true
+  fi
 fi
-
-echo
-"$auren" doctor || true

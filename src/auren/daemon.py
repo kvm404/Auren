@@ -280,7 +280,9 @@ class Daemon:
             return self._reload()
         if cmd == "permissions" and MAC:          # macOS asks this process, the one that needs them
             from .mac import permissions
-            ask = permissions.status if arg.strip() == "status" else permissions.request
+            what = arg.strip()
+            ask = (permissions.status if what == "status" else
+                   (lambda: permissions.request_one(what)) if what in permissions.PANES else permissions.request)
             now = await asyncio.get_running_loop().run_in_executor(None, ask)
             return json.dumps({**now, "program": permissions.program(),
                                "talk_keys": bool(getattr(self, "_hotkeys", None))})

@@ -12,7 +12,7 @@ from ..config import DATA_HOME
 from ..doctor import FAIL, OK, WARN, Check, _run, _shared, _version
 from . import service
 
-FIX_PERMISSIONS = "run `auren permissions`, turn Auren's Python on in the Settings page it opens, then `auren service restart`"
+FIX_PERMISSIONS = "open Auren's setup (menu bar icon → Set up Auren…, or `auren open`) and click Allow"
 
 
 def service_path() -> str | None:
@@ -33,6 +33,7 @@ def _permissions() -> list[Check]:
         return [Check(g, "permissions", WARN, "Auren isn't running, so its permissions can't be checked",
                       "auren service start, then auren doctor")]
     program = st.get("program", "")
+    program = "Auren" if program.endswith(".app") else program
     out = []
     mic = st.get("microphone")
     out.append(Check(g, "Microphone", OK, "allowed") if mic == "granted" else
@@ -81,6 +82,10 @@ def checks() -> list[Check]:
     ctl = DATA_HOME / "bin/auren-ctl"
     out.append(Check(g, "auren-ctl", OK, str(ctl)) if os.access(ctl, os.X_OK) else
                Check(g, "auren-ctl", FAIL, f"{ctl} missing", "./install-macos.sh"))
+    from . import app
+    out.append(Check(g, "Auren.app", OK, str(app.APP)) if app.current() else
+               Check(g, "Auren.app", WARN, "out of date" if app.installed() else
+                     "not installed: macOS lists the permissions under a Python, not Auren", "./install-macos.sh"))
     for name, label in service.LABELS.items():
         if not service.plist_path(name).exists():
             out.append(Check(g, label, FAIL, "launch agent not installed", "./install-macos.sh"))
