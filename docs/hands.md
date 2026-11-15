@@ -41,7 +41,7 @@ user names goes on the agent's command line: Claude Code gets `--model` and `--e
 high, xhigh, max), Codex gets `--model` and `-c model_reasoning_effort=…` (minimal to xhigh; "max"
 means xhigh). Spoken names are turned into what the CLI takes: "Opus 5.5" becomes `claude-opus-5-5`,
 "sonnet" stays the alias for the latest, "GPT 6.1 Sol" becomes `gpt-6.1-sol`, and "extra high"
-becomes `xhigh`. OpenCode and Gemini take a model but no effort. An agent or level that can't take
+becomes `xhigh`. Gemini and Antigravity (`agy`) take a model but no effort. OpenCode's TUI has no `--model`, so it takes neither. An agent or level that can't take
 what was asked is an error before any tab opens, so the agent never starts with something else
 quietly. The result says what it was started with.
 

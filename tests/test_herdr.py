@@ -175,6 +175,9 @@ def test_agent_flags():
         herdr.agent_flags("claude", effort="turbo")
     with pytest.raises(HerdrError, match="effort"):
         herdr.agent_flags("grok", effort="high")
+    assert herdr.agent_flags("agy", "gemini 3 pro")[0] == ["--model", "gemini-3-pro"]
+    with pytest.raises(HerdrError, match="model"):
+        herdr.agent_flags("opencode", "anthropic/claude-opus-5-5")
 
 
 def test_claude_folder_is_trusted_keeping_the_rest(tmp_path, monkeypatch):

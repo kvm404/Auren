@@ -318,12 +318,11 @@ def agent_flags(kind: str, model: str = "", effort: str = "") -> tuple[list[str]
         if effort:
             raise HerdrError("no_effort", f"Auren can't set the effort of {kind}; only Claude Code's and Codex's")
         if model:
-            flag = {"opencode": "--model", "gemini": "--model", "qwen": "--model", "agy": "--model"}.get(kind)
-            if flag is None:
-                raise HerdrError("no_model", f"Auren can't pick the model of {kind}; only Claude Code's, Codex's, "
-                                             "OpenCode's and Gemini's")
-            chosen["model"] = model.replace(" ", "-") if kind != "opencode" else model.replace(" ", "")
-            args += [flag, chosen["model"]]
+            if kind not in ("gemini", "agy"):      # OpenCode's TUI has no --model, so it would fail to start
+                raise HerdrError("no_model", f"Auren can't pick the model of {kind} when starting it; only Claude "
+                                             "Code's, Codex's, Gemini's and Antigravity's (agy)")
+            chosen["model"] = model.replace(" ", "-")
+            args += ["--model", chosen["model"]]
     return args, chosen
 
 
