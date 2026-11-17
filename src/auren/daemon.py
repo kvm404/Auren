@@ -484,7 +484,7 @@ class Daemon:
         async with self.busy:
             self._fresh()
             await self._restart_brain(self.brain.forget)
-            log.info("fresh conversation (Super+Shift+A)")
+            log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
                            "tools": [], "brain": self._brain_name()})
 

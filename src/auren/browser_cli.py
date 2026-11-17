@@ -115,7 +115,7 @@ def setup(name: str | None, yes: bool, open_store: bool, wait: float) -> int:
     print(result.summary())
     if result.connected:
         print(_bold("Done: ") + f"Auren's browser tools work in {result.connected.label()}. "
-              "A running Auren offers them from its next fresh conversation (Super+Shift+A).")
+              f"A running Auren offers them from its next fresh conversation ({settings.fresh_key()}).")
         return 0
     if not obu.with_extension(kind):
         if not open_store:

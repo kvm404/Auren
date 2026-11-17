@@ -404,6 +404,25 @@ def current() -> dict:
     return _current[1]
 
 
+GLYPHS = {"cmd": "⌘", "shift": "⇧", "alt": "⌥", "ctrl": "⌃"}
+
+
+def key_label(combo: str) -> str:
+    """'ctrl+alt+a' -> '⌃⌥A', in the order macOS menus write modifiers."""
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    names = {"control": "ctrl", "option": "alt", "opt": "alt", "command": "cmd"}
+    mods = {names.get(p, p) for p in parts[:-1]}
+    return "".join(GLYPHS[m] for m in ("ctrl", "alt", "shift", "cmd") if m in mods) + (parts[-1].upper() if parts else "")
+
+
+def fresh_key() -> str:
+    """The keys for a fresh conversation, as the user knows them: Super+Shift+A (bound in Hyprland), or
+    keys.talk_fresh on a Mac."""
+    if sys.platform == "darwin":
+        return key_label(str(current().get("keys.talk_fresh") or "ctrl+alt+shift+a"))
+    return "Super+Shift+A"
+
+
 def save(values: dict) -> bool:
     """Write these settings (flat) into config.toml, keeping everything else in the file. A file with a
     mistake in it is left alone (the user may be editing it): returns False, and nothing is saved."""

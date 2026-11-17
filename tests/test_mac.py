@@ -43,6 +43,15 @@ def test_the_menu_writes_talk_keys_the_mac_way(combo, label):
     assert mascot.key_label(combo) == label
 
 
+def test_fresh_conversation_keys_are_named_for_the_platform(monkeypatch):
+    from auren import settings
+    monkeypatch.setattr(settings, "current", lambda: {"keys.talk_fresh": "ctrl+alt+shift+a"})
+    monkeypatch.setattr(settings.sys, "platform", "darwin")
+    assert settings.fresh_key() == "⌃⌥⇧A"
+    monkeypatch.setattr(settings.sys, "platform", "linux")
+    assert settings.fresh_key() == "Super+Shift+A"
+
+
 def test_the_launch_agents_run_the_installed_auren_with_a_full_path(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "DATA_HOME", tmp_path / "share")
     monkeypatch.setattr(service, "STATE_DIR", tmp_path / "state")

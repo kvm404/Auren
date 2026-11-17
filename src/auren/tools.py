@@ -921,7 +921,8 @@ def _browser_setup(kind, was_off: bool) -> str:
     integrations._cache.clear()
     out = result.summary()
     if was_off:
-        out += ". The browser tools were turned off: they're on now, from the next fresh conversation (Super+Shift+A)"
+        out += (". The browser tools were turned off: they're on now, from the next fresh conversation "
+                f"({config.fresh_key()})")
     elif result.opened_store:
         out += ". Once the user has added it, browser_open works"
     return out

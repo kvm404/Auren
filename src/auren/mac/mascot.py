@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ..config import CONFIG_DIR, DATA_HOME, RUNTIME_DIR, STATE_DIR, STATE_FILE
 from ..live import LEVEL_FILE
+from ..settings import key_label  # noqa: F401 (the menu and tests use it here)
 
 PREFS = CONFIG_DIR / "mascot.json"
 PLACE = STATE_DIR / "mascot.json"
@@ -26,17 +27,6 @@ PID_FILE = RUNTIME_DIR / "mascot.pid"
 PREF_DEFAULTS = {"idleOpacity": 0.45, "fadeAfter": 12, "sleepAfter": 240, "bubble": True, "sleepAnimation": True,
                  "mascot": "auren"}
 VOICES = ["F2", "M3", "F1", "M1"]          # decision 0001's picks
-GLYPHS = {"cmd": "⌘", "shift": "⇧", "alt": "⌥", "ctrl": "⌃"}
-
-
-def key_label(combo: str) -> str:
-    """'ctrl+alt+a' -> '⌃⌥A', in the order macOS menus write modifiers."""
-    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
-    names = {"control": "ctrl", "option": "alt", "opt": "alt", "command": "cmd"}
-    mods = {names.get(p, p) for p in parts[:-1]}
-    return "".join(GLYPHS[m] for m in ("ctrl", "alt", "shift", "cmd") if m in mods) + (parts[-1].upper() if parts else "")
-
-
 def _read_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text())
