@@ -22,6 +22,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from ..config import DATA_HOME, RUNTIME_DIR
@@ -32,6 +33,7 @@ FILES = ("launcher.c", "Info.plist", "Auren.icns")
 BUNDLE_ID = "com.auren.app"
 STAMP = DATA_HOME / "app.sha256"
 SETUP_REQUEST = RUNTIME_DIR / "setup.request"     # the mascot's process opens the setup window when it appears
+SETUP_REQUEST_TTL = 60                            # seconds: older requests (the mascot wasn't running) are dropped
 
 
 class AppError(Exception):
@@ -91,18 +93,38 @@ def install(force: bool = False, app: Path = APP, stamp: Path = STAMP) -> bool:
     if not force and current(app, stamp):
         return False
     app.parent.mkdir(parents=True, exist_ok=True)
+    had = app.exists()
     with tempfile.TemporaryDirectory(dir=app.parent, prefix=".Auren-") as tmp:
         new = Path(tmp) / "Auren.app"
         build(new)
         old = Path(tmp) / "old.app"
-        if app.exists():
+        if had:
             app.rename(old)
-        new.rename(app)
-    stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(digest() + "\n")
+        try:
+            new.rename(app)
+        except OSError:
+            if had:
+                old.rename(app)          # keep the old app (and its permissions) rather than none
+            raise
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(digest() + "\n")
     subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/"
                     "Support/lsregister", "-f", str(app)], capture_output=True)       # Spotlight and Launchpad
+    if had:
+        forget_permissions()
     return True
+
+
+TCC_SERVICES = ("Microphone", "Accessibility", "ScreenCapture")
+
+
+def forget_permissions() -> None:
+    """After a rebuild the old grants name the old signature: Settings still shows Auren on, but macOS
+    refuses it. Clear them so macOS asks again, and have the setup window open at the next start."""
+    for name in TCC_SERVICES:
+        subprocess.run(["tccutil", "reset", name, BUNDLE_ID], capture_output=True)
+    from .setup import DONE
+    DONE.unlink(missing_ok=True)
 
 
 def uninstall(app: Path = APP, stamp: Path = STAMP) -> None:
@@ -117,7 +139,7 @@ def open_app() -> int:
         if service.plist_path(name).exists() and not service.running(name):
             service.start(name)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    SETUP_REQUEST.write_text(str(os.getpid()))
+    SETUP_REQUEST.write_text(f"{time.time():.0f}\n")      # the mascot ignores one that's gone stale
     return 0
 
 

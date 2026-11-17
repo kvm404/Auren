@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from ..config import CONFIG_DIR, DATA_HOME, RUNTIME_DIR, STATE_DIR, STATE_FILE
@@ -70,7 +71,7 @@ def main() -> int:
     from .. import settings as auren_settings
     from . import service
     from . import setup as auren_setup
-    from .app import SETUP_REQUEST
+    from .app import SETUP_REQUEST, SETUP_REQUEST_TTL
 
     def background(fn, *args) -> None:
         """launchctl and the daemon's socket can take seconds: never on the window's thread."""
@@ -80,7 +81,8 @@ def main() -> int:
         changed = Signal()
         levelChanged = Signal()
         setupChanged = Signal()
-        checked = Signal("QVariant")        # from the checking thread to this one
+        checked = Signal("QVariant")        # from the checking thread to this one: [started at, result]
+        raiseSetup = Signal()               # bring the open setup window to the front
 
         def __init__(self):
             super().__init__()
@@ -97,6 +99,7 @@ def main() -> int:
                                  "brainReady": False, "ready": False, "restart": False}
             self._checking = False
             self._first_check = True
+            self._trust_after = 0.0             # checks started before this predate a change made here
             self.checked.connect(self._take_check)
             self.reload_files()
 
@@ -110,9 +113,14 @@ def main() -> int:
             self.changed.emit()
 
         def poll_state(self) -> None:
-            if SETUP_REQUEST.exists():           # Auren.app was opened (auren open)
+            try:                                 # Auren.app was opened (auren open)
+                age = time.time() - SETUP_REQUEST.stat().st_mtime
+            except OSError:
+                age = None
+            if age is not None:
                 SETUP_REQUEST.unlink(missing_ok=True)
-                self.openSetup()
+                if age < SETUP_REQUEST_TTL:      # not one left from when the mascot couldn't start
+                    self.openSetup()
             try:
                 raw = STATE_FILE.read_text()
             except OSError:
@@ -223,6 +231,7 @@ def main() -> int:
             if self._checking or not (self._setup_open or self._first_check):
                 return
             self._checking = True
+            started = time.monotonic()
 
             def run():
                 try:
@@ -230,12 +239,20 @@ def main() -> int:
                 except Exception as e:  # noqa: BLE001 - the window keeps its last state
                     print(f"auren mascot: setup check failed: {e!r}", file=sys.stderr, flush=True)
                     result = None
-                self.checked.emit(result)
+                self.checked.emit([started, result])
             background(run)
 
-        def _take_check(self, result) -> None:
+        def _changed_here(self, settle: float = 0.0) -> None:
+            """The window changed a step itself: don't let a check that was already running (or one that
+            starts before the change lands, `settle` seconds) put the old state back."""
+            self._trust_after = time.monotonic() + settle
+            self.setupChanged.emit()
+
+        @Slot("QVariant")
+        def _take_check(self, item) -> None:
             self._checking = False
-            if result is None:
+            started, result = item
+            if result is None or started < self._trust_after:
                 return
             first, self._first_check = self._first_check, False
             self._setup = result
@@ -263,6 +280,7 @@ def main() -> int:
         def openSetup(self) -> None:
             self._setup_open = True
             self.setupChanged.emit()
+            self.raiseSetup.emit()
             self.check()
             try:                                 # an accessory app has to bring itself forward
                 from AppKit import NSApplication
@@ -286,15 +304,16 @@ def main() -> int:
             why = auren_setup.save_key(value)
             if not why:
                 self._setup = {**self._setup, "key": True}
-                self.setupChanged.emit()
-                self.check()
+                self._changed_here()
             return why
 
         @Slot(str)
         def useBrain(self, mode: str) -> None:
             run_ctl(f"brain {mode}")
-            self._setup = {**self._setup, "brain": mode}
-            self.setupChanged.emit()
+            self._setup = {**self._setup, "brain": mode,
+                           "brainReady": bool(self._setup.get(mode) if mode != "auto"
+                                             else self._setup.get("claude") or self._setup.get("codex"))}
+            self._changed_here(2.0)             # auren-ctl writes config.toml a moment later
 
         @Slot()
         def copyInstall(self) -> None:
@@ -307,7 +326,7 @@ def main() -> int:
         @Slot()
         def restart(self) -> None:
             self._setup = {**self._setup, "running": False, "restart": False}
-            self.setupChanged.emit()
+            self._changed_here(3.0)             # until the daemon is on its way back
             background(service.restart, "daemon")
 
         def set_hidden(self, hidden: bool) -> None:

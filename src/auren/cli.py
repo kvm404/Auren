@@ -81,7 +81,13 @@ def _app(args: list[str]) -> int:
         print(f"{'built' if built else 'up to date:'} {app.APP}")
         return 0
     if what == "uninstall":
+        from .mac import service
         app.uninstall()
+        for name in service.LABELS:      # the agents named the app's executable: back to the venv's auren
+            if service.plist_path(name).exists():
+                service.install(name, service.installed_path(name))
+                if service.loaded(name):
+                    service.restart(name)
         return 0
     if what == "status":
         print(f"{app.APP}: " + ("up to date" if app.current() else "out of date" if app.installed() else "not installed"))

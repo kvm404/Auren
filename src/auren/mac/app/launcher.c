@@ -23,10 +23,12 @@
 #include <unistd.h>
 
 extern char **environ;
-static pid_t child = 0;
+static volatile pid_t child = 0;
+static volatile sig_atomic_t early = 0;     // a signal from before Python started
 
 static void forward(int sig) {
     if (child > 0) kill(child, sig);
+    else early = sig;
 }
 
 static void alert(const char *python) {
@@ -51,13 +53,23 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Auren's Python: AUREN_PYTHON (the launch agents set it), else the installer's default place
-    char fallback[PATH_MAX];
+    // Auren's Python: AUREN_PYTHON (the launch agents set it), else next to the auren command the
+    // installer linked into ~/.local/bin (wherever its data folder is), else the default place
+    char fallback[PATH_MAX], link[PATH_MAX], target[PATH_MAX];
     const char *python = getenv("AUREN_PYTHON");
     if (!python || !*python) {
         const char *home = getenv("HOME");
         if (!home) return 1;
         snprintf(fallback, sizeof fallback, "%s/.local/share/auren/venv/bin/python", home);
+        snprintf(link, sizeof link, "%s/.local/bin/auren", home);
+        char *slash;
+        if (access(fallback, X_OK) != 0 && realpath(link, target) && (slash = strrchr(target, '/'))) {
+            *slash = '\0';
+            if (strlen(target) + sizeof "/python" <= sizeof fallback) {
+                strcpy(fallback, target);
+                strcat(fallback, "/python");
+            }
+        }
         python = fallback;
     }
     if (access(python, X_OK) != 0) {
@@ -65,15 +77,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char **args = calloc(argc + 4, sizeof(char *));
+    char **args = calloc(argc + 5, sizeof(char *));
     if (!args) return 1;
     int n = 0;
     args[n++] = (char *)python;
+    args[n++] = "-P";                     // not the current folder on sys.path
     args[n++] = "-m";
     args[n++] = "auren.cli";
     for (int i = 1; i < argc; i++)
         if (strncmp(argv[i], "-psn_", 5) != 0) args[n++] = argv[i];   // old Finder launches add a process serial number
-    if (n == 3) args[n++] = "open";
+    if (n == 4) args[n++] = "open";
     args[n] = NULL;
 
     struct sigaction sa = {0};
@@ -82,13 +95,16 @@ int main(int argc, char **argv) {
     int signals[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2};
     for (size_t i = 0; i < sizeof signals / sizeof *signals; i++) sigaction(signals[i], &sa, NULL);
 
-    int err = posix_spawn(&child, python, NULL, NULL, args, environ);
+    pid_t pid;
+    int err = posix_spawn(&pid, python, NULL, NULL, args, environ);
     if (err != 0) {
         fprintf(stderr, "Auren: can't start %s: %s\n", python, strerror(err));
         return 1;
     }
+    child = pid;
+    if (early) kill(pid, early);          // launchd asked to stop while Python was starting
     int status;
-    while (waitpid(child, &status, 0) < 0)
+    while (waitpid(pid, &status, 0) < 0)
         if (errno != EINTR) return 1;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);

@@ -113,6 +113,8 @@ fi
 # ---- Python environment ------------------------------------------------------------------------
 had_app=false
 [[ -x "$HOME/Applications/Auren.app/Contents/MacOS/Auren" ]] && had_app=true
+had_services=false               # an install from before Auren.app: its permissions were python3.12's
+[[ -f "$HOME/Library/LaunchAgents/com.auren.daemon.plist" ]] && had_services=true
 say "Python environment: $share/venv"
 mkdir -p "$share/bin"
 sync=(uv sync --project "$repo" --frozen --no-dev)
@@ -217,7 +219,7 @@ if [[ -z ${AUREN_UPDATE:-} ]]; then
     say "Opening Auren: its setup window takes it from here"
     if $app_built && $had_app; then
       echo "Auren.app changed, so macOS asks for its permissions again."
-    elif $app_built; then
+    elif $app_built && $had_services; then
       echo "If Settings still lists python3.12 from before, you can remove it: Auren.app has its own entries now."
     fi
     sleep 2                      # the mascot's process starts first: it shows the window

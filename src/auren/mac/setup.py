@@ -35,9 +35,10 @@ def check(status: dict | None = None, which=shutil.which) -> dict:
     running = st is not None
     st = st or {}
     try:
-        mode = str(current()["brain"])
+        cfg = current()
+        mode = str(cfg["brain"])
     except Exception:  # noqa: BLE001 - a broken config.toml: the window still works
-        mode = "auto"
+        cfg, mode = {}, "auto"
     claude, codex = bool(which("claude")), bool(which("codex"))
     mic = str(st.get("microphone", "unknown"))
     out = {
@@ -53,8 +54,21 @@ def check(status: dict | None = None, which=shutil.which) -> dict:
         "brainReady": (mode == "claude" and claude) or (mode == "codex" and codex) or (mode == "auto" and (claude or codex)),
     }
     out["ready"] = (running and mic == "granted" and out["accessibility"] and out["key"] and out["brainReady"])
-    out["restart"] = running and out["accessibility"] and not out["talkKeys"]
+    # The keys are off after Accessibility was allowed: a restart turns them on. Not when a key in
+    # config.toml isn't a shortcut, which no restart fixes (auren doctor says which).
+    out["restart"] = running and out["accessibility"] and not out["talkKeys"] and _keys_valid(cfg)
     return out
+
+
+def _keys_valid(cfg: dict) -> bool:
+    from .hotkey import parse
+    try:
+        for name in ("keys.talk", "keys.talk_fresh"):
+            if cfg.get(name):
+                parse(str(cfg[name]))
+    except ValueError:
+        return False
+    return True
 
 
 def brain_text(s: dict) -> tuple[str, str]:
@@ -77,15 +91,18 @@ def save_key(value: str, path: Path = SECRETS) -> str:
     value = value.strip().strip("\"'")
     if not re.fullmatch(r"[A-Za-z0-9_\-]{20,128}", value):
         return "That doesn't look like an AssemblyAI key"
+    path = path.resolve()                 # a symlinked secrets.env (dotfiles) stays a symlink
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text().splitlines() if path.exists() else []
     kept = [line for line in lines if line.partition("=")[0].strip() != KEY_NAME]
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp.unlink(missing_ok=True)           # a leftover one would keep its own, looser, mode
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write("\n".join([*kept, f"{KEY_NAME}={value}"]) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
-    os.chmod(path, 0o600)
     return ""
 
 

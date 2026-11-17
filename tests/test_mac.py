@@ -161,6 +161,7 @@ def test_the_app_is_rebuilt_only_when_its_sources_change(tmp_path, monkeypatch):
         built.append(dest)
     monkeypatch.setattr(app, "build", fake_build)
     monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(app, "forget_permissions", lambda: None)
     target, stamp = tmp_path / "Applications/Auren.app", tmp_path / "app.sha256"
     assert app.install(app=target, stamp=stamp) is True
     assert app.install(app=target, stamp=stamp) is False          # same sources: the permissions stay
@@ -235,3 +236,101 @@ def test_the_key_is_saved_privately_and_replaces_an_old_one(tmp_path):
     assert path.read_text() == "OTHER=1\nASSEMBLYAI_API_KEY=0123456789abcdef0123456789abcdef\n"
     assert path.stat().st_mode & 0o777 == 0o600
     assert setup.save_key("not a key!", path) != ""
+
+
+def _fake_build(built):
+    def build(dest, source=None):
+        (dest / "Contents/MacOS").mkdir(parents=True)
+        exe = dest / "Contents/MacOS/Auren"
+        exe.write_text(f"#!/bin/sh\n# build {len(built)}\n")
+        exe.chmod(0o755)
+        built.append(dest)
+    return build
+
+
+def test_a_rebuilt_app_replaces_the_old_and_has_macos_ask_again(tmp_path, monkeypatch):
+    from auren.mac import app, setup
+    built, ran = [], []
+    monkeypatch.setattr(app, "build", _fake_build(built))
+    monkeypatch.setattr(app.subprocess, "run", lambda cmd, **k: ran.append(cmd[0]))
+    monkeypatch.setattr(setup, "DONE", tmp_path / "setup.json")
+    target, stamp = tmp_path / "Applications/Auren.app", tmp_path / "app.sha256"
+    app.install(app=target, stamp=stamp)
+    assert "tccutil" not in ran                       # a first install has no old grants
+    setup.mark_done()
+    assert app.install(force=True, app=target, stamp=stamp)
+    assert "# build 1" in app.executable(target).read_text()
+    assert ran.count("tccutil") == len(app.TCC_SERVICES) and not setup.done()   # the window opens again
+    assert [p.name for p in target.parent.iterdir()] == ["Auren.app"]          # no temp folder left
+
+
+def test_a_failed_build_keeps_the_old_app(tmp_path, monkeypatch):
+    from auren.mac import app
+    built = []
+    monkeypatch.setattr(app, "build", _fake_build(built))
+    monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: None)
+    target, stamp = tmp_path / "Applications/Auren.app", tmp_path / "app.sha256"
+    app.install(app=target, stamp=stamp)
+
+    def broken(dest, source=None):
+        raise app.AppError("clang failed")
+    monkeypatch.setattr(app, "build", broken)
+    with pytest.raises(app.AppError):
+        app.install(force=True, app=target, stamp=stamp)
+    assert app.current(target, stamp) and "# build 0" in app.executable(target).read_text()
+
+
+def test_restart_reloads_an_agent_whose_program_changed(monkeypatch, tmp_path):
+    import plistlib
+    monkeypatch.setattr(service, "AGENTS_DIR", tmp_path)
+    with open(service.plist_path("daemon"), "wb") as f:
+        plistlib.dump({"ProgramArguments": ["/Users/a/Applications/Auren.app/Contents/MacOS/Auren", "daemon"]}, f)
+    loaded_as = ["/Users/a/.local/share/auren/venv/bin/auren"]
+    calls = []
+    monkeypatch.setattr(service, "loaded", lambda n: True)
+    monkeypatch.setattr(service, "stop", lambda n: calls.append("stop") or True)
+    monkeypatch.setattr(service, "start", lambda n: calls.append("start") or True)
+
+    def launchctl(*args):
+        calls.append(args[0])
+        out = f"com.auren.daemon = {{\n\tstate = running\n\tprogram = {loaded_as[0]}\n}}\n"
+        return subprocess.CompletedProcess(args, 0, out, "")
+    monkeypatch.setattr(service, "_launchctl", launchctl)
+    assert service.restart("daemon") and calls == ["print", "stop", "start"]    # kickstart would keep the old one
+    calls.clear()
+    loaded_as[0] = "/Users/a/Applications/Auren.app/Contents/MacOS/Auren"
+    assert service.restart("daemon") and calls == ["print", "kickstart"]
+
+
+def test_setup_offers_no_restart_for_a_key_no_restart_fixes(monkeypatch):
+    from auren import config, settings
+    from auren.mac import setup
+    monkeypatch.setattr(config, "secret", lambda name: "k")
+    monkeypatch.setattr(settings, "current", lambda: {"brain": "auto", "keys.talk": "ctrl+nothing"})
+    s = setup.check({**ALLOWED, "talk_keys": False}, which=lambda name: "/bin/codex" if name == "codex" else None)
+    assert not s["restart"]
+
+
+def test_the_key_goes_through_a_symlinked_secrets_file(tmp_path):
+    from auren.mac import setup
+    real, link = tmp_path / "dotfiles/secrets.env", tmp_path / "secrets.env"
+    real.parent.mkdir()
+    real.write_text("OTHER=1\n")
+    link.symlink_to(real)
+    (real.parent / "secrets.env.tmp").write_text("left over")
+    assert setup.save_key("0123456789abcdef0123456789abcdef", link) == ""
+    assert link.is_symlink() and "ASSEMBLYAI_API_KEY=0123456789abcdef0123456789abcdef" in real.read_text()
+    assert real.stat().st_mode & 0o777 == 0o600
+
+
+def test_accessibility_shows_macos_prompt_first_then_the_settings_page(monkeypatch):
+    from auren.mac import permissions
+    opened, prompted = [], []
+    monkeypatch.setattr(permissions, "_prompted", set())
+    monkeypatch.setattr(permissions, "accessibility", lambda prompt=False: prompted.append(prompt) and False)
+    monkeypatch.setattr(permissions, "status", dict)
+    monkeypatch.setattr(permissions.subprocess, "Popen", lambda cmd, **k: opened.append(cmd))
+    permissions.request_one("accessibility")
+    assert True in prompted and not opened
+    permissions.request_one("accessibility")
+    assert opened == [["open", permissions.PANES["accessibility"]]]

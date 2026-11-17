@@ -7,6 +7,7 @@
 //   auren.allow(name)        ask for a permission (microphone, accessibility, screen)
 //   auren.saveKey(text)      returns "" or why not             auren.useBrain(mode), auren.copyInstall()
 //   auren.restart(), auren.startDaemon(), auren.openUrl(url), auren.closeSetup()
+//   auren.raiseSetup               (signal) the window is asked for again while it's open: come forward
 import QtQuick
 import QtQuick.Window
 import "mascots/auren"
@@ -21,6 +22,7 @@ Window {
   minimumHeight: fit; maximumHeight: fit
   visible: auren.setupOpen
   onClosing: auren.closeSetup()
+  Connections { target: auren; function onRaiseSetup() { if (w.visible) { w.raise(); w.requestActivate() } } }
   color: pal.bg
 
   readonly property var s: auren.setup

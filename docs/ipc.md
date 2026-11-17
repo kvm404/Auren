@@ -19,7 +19,7 @@ for 3 days), unless `XDG_RUNTIME_DIR` is set, and `brain/` is `$TMPDIR/auren-bra
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
 | `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
 | `mascot.pid` | mascot (macOS) | The mascot host's pid, so screen tools leave its windows out |
-| `setup.request` | `auren open` (macOS) | Opening Auren.app asks the mascot's process to show the setup window; it removes the file |
+| `setup.request` | `auren open` (macOS) | Opening Auren.app asks the mascot's process to show the setup window; it removes the file, and ignores one over a minute old |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 

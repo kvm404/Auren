@@ -70,12 +70,20 @@ def request_one(name: str) -> dict[str, bool | str]:
                 pass
         elif microphone() != "granted":
             subprocess.Popen(["open", PANES["microphone"]])
-    elif name == "accessibility" and not accessibility(prompt=True):
-        subprocess.Popen(["open", PANES["accessibility"]])
-    elif name == "screen" and not screen_recording():
-        screen_recording(prompt=True)
-        subprocess.Popen(["open", PANES["screen"]])
+    elif name in ("accessibility", "screen"):
+        # The first click shows macOS's own prompt (which has an Open System Settings button and adds
+        # Auren to the list); a second click, after it was dismissed, opens the Settings page.
+        granted = accessibility if name == "accessibility" else screen_recording
+        if not granted():
+            if name in _prompted:
+                subprocess.Popen(["open", PANES[name]])
+            else:
+                _prompted.add(name)
+                granted(prompt=True)
     return status()
+
+
+_prompted: set[str] = set()        # what request_one has shown macOS's prompt for, in this process
 
 
 def request() -> dict[str, bool | str]:

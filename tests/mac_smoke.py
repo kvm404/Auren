@@ -60,6 +60,12 @@ def app() -> None:
 def mascot() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         env = {**_env(tmp), "AUREN_MASCOT_DIR": str(ROOT / "mascot"), "QT_QPA_PLATFORM": "offscreen"}
+        # As `auren open` asks: the setup window loads (whatever the first run decides)
+        p = subprocess.run([sys.executable, "-c", "from auren.mac.app import SETUP_REQUEST as r; print(r)"],
+                           env=env, capture_output=True, text=True, check=True)
+        request = Path(p.stdout.strip())
+        request.parent.mkdir(parents=True, exist_ok=True)
+        request.write_text(f"{time.time():.0f}\n")
         p = subprocess.Popen([sys.executable, "-m", "auren.cli", "mascot"], env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True)
         time.sleep(6)

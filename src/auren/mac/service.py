@@ -101,9 +101,40 @@ def start(name: str) -> bool:
     return _launchctl("kickstart", _target(name)).returncode == 0
 
 
+def _loaded_program(name: str) -> str | None:
+    """The program launchd runs for the loaded agent, as it read it from the plist when it was loaded."""
+    p = _launchctl("print", _target(name))
+    for line in p.stdout.splitlines() if p.returncode == 0 else []:
+        key, _, value = line.strip().partition(" = ")
+        if key == "program":
+            return value.strip()
+    return None
+
+
+def _plist_program(name: str) -> str | None:
+    try:
+        with open(plist_path(name), "rb") as f:
+            return str(plistlib.load(f)["ProgramArguments"][0])
+    except (OSError, ValueError, KeyError, IndexError, plistlib.InvalidFileException):
+        return None
+
+
+def installed_path(name: str) -> str | None:
+    """The PATH the installed plist gives the agent (to write it again with the same one)."""
+    try:
+        with open(plist_path(name), "rb") as f:
+            return str(plistlib.load(f)["EnvironmentVariables"]["PATH"])
+    except (OSError, ValueError, KeyError, plistlib.InvalidFileException):
+        return None
+
+
 def restart(name: str) -> bool:
+    """Start it again. kickstart -k keeps what launchd read at load time, so when the plist now names
+    another program (Auren.app was installed or removed), it's unloaded and loaded again instead."""
     if not loaded(name):
         return start(name)
+    if _loaded_program(name) != _plist_program(name):
+        return stop(name) and start(name)
     return _launchctl("kickstart", "-k", _target(name)).returncode == 0
 
 
