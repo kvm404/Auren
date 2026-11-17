@@ -111,8 +111,8 @@ def start(bindings: dict[str, str], on_press: Callable[[str], None]) -> Hotkeys 
     threading.Thread(target=keys.run, args=(ready,), name="auren-hotkeys", daemon=True).start()
     ready.wait(5)
     if keys.tap is None:
-        log.error("can't listen for the talk keys: allow Auren under Privacy & Security → Accessibility, then "
-                  "restart it (auren doctor)")
+        log.error("can't listen for the talk keys yet: allow Auren under Privacy & Security → Accessibility, "
+                  "and they turn on (auren doctor)")
         return None
     log.info("talk keys: %s", ", ".join(f"{combo} → {cmd}" for cmd, combo in bindings.items()))
     return keys

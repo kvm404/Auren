@@ -7,6 +7,8 @@
 //   auren.talkKey      the talk key as macOS writes it (⌃⌥A)
 //   auren.ctl(cmd)     run an auren-ctl command           auren.savePlace(x, y, size, hidden)
 //   auren.startDaemon()                                   auren.pin(window)  float on every Space
+//   auren.screenArea(x, y)  the usable part of the screen at a point (or the nearest)   auren.screens (changes)
+//   auren.placeReset   (signal) the menu's Reset: back to the default corner
 //
 // The mascot's window is just its own size and moves when it's dragged (macOS lets clicks through the
 // transparent parts). The bubble is a second window beside it that ignores the mouse, except while it
@@ -72,18 +74,25 @@ Item {
   }
 
   // ---- where it is -----------------------------------------------------------------------------
-  readonly property rect desk: Qt.rect(win.screen ? win.screen.virtualX : 0, win.screen ? win.screen.virtualY : 0,
-                                       win.screen ? win.screen.desktopAvailableWidth : 1440,
-                                       win.screen ? win.screen.desktopAvailableHeight : 900)
-  function clamp(x, y) {
-    var top = 30                                        // under the menu bar
-    return Qt.point(Math.max(desk.x, Math.min(desk.x + desk.width - win.width, x)),
-                    Math.max(desk.y + top, Math.min(desk.y + desk.height - win.height, y)))
+  // One screen's usable part (no menu bar or Dock), from the host: Screen's desktopAvailable* is all the
+  // screens together, which put the mascot off to the side of a Mac with a second display.
+  function usable(x, y) { var a = auren.screenArea(x, y); return Qt.rect(a.x, a.y, a.width, a.height) }
+  readonly property rect desk: { auren.screens; return usable(win.x + win.width / 2, win.y + win.height / 2) }
+  function clamp(x, y) {                                // kept on the screen its middle is on (or the nearest)
+    var d = usable(x + win.width / 2, y + win.height / 2)
+    return Qt.point(Math.max(d.x, Math.min(d.x + d.width - win.width, x)),
+                    Math.max(d.y, Math.min(d.y + d.height - win.height, y)))
   }
   function home() {
     var p = auren.place
-    if (isFinite(p.x) && p.x >= 0 && isFinite(p.y) && p.y >= 0) return clamp(p.x, p.y)
-    return clamp(desk.x + desk.width - win.width - 40, desk.y + desk.height - win.height - 40)
+    if (isFinite(p.x) && isFinite(p.y) && !(p.x === -1 && p.y === -1)) return clamp(p.x, p.y)   // a screen left of the main one is at x < 0
+    var d = usable(1, 1)                                  // the main screen (its top left is 0, 0)
+    return clamp(d.x + d.width - win.width - 40, d.y + d.height - win.height - 40)
+  }
+  Connections {                                         // a display was unplugged or moved: come back on screen
+    target: auren
+    function onScreensChanged() { if (!root.dragging) { var p = root.clamp(win.x, win.y); win.x = p.x; win.y = p.y } }
+    function onPlaceReset() { Qt.callLater(() => { var p = root.home(); win.x = p.x; win.y = p.y }) }   // after the size
   }
   function save() { auren.savePlace(win.x, win.y, root.size, auren.place.hidden === true) }
 
@@ -229,7 +238,7 @@ Item {
     onFlagsChanged: if (visible) Qt.callLater(() => auren.pin(bubbleWin))   // new flags reset the window's level
 
     readonly property real mascotCenter: win.x + root.mascot.implicitWidth / 2
-    readonly property bool above: win.y + root.mascot.bubbleAnchorY - height > root.desk.y + 30
+    readonly property bool above: win.y + root.mascot.bubbleAnchorY - height > root.desk.y
     readonly property QtObject margins: QtObject { readonly property real left: bubbleWin.x }
     x: Math.max(root.desk.x + 6, Math.min(root.desk.x + root.desk.width - width - 6, mascotCenter - width / 2))
     y: above ? win.y + root.mascot.bubbleAnchorY - height : win.y + root.mascot.implicitHeight - root.mascot.u

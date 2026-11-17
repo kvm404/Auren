@@ -24,6 +24,9 @@
 - A new agent no longer waits at the folder-trust question. Auren marks the folder trusted in Claude
   Code's or Codex's own config before starting it, and answers yes if the question shows anyway.
   Claude Code now highlights "No, exit" first, so Enter alone would have quit it.
+- With the brain on auto and only Codex installed, Codex answers. Before, Auren kept trying to start
+  Claude Code, and every request ended without a reply. A brain that isn't installed is now said out
+  loud as an error.
 
 ## 0.1.5
 

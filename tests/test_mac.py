@@ -334,3 +334,30 @@ def test_accessibility_shows_macos_prompt_first_then_the_settings_page(monkeypat
     assert True in prompted and not opened
     permissions.request_one("accessibility")
     assert opened == [["open", permissions.PANES["accessibility"]]]
+
+
+def test_the_mascot_stays_on_one_screen_of_two(monkeypatch):
+    laptop = ({"x": 0, "y": 0, "width": 1470, "height": 956}, {"x": 0, "y": 33, "width": 1470, "height": 850})
+    monitor = ({"x": 1470, "y": -200, "width": 1920, "height": 1080}, {"x": 1470, "y": -170, "width": 1920, "height": 1050})
+    both = [laptop, monitor]
+    assert mascot.screen_area(both, 100, 100) == laptop[1]
+    assert mascot.screen_area(both, 2000, 500) == monitor[1]
+    assert mascot.screen_area(both, 1000, 1500) == laptop[1]       # below the laptop: the nearest screen
+    assert mascot.screen_area(both, 3600, 0) == monitor[1]
+    assert mascot.screen_area([], 5, 5)["width"] > 0
+
+
+def test_the_talk_keys_start_once_accessibility_is_allowed(monkeypatch):
+    import asyncio
+
+    from auren.daemon import Daemon
+    from auren.mac import permissions
+    answers = iter([False, False, True])
+    monkeypatch.setattr(permissions, "accessibility", lambda: next(answers))
+
+    class D:
+        _hotkeys = None
+    d = D()
+    d._listen_for_keys = lambda: setattr(d, "_hotkeys", "tap")
+    asyncio.run(Daemon._keys_once_allowed(d, every=0.01))       # returns only once the keys are on
+    assert d._hotkeys == "tap"

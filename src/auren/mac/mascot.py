@@ -52,6 +52,20 @@ def _write_json(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def screen_area(areas: list[tuple[dict, dict]], x: float, y: float) -> dict:
+    """Where the mascot may sit near (x, y): the usable part (no menu bar or Dock) of the screen that holds
+    the point, else of the nearest one. areas: (screen's whole rect, its usable rect) for each screen,
+    as {"x", "y", "width", "height"}."""
+    if not areas:
+        return {"x": 0, "y": 0, "width": 1440, "height": 900}
+
+    def away(whole: dict) -> float:
+        dx = max(whole["x"] - x, 0, x - (whole["x"] + whole["width"]))
+        dy = max(whole["y"] - y, 0, y - (whole["y"] + whole["height"]))
+        return dx * dx + dy * dy
+    return min(areas, key=lambda a: away(a[0]))[1]
+
+
 def ctl_path() -> list[str]:
     own = DATA_HOME / "bin/auren-ctl"
     return [str(own)] if own.exists() else [sys.executable, "-m", "auren.ctl"]
@@ -64,7 +78,7 @@ def run_ctl(command: str) -> None:
 
 def main() -> int:
     from PySide6.QtCore import Property, QMetaObject, QObject, Qt, QTimer, QUrl, Signal, Slot
-    from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
+    from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QPainter, QPixmap
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -81,6 +95,8 @@ def main() -> int:
         changed = Signal()
         levelChanged = Signal()
         setupChanged = Signal()
+        screensChanged = Signal()           # a screen came, went, or its Dock or menu bar moved
+        placeReset = Signal()               # the menu's Reset: back to the default corner
         checked = Signal("QVariant")        # from the checking thread to this one: [started at, result]
         raiseSetup = Signal()               # bring the open setup window to the front
 
@@ -191,6 +207,18 @@ def main() -> int:
             self._place = {"x": round(x), "y": round(y), "size": round(size, 3), "hidden": hidden}
             _write_json(PLACE, self._place)
             self.changed.emit()
+
+        @Property(int, notify=screensChanged)
+        def screens(self):
+            return len(QGuiApplication.screens())
+
+        @Slot(float, float, result="QVariant")
+        def screenArea(self, x: float, y: float):
+            """The usable part of the screen at (x, y), or of the nearest screen (mac.qml keeps the mascot in it)."""
+            def rect(r) -> dict:
+                return {"x": r.x(), "y": r.y(), "width": r.width(), "height": r.height()}
+            return screen_area([(rect(s.geometry()), rect(s.availableGeometry())) for s in QGuiApplication.screens()],
+                               x, y)
 
         @Slot()
         def startDaemon(self) -> None:
@@ -344,6 +372,14 @@ def main() -> int:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(os.getpid()))
     bridge = Bridge()
+
+    def watch(screen) -> None:
+        screen.availableGeometryChanged.connect(lambda *_: bridge.screensChanged.emit())
+        screen.geometryChanged.connect(lambda *_: bridge.screensChanged.emit())
+    for scr in app.screens():
+        watch(scr)
+    app.screenAdded.connect(lambda scr: (watch(scr), bridge.screensChanged.emit()))
+    app.screenRemoved.connect(lambda *_: bridge.screensChanged.emit())
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("auren", bridge)
     qml = Path(os.environ.get("AUREN_MASCOT_DIR") or DATA_HOME / "mascot") / "mac.qml"
@@ -418,7 +454,7 @@ def main() -> int:
     mascot_menu.addSeparator()
     shown = item("Show mascot", lambda checked=False: bridge.set_hidden(not checked), mascot_menu, True)
     item("Reset size and place", lambda: (_write_json(PLACE, {"x": -1, "y": -1, "size": 1, "hidden": False}),
-                                          bridge.reload_files()), mascot_menu)
+                                          bridge.reload_files(), bridge.placeReset.emit()), mascot_menu)
     menu.addSeparator()
     item("Set up Auren…", bridge.openSetup)
     item("Edit settings", lambda: subprocess.Popen(["open", "-t", str(CONFIG_DIR / "config.toml")]))

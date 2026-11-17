@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -43,6 +44,10 @@ def speakable(text: str) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*|__([^_]+)__", lambda m: m.group(1) or m.group(2), text)
     text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.M)
     return text.replace("~/", "home folder ").strip()
+
+
+def _installed(command: str) -> bool:
+    return shutil.which(command) is not None
 
 
 class BrainError(RuntimeError):
@@ -94,8 +99,13 @@ class ClaudeBrain:
         workdir = BRAIN_DIR
         workdir.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "MCP_TOOL_TIMEOUT": "900000", "MCP_TIMEOUT": "30000"}
-        self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True, bufsize=1, cwd=workdir, env=env)
+        try:
+            self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True, bufsize=1, cwd=workdir, env=env)
+        except FileNotFoundError as e:
+            raise BrainError("Claude Code isn't installed (no claude command)") from e
+        except OSError as e:
+            raise BrainError(f"Claude Code can't start: {e}") from e
         self._stderr = []
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         self.context_tokens = 0
@@ -292,8 +302,13 @@ class CodexBrain:
                "-c", "mcp_servers.auren.env=" + _env_toml(_mcp_env(self.runtime, self.session)),
                "--json", "--output-last-message", str(last), "-"]
         sent = time.perf_counter()
-        self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                            text=True, cwd=workdir)
+        try:
+            self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                stderr=subprocess.PIPE, text=True, cwd=workdir)
+        except FileNotFoundError as e:
+            raise BrainError("Codex isn't installed (no codex command)") from e
+        except OSError as e:
+            raise BrainError(f"Codex can't start: {e}") from e
         if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
             proc.kill()
             proc.wait()
@@ -334,6 +349,7 @@ class CodexBrain:
 class Brain:
     """Which brain answers, by mode:
     - auto: Claude first; on a usage limit switch to Codex, and retry Claude after RETRY_AFTER seconds.
+      Codex alone when only Codex is installed.
     - claude: only Claude (a usage limit is reported, no switch).
     - codex: only Codex (saves the Claude allowance)."""
 
@@ -354,15 +370,24 @@ class Brain:
         self.mode = mode if mode in self.MODES else "auto"
 
     @property
+    def only_codex(self) -> bool:
+        """Auto mode on a machine with Codex and no Claude Code: Codex answers everything."""
+        return self.mode == "auto" and not _installed("claude") and _installed("codex")
+
+    @property
     def using_backup(self) -> bool:
         if self.mode != "auto":
             return self.mode == "codex"
+        if self.only_codex:
+            return True
         return self.limited_since is not None and time.time() - self.limited_since < self.RETRY_AFTER
 
     @property
     def backup_until(self) -> float | None:
         """When Codex stops answering for Claude (auto mode after a usage limit), else None."""
-        return self.limited_since + self.RETRY_AFTER if self.mode == "auto" and self.using_backup else None
+        if self.mode != "auto" or self.limited_since is None or self.only_codex or not self.using_backup:
+            return None
+        return self.limited_since + self.RETRY_AFTER
 
     def ask(self, transcript: str) -> Iterator[tuple]:
         if self.mode == "claude":
@@ -392,7 +417,7 @@ class Brain:
     def warm(self) -> None:
         """Match the Claude process to the mode: start it now if it will answer (so the first answer isn't
         slow), stop it in codex mode (it would only hold memory). Call it between answers."""
-        if self.mode == "codex":
+        if self.mode == "codex" or self.only_codex:
             self.primary.stop()
         elif self.primary.proc is None or self.primary.proc.poll() is not None:
             self.primary.start()
@@ -424,6 +449,6 @@ class Brain:
     def forget(self) -> None:
         """Start a fresh conversation: a new Claude process (warmed up now unless the mode is codex)
         and no Codex history."""
+        self.backup.history.clear()        # first: warm() raises if Claude can't start
         self.primary.stop()
         self.warm()
-        self.backup.history.clear()
