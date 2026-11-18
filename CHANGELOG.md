@@ -14,6 +14,10 @@
   hidden folder. Opening the app (or **Set up Auren…** in the menu bar) shows a setup window that
   asks for the microphone, Accessibility and Screen Recording, takes the AssemblyAI key and checks
   for Claude Code or Codex, one button each.
+- `auren selftest` on the Mac checks everything from end to end and writes a report to send:
+  the permissions, the talk keys, the robot's place on screen, the microphone, speech to text, the
+  voice, screen capture, windows, the clipboard, the brain and the browser tools. Then a few steps
+  need you: hear a sentence, see the robot, press the talk key and ask the time.
 
 ### Fixed
 

@@ -370,3 +370,74 @@ def test_the_talk_keys_start_once_accessibility_is_allowed(monkeypatch):
     d._listen_for_keys = lambda: setattr(d, "_hotkeys", "tap")
     asyncio.run(Daemon._keys_once_allowed(d, every=0.01))       # returns only once the keys are on
     assert d._hotkeys == "tap"
+
+
+# --- auren selftest -------------------------------------------------------------------------------
+
+def test_selftest_reads_an_answer_from_the_history(monkeypatch, tmp_path):
+    from auren.mac import selftest
+    hist = tmp_path / "history.jsonl"
+    hist.write_text('{"source": "voice", "transcript": "old"}\n')
+    monkeypatch.setattr(selftest, "HISTORY", hist)
+    before = selftest._history_len()
+    with hist.open("a") as f:
+        f.write('{"source": "forget"}\nnot json\n{"source": "voice", "transcript": "what time is it", "reply": "Ten.",'
+                ' "tools": [], "heard_s": 0.4, "think_s": 1.2, "brain": "codex"}\n')
+    rec = selftest._wait_history(before, "voice", 1)
+    assert rec["transcript"] == "what time is it"
+    assert selftest._wait_history(selftest._history_len(), "voice", 0.1) is None
+
+
+@pytest.mark.parametrize("rec,wanted,status", [
+    (None, "", "fail"),
+    ({"transcript": "x", "reply": "Sorry, my brain hit an error: no", "tools": []}, "", "fail"),
+    ({"transcript": "x", "reply": "", "tools": []}, "", "fail"),
+    ({"transcript": "x", "reply": "Safari and Notes.", "tools": []}, "system_state", "warn"),
+    ({"transcript": "x", "reply": "Safari and Notes.", "tools": ["system_state"]}, "system_state", "ok"),
+])
+def test_selftest_judges_a_turn_by_its_reply_and_tools(rec, wanted, status):
+    from auren.mac import selftest
+    assert selftest._turn(rec, "turn", wanted)["status"] == status
+
+
+def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
+    import asyncio
+
+    from auren.mac import selftest
+
+    def broken(*a):
+        raise RuntimeError("no Quartz here")
+
+    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard"):
+        monkeypatch.setattr(selftest, name, broken)
+
+    async def fine(*a):
+        return selftest.result("async", "ok")
+
+    for name in ("_microphone", "_speech_service", "_voice"):
+        monkeypatch.setattr(selftest, name, fine)
+    rows = asyncio.run(selftest.inside(object()))
+    assert len(rows) == 9
+    assert [r["status"] for r in rows].count("fail") == 6
+    assert all("no Quartz here" in r["detail"] for r in rows if r["status"] == "fail")
+
+
+def test_selftest_writes_a_report_with_every_result_and_the_logs(monkeypatch, tmp_path):
+    from auren.mac import selftest
+    ok, bad = selftest.result("fine", "ok", "yes"), selftest.result("mascot window", "fail", "off every screen")
+    monkeypatch.setattr(selftest, "_about", lambda: ["macOS: 27.2"])
+    monkeypatch.setattr(selftest, "_doctor", lambda: [ok])
+    monkeypatch.setattr(selftest, "_daemon", lambda: ([bad], {"state": "idle"}))
+    monkeypatch.setattr(selftest, "_brain", lambda: ok)
+    monkeypatch.setattr(selftest, "_browser", lambda: selftest.result("browser tools", "skip", "turned off"))
+    monkeypatch.setattr(selftest, "_settings", lambda: ["brain = 'auto'"])
+    monkeypatch.setattr(selftest, "_by_hand", lambda *a: pytest.fail("--quick asks nothing"))
+    monkeypatch.setattr(selftest, "STATE_DIR", tmp_path)
+    (tmp_path / "daemon.out.log").write_text("17:22 ready in 3.0s\n")
+    out = tmp_path / "report.txt"
+    assert selftest.main(["--quick", "--out", str(out)]) == 1
+    text = out.read_text()
+    assert "result: 1 failed, 0 warnings, 2 ok, 1 skipped" in text
+    assert "FAIL mascot window: off every screen" in text
+    assert "17:22 ready in 3.0s" in text and "brain = 'auto'" in text
+    assert out.stat().st_mode & 0o077 == 0

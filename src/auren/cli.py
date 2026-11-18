@@ -15,6 +15,7 @@ macOS only:
   auren mascot                # the mascot and the menu bar icon (the com.auren.mascot launch agent runs this)
   auren service install|start|stop|restart|status   # the launch agents (install.sh sets them up)
   auren permissions           # ask for the Microphone, Accessibility and Screen Recording permissions
+  auren selftest [--quick]    # check everything from end to end and write a report to send
 """
 
 from __future__ import annotations
@@ -133,6 +134,7 @@ def main() -> None:
     sub.add_parser("browser", add_help=False).add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("mascot")
     sub.add_parser("open")
+    sub.add_parser("selftest", add_help=False).add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("app").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("permissions")
     sub.add_parser("service").add_argument("args", nargs=argparse.REMAINDER)
@@ -149,7 +151,7 @@ def main() -> None:
     if a.cmd == "daemon":
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
-    if a.cmd in ("mascot", "permissions", "service", "open", "app"):
+    if a.cmd in ("mascot", "permissions", "service", "open", "app", "selftest"):
         if sys.platform != "darwin":
             print(f"auren {a.cmd} is for macOS; on Omarchy the mascot, permissions and services are set up by install.sh")
             return 2
@@ -163,6 +165,9 @@ def main() -> None:
             return open_app()
         if a.cmd == "app":
             return _app(a.args)
+        if a.cmd == "selftest":
+            from .mac.selftest import main as selftest_main
+            return selftest_main(a.args)
         return _service(a.args)
     if a.cmd == "doctor":
         from .doctor import main as doctor_main

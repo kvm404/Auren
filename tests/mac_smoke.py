@@ -57,6 +57,18 @@ def app() -> None:
     print("app: ok")
 
 
+def selftest() -> None:
+    """`auren selftest --quick` with no daemon running: each check fails or passes, and the report is written."""
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "report.txt"
+        p = subprocess.run([sys.executable, "-m", "auren.cli", "selftest", "--quick", "--out", str(report)],
+                           env=_env(tmp), capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+        text = report.read_text() if report.exists() else ""
+        assert "== Inside Auren" in text and "daemon: not answering" in text, p.stdout + p.stderr
+        assert "Traceback" not in p.stdout + p.stderr, p.stdout + p.stderr
+    print("selftest: ok")
+
+
 def mascot() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         env = {**_env(tmp), "AUREN_MASCOT_DIR": str(ROOT / "mascot"), "QT_QPA_PLATFORM": "offscreen"}
@@ -82,4 +94,5 @@ if __name__ == "__main__":
     assert sys.platform == "darwin", "this checks the macOS port: run it on a Mac"
     imports()
     app()
+    selftest()
     mascot()
