@@ -96,6 +96,8 @@ class Daemon:
     _hearing: Turn | None = None          # the turn the current listen belongs to
     _finishing = None                     # the listen whose transcript release() is waiting for (a Stop drops it)
     phone = None                          # the phone server's hub (phone_server.Hub), when it runs
+    phone_requests = None                 # what phones asked (phone_server.Requests): kept across its restarts
+    _phone_lock: asyncio.Lock | None = None
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
     _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
@@ -888,12 +890,16 @@ class Daemon:
     async def _restart_phone(self) -> None:
         """phone.enabled, phone.port or phone.lan changed: stop the server (its sockets and the phones'
         connections close) and start it again as the settings now say, or not at all."""
-        old = getattr(self, "_phone_task", None)
-        if old:
-            old.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await old
-        self._phone_task = asyncio.create_task(self._serve_phone())
+        # One restart at a time: two at once could each start a server, and only one would be tracked (and
+        # stopped by a later disable).
+        self._phone_lock = self._phone_lock or asyncio.Lock()
+        async with self._phone_lock:
+            old = getattr(self, "_phone_task", None)
+            if old:
+                old.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await old
+            self._phone_task = asyncio.create_task(self._serve_phone())
 
     async def _serve_phone(self) -> None:
         """The phone remote's server, on the Tailscale and private LAN addresses, while phone.enabled isn't false."""

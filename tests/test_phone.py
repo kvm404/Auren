@@ -235,7 +235,7 @@ def test_send_to_phone_is_offered_only_with_a_paired_phone(monkeypatch):
 
 class _Daemon:
     """What the hub calls on the daemon, recorded."""
-    listening = _hearing = None
+    listening = _hearing = phone = None
     state = "idle"
     settings: dict = {}
 
@@ -723,6 +723,69 @@ def test_microphone_frames_only_feed_the_phone_that_started_the_listen():
     hub.audio(b, b"\x01\x02")
     hub.audio(a, b"\x03\x04")
     assert audio.get_nowait() == b"\x03\x04" and audio.empty()
+
+
+def test_what_phones_asked_outlives_a_server_restart(monkeypatch):
+    """A reload (phone.lan toggled) makes a new hub: an accepted request resent after a lost ACK must not run
+    again, and a reply that came meanwhile still waits for its phone."""
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([], {"tailscale": "off"}))
+
+    async def go():
+        d = _Daemon()
+        first = asyncio.create_task(phone_server.supervise(d))
+        await _until(lambda: d.phone is not None)
+        hub, conn = d.phone, _conn("dev")
+        assert (await hub.request(conn, {"type": "ask", "id": "a1", "text": "hi"}))["status"] == "ok"
+        first.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(phone_server.supervise(d))
+        await _until(lambda: d.phone is not None)
+        assert d.phone is not hub
+        d.phone.reply(Turn("phone", "a1", "dev"), "It's noon.")
+        again = await d.phone.request(conn, {"type": "ask", "id": "a1", "text": "hi"})
+        back = _conn("dev")
+        d.phone.resume(back, ["a1"])
+        second.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await second
+        return d, again, _drain(back)
+
+    d, again, resumed = asyncio.run(go())
+    assert d.asked == [("a1", "hi", "phone")]
+    assert again == {"type": "ack", "id": "a1", "status": "ok", "duplicate": True}
+    assert [m["text"] for m in resumed] == ["It's noon."]
+
+
+def test_overlapping_reloads_leave_one_server_and_disable_stops_it(tmp_path, monkeypatch):
+    live = set()
+
+    async def serve(self):
+        if self.settings.get("phone.enabled") is False:
+            return
+        me = object()
+        live.add(me)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0.01)                 # shutting down takes a moment (uvicorn winding down)
+            live.discard(me)
+
+    async def go():
+        d = _Harness(tmp_path)
+        d.settings["phone.enabled"] = True
+        d._phone_task = asyncio.create_task(serve(d))
+        await asyncio.sleep(0)
+        await asyncio.gather(d._restart_phone(), d._restart_phone())
+        await asyncio.sleep(0)
+        assert len(live) == 1
+        d.settings["phone.enabled"] = False
+        await d._restart_phone()
+        await asyncio.sleep(0.05)
+        return len(live)
+
+    monkeypatch.setattr(daemon.Daemon, "_serve_phone", serve)
+    assert asyncio.run(go()) == 0
 
 
 # --- the hub over HTTP: sharing and pairing --------------------------------------------------------

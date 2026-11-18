@@ -100,15 +100,24 @@ class Conn:
                 self.out.put_nowait(None)
 
 
-class Hub:
-    """The phones connected now, and what the daemon tells them."""
+class Requests:
+    """What the phones asked, by device/request id. It outlives a server restart (a settings reload makes a new
+    Hub), so a request resent after a lost ACK never runs twice and a reply waits for its phone across it."""
 
-    def __init__(self, daemon):
-        self.daemon = daemon
-        self.conns: set[Conn] = set()
+    def __init__(self):
         self.seen: OrderedDict[str, str] = OrderedDict()
         self.inflight: set[str] = set()                     # requests running now: a resend gets "in progress"
         self.replies: OrderedDict[str, tuple[float, dict]] = OrderedDict()   # device/rid -> the reply, for a resume
+
+
+class Hub:
+    """The phones connected now, and what the daemon tells them."""
+
+    def __init__(self, daemon, requests: Requests | None = None):
+        self.daemon = daemon
+        self.conns: set[Conn] = set()
+        requests = requests or Requests()
+        self.seen, self.inflight, self.replies = requests.seen, requests.inflight, requests.replies
         self.paired = bool(phone.devices())
         self.inbox_last = phone.last_id()
         self.addrs: list[dict] = []                         # where the server listens now: [{"ip", "via"}]
@@ -637,7 +646,9 @@ class _Running:
 async def supervise(daemon) -> None:
     """Run the server on the Tailscale and private LAN addresses while there are any; follow them when they
     change. Cancelling it stops the server: the phones' sockets and the listening sockets close."""
-    hub = Hub(daemon)
+    if getattr(daemon, "phone_requests", None) is None:
+        daemon.phone_requests = Requests()
+    hub = Hub(daemon, daemon.phone_requests)
     daemon.phone = hub
     sweeper = asyncio.create_task(hub.sweep())
     port = int(daemon.settings.get("phone.port", 8735))
