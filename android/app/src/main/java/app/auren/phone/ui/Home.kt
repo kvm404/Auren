@@ -127,9 +127,8 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
 private fun LinkPill(link: Link) {
     val pc = Remote.store.pc?.name ?: "PC"
     val (dot, label) = when (link.kind) {
-        LinkKind.CONNECTED -> Au.Gold to pc
+        LinkKind.CONNECTED -> Au.Gold to "$pc · ${link.via.lowercase()}"
         LinkKind.CONNECTING -> Au.Holo to "connecting"
-        LinkKind.NO_TAILSCALE -> Au.Red to "tailscale off"
         LinkKind.UNREACHABLE -> Au.Red to "$pc unreachable"
         LinkKind.SERVER_OFF -> Au.Red to "auren off"
         LinkKind.REVOKED -> Au.Red to "unpaired"
@@ -152,8 +151,8 @@ private fun LinkCard(link: Link, onPairAgain: () -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val pc = Remote.store.pc?.name ?: "your PC"
     val (title, body) = when (link.kind) {
-        LinkKind.NO_TAILSCALE -> "Tailscale is off" to "Auren reaches $pc only through Tailscale. Turn it on in the Tailscale app."
-        LinkKind.UNREACHABLE -> "Can't reach $pc" to "Is it awake and connected to Tailscale?"
+        LinkKind.UNREACHABLE -> "Can't reach $pc" to
+            "Is it awake? At home, join its Wi-Fi. Away, turn on Tailscale on this phone and the PC."
         LinkKind.SERVER_OFF -> "$pc is up, Auren isn't" to "Start Auren on the PC. If it is running, auren doctor says why the phone server is off."
         LinkKind.REVOKED -> "This phone was unpaired" to "Its key was revoked on the PC. Pair again with auren phone pair."
         else -> "" to ""
@@ -166,7 +165,7 @@ private fun LinkCard(link: Link, onPairAgain: () -> Unit) {
         Text(body, color = Au.Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when (link.kind) {
-                LinkKind.NO_TAILSCALE -> GoldButton("Open Tailscale") {
+                LinkKind.UNREACHABLE -> GoldButton("Open Tailscale") {
                     val i = ctx.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")
                         ?: android.content.Intent(android.content.Intent.ACTION_VIEW,
                             android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"))

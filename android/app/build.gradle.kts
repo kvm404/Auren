@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.coroutines.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
     // Android's own org.json is a stub in local unit tests: the protocol tests use the real one.
     testImplementation(libs.json)
 }

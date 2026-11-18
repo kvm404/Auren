@@ -65,17 +65,7 @@ class MainActivity : ComponentActivity() {
     private fun take(i: Intent?) {
         when (i?.action) {
             Intent.ACTION_VIEW -> i.dataString?.takeIf { it.startsWith("auren://pair") }?.let { pairLink.value = it }
-            ACTION_TALK -> if (Remote.store.pc != null && micAllowed()) {
-                if (Remote.link.value.kind == LinkKind.CONNECTED) Remote.talkStart(handsFree = true)
-                else Remote.talkWhenConnected = true
-            }
         }
-    }
-
-    private fun micAllowed() = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-    companion object {
-        const val ACTION_TALK = "app.auren.phone.TALK"
     }
 }
 

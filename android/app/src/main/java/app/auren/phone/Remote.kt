@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.speech.tts.TextToSpeech
 import kotlinx.coroutines.CoroutineScope
@@ -11,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -32,15 +32,16 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.net.Inet4Address
-import java.net.NetworkInterface
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 /** Where the link to the PC stands, and what the user can do about it. */
-enum class LinkKind { UNPAIRED, NO_TAILSCALE, CONNECTING, CONNECTED, UNREACHABLE, SERVER_OFF, REVOKED }
+enum class LinkKind { UNPAIRED, CONNECTING, CONNECTED, UNREACHABLE, SERVER_OFF, REVOKED }
 
-data class Link(val kind: LinkKind, val why: String = "")
+/** [via] is the live path while connected: "Wi-Fi" or "Tailscale". */
+data class Link(val kind: LinkKind, val why: String = "", val via: String = "")
 
 enum class Who { YOU, AUREN, NOTE }
 
@@ -51,19 +52,31 @@ data class Talk(val id: String, val handsFree: Boolean, val heard: Boolean = fal
 
 /**
  * The one connection to the PC, for every screen, the share sheet and the tile. It keeps a WebSocket open
- * while any screen is showing (or the microphone is on), reconnects with backoff, and resends asks and
- * answers the PC hasn't acked: their ids make a resend that already ran harmless.
+ * while any screen is showing, over the PC's address on this Wi-Fi when there is one and over Tailscale
+ * otherwise, always TLS pinned to the PC's certificate. It reconnects with backoff, resends asks the PC
+ * hasn't acked (their ids make a resend that already ran harmless) and, after a reconnect, asks for the
+ * replies it missed. A Yes/No is never resent: it answers only the question it was tapped on.
  */
 object Remote {
     private lateinit var app: Application
     lateinit var store: Store
         private set
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
+    private val plain: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
+    private var pinned: Pair<String, OkHttpClient>? = null
+
+    /** A client that trusts the one certificate [fp] names, and nothing else. */
+    @Synchronized
+    private fun client(fp: String): OkHttpClient {
+        pinned?.let { (f, c) -> if (f == fp) return c }
+        val trust = PinnedTrust(fp)
+        return plain.newBuilder().sslSocketFactory(trust.socketFactory(), trust).hostnameVerifier(PinnedTrust.ANY_HOST)
+            .build().also { pinned = fp to it }
+    }
 
     private val _link = MutableStateFlow(Link(LinkKind.UNPAIRED))
     val link: StateFlow<Link> = _link
@@ -86,9 +99,13 @@ object Remote {
 
     private var ws: WebSocket? = null
     private var connected = false
-    private var users = 0
+    @Volatile private var host: String? = null      // the address the open connection uses
+    private var gen = 0                             // bumped on pair/unpair: the old PC's connection is dropped
     private var loop: Job? = null
     private val wake = Channel<Unit>(Channel.CONFLATED)
+    private val saves = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var inboxLast = 0L             // the newest inbox id the PC has sent; saved with the items
+    private val users = Users(scope, GRACE_MS, onLast = ::leftScreen, onIdle = ::idle)
     private val pending = LinkedHashMap<String, Pair<String, Long>>()     // id -> (message, when queued)
     private var mic: Mic? = null
     private var voiceTurn: String? = null          // the last listen's id, until its words come back
@@ -102,7 +119,9 @@ object Remote {
         app = application
         store = Store(application)
         _readAloud.value = store.readAloud
-        _inbox.value = store.loadInbox().sortedByDescending { it.id }
+        val saved = store.inbox.load()
+        inboxLast = saved.last
+        _inbox.value = saved.items.sortedByDescending { it.id }
         _unread.value = _inbox.value.count { it.id > store.inboxSeen }
         _link.value = Link(if (store.pc == null) LinkKind.UNPAIRED else LinkKind.CONNECTING)
         val cm = application.getSystemService(ConnectivityManager::class.java)
@@ -110,22 +129,35 @@ object Remote {
             override fun onAvailable(network: Network) { wake.trySend(Unit) }
             override fun onLost(network: Network) { wake.trySend(Unit) }
         })
+        // One writer, always the newest state: an older save can't land after a newer one.
+        scope.launch(Dispatchers.IO) { for (x in saves) store.inbox.save(inboxLast, _inbox.value) }
     }
 
     // --- lifecycle: connected while something shows ----------------------------------------------
 
     fun start() {
-        users++
+        users.acquire()
         if (loop?.isActive != true) loop = scope.launch { run() }
         else wake.trySend(Unit)
     }
 
     fun stop() {
-        users = maxOf(0, users - 1)
-        if (users == 0) scope.launch {
-            delay(4_000)                        // a rotation or a quick app switch keeps the link
-            if (users == 0 && _talk.value == null) loop?.cancel()?.also { close() }
-        }
+        users.release()
+    }
+
+    /** The last screen closed: the microphone stops now, and the PC stops listening. */
+    private fun leftScreen() {
+        if (_talk.value == null) return
+        stopMic()
+        send(Outgoing.cancel())
+    }
+
+    /** Nobody came back: close the connection. */
+    private fun idle() {
+        loop?.cancel()
+        loop = null
+        close()
+        if (_link.value.kind == LinkKind.CONNECTED) _link.value = Link(LinkKind.CONNECTING)
     }
 
     fun retry() {
@@ -151,13 +183,22 @@ object Remote {
                 continue
             }
             if (_link.value.kind != LinkKind.CONNECTED) _link.value = Link(LinkKind.CONNECTING)
-            val tailnet = withContext(Dispatchers.IO) { tailnetUp() }
-            val (outcome, greeted) = connectOnce(pc)
-            if (outcome.kind == LinkKind.REVOKED) {
-                _link.value = outcome
+            val g = gen
+            val order = tryOrder(pc.hosts, withContext(Dispatchers.IO) { wifi() }, pc.last)
+            var outcome = Link(LinkKind.UNREACHABLE)
+            var greeted = false
+            for (h in order) {                  // Wi-Fi first when the PC is on it, then Tailscale
+                val (o, hello) = connectOnce(pc, h, g)
+                if (o.kind != LinkKind.UNREACHABLE || outcome.kind == LinkKind.UNREACHABLE) outcome = o
+                greeted = hello
+                if (hello || o.kind == LinkKind.REVOKED || g != gen) break     // it was up: start again from the top
+            }
+            if (g != gen) {                     // paired again, or unpaired: start over with what's stored now
+                backoff = 1_000L
                 continue
             }
-            _link.value = if (!tailnet) Link(LinkKind.NO_TAILSCALE) else outcome
+            _link.value = outcome
+            if (outcome.kind == LinkKind.REVOKED) continue
             if (greeted) backoff = 1_000L
             withTimeoutOrNull(backoff) { wake.receive() }
             backoff = minOf(backoff * 2, 15_000L)
@@ -171,10 +212,10 @@ object Remote {
     }
 
     /** One WebSocket, until it closes. Returns why it ended, and whether the PC said hello first. */
-    private suspend fun connectOnce(pc: Pc): Pair<Link, Boolean> {
+    private suspend fun connectOnce(pc: Pc, to: String, g: Int): Pair<Link, Boolean> {
         val events = Channel<Event>(Channel.UNLIMITED)
-        val req = Request.Builder().url("${pc.base}/v1/ws").header("Authorization", "Bearer ${pc.token}").build()
-        val socket = http.newWebSocket(req, object : WebSocketListener() {
+        val req = Request.Builder().url("${pc.ws(to)}/v1/ws").header("Authorization", "Bearer ${pc.token}").build()
+        val socket = client(pc.fp).newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) { events.trySend(Event.Text(text)) }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
@@ -189,10 +230,15 @@ object Remote {
         var greeted = false
         try {
             for (e in events) {
+                if (g != gen) return Link(LinkKind.CONNECTING) to greeted       // a message for the PC before
                 when (e) {
                     is Event.Text -> {
                         val m = Incoming.parse(e.text) ?: continue
-                        if (m is Incoming.Hello) greeted = true
+                        if (m is Incoming.Hello) {
+                            greeted = true
+                            greet(m, pc, to)
+                            continue
+                        }
                         if (m is Incoming.Revoked) return revoked() to greeted
                         handle(m)
                     }
@@ -204,10 +250,13 @@ object Remote {
                 }
             }
         } finally {
-            connected = false
-            ws = null
+            if (ws === socket) {
+                connected = false
+                ws = null
+                host = null
+                stopMic()
+            }
             socket.cancel()
-            stopMic()
         }
         return Link(LinkKind.UNREACHABLE) to greeted
     }
@@ -221,38 +270,63 @@ object Remote {
 
     private fun describe(t: Throwable): String {
         val msg = (t.message ?: t.javaClass.simpleName)
+        if (t is SSLException) return "$PIN: $msg"
         return if ("ECONNREFUSED" in msg || "refused" in msg.lowercase(Locale.ROOT)) "$REFUSED: $msg" else msg
     }
 
     private fun close() {
         ws?.close(1000, null)
         ws = null
+        host = null
         connected = false
     }
 
     // --- what the PC says ---------------------------------------------------------------------------
 
+    /** The PC said hello on [to]: remember the address that worked and the ones it listens on now. */
+    private fun greet(m: Incoming.Hello, pc: Pc, to: String) {
+        connected = true
+        host = to
+        _link.value = Link(LinkKind.CONNECTED, via = pathOf(to))
+        val hosts = if (m.addrs.isEmpty()) pc.hosts else (m.addrs + to).distinct()     // a new LAN IP, say
+        if (hosts != pc.hosts || pc.last != to) store.pc = pc.copy(hosts = hosts, last = to)
+        setState(m.state)
+        if (m.inboxLast < inboxLast) inboxLast = 0                // the PC's inbox was reset
+        send(Outgoing.sync(inboxLast))
+        val now = System.currentTimeMillis()
+        pending.filterValues { now - it.second > STALE_MS }.keys.forEach {
+            pending.remove(it)
+            done(it)
+        }
+        pending.values.forEach { send(it.first) }
+        // What the PC took but hadn't answered when the link dropped: its reply, or "lost", comes back.
+        val waiting = _lines.value.filter { it.waiting && it.id !in pending }.map { it.id } + listOfNotNull(voiceTurn)
+        if (waiting.isNotEmpty()) send(Outgoing.resume(waiting.distinct()))
+        if (talkWhenConnected) {
+            talkWhenConnected = false
+            talkStart(handsFree = true)
+        }
+    }
+
     private fun handle(m: Incoming) {
         when (m) {
-            is Incoming.Hello -> {
-                connected = true
-                _link.value = Link(LinkKind.CONNECTED)
-                setState(m.state)
-                if (m.inboxLast < store.inboxLast) store.inboxLast = 0       // the PC's inbox was reset
-                send(Outgoing.sync(store.inboxLast))
-                val now = System.currentTimeMillis()
-                pending.filterValues { now - it.second > STALE_MS }.keys.forEach {
-                    pending.remove(it)
-                    done(it)
-                }
-                pending.values.forEach { send(it.first) }
-                if (talkWhenConnected) {
-                    talkWhenConnected = false
-                    talkStart(handsFree = true)
-                }
-            }
+            is Incoming.Hello -> Unit
             is Incoming.State -> setState(m.state)
+            is Incoming.Lost -> {
+                pending.remove(m.id)
+                if (_lines.value.any { it.id == m.id && it.waiting } || voiceTurn == m.id) {
+                    addLine(Line("lost-${m.id}", Who.NOTE, "The reply to that was lost. Ask again if you still need it."))
+                }
+                if (voiceTurn == m.id) voiceTurn = null
+                done(m.id)
+            }
+            is Incoming.Ended -> {
+                pending.remove(m.id)
+                if (voiceTurn == m.id) voiceTurn = null
+                done(m.id)
+            }
             is Incoming.Reply -> {
+                if (voiceTurn == m.id) voiceTurn = null
                 done(m.id)
                 val text = m.text.ifBlank { "Done." }
                 addLine(Line("r-${m.id}-${m.at}", Who.AUREN, text))
@@ -315,11 +389,10 @@ object Remote {
         if (!send(msg)) _notices.tryEmit("Sends when the PC is back")
     }
 
+    /** Yes or No to the question showing now. Not kept for later: after a reconnect, the PC asks again. */
     fun answer(yes: Boolean) {
-        val id = newId()
-        val msg = Outgoing.answer(id, yes)
-        pending[id] = msg to System.currentTimeMillis()
-        if (!send(msg)) _notices.tryEmit("Sends when the PC is back")
+        val s = _state.value
+        if (!s.awaiting || !send(Outgoing.answer(newId(), yes, s.ask))) _notices.tryEmit("Not connected to the PC")
     }
 
     fun cancel() {
@@ -381,9 +454,9 @@ object Remote {
         if (_inbox.value.any { it.id == item.id }) return
         val all = (_inbox.value + item).sortedByDescending { it.id }.take(Store.KEEP)
         _inbox.value = all
-        if (item.id > store.inboxLast) store.inboxLast = item.id
+        if (item.id > inboxLast) inboxLast = item.id
         if (item.id > store.inboxSeen) _unread.value = all.count { it.id > store.inboxSeen }
-        scope.launch(Dispatchers.IO) { store.saveInbox(all) }
+        saves.trySend(Unit)
     }
 
     fun inboxSeen() {
@@ -391,13 +464,12 @@ object Remote {
         _unread.value = 0
     }
 
+    /** Clear the list on this phone. The cursor stays: the PC doesn't send these again. */
     fun clearInbox() {
         _inbox.value = emptyList()
         _unread.value = 0
-        scope.launch(Dispatchers.IO) {
-            store.saveInbox(emptyList())
-            File(app.cacheDir, "inbox").deleteRecursively()
-        }
+        saves.trySend(Unit)
+        scope.launch(Dispatchers.IO) { File(app.cacheDir, "inbox").deleteRecursively() }
     }
 
     fun setReadAloud(on: Boolean) {
@@ -422,62 +494,89 @@ object Remote {
         tts?.stop()
     }
 
-    // --- pairing, sharing and files (plain HTTP) -------------------------------------------------------
+    // --- pairing, sharing and files (HTTPS, pinned) -----------------------------------------------------
 
     /** Trade the pairing code for a token. Returns null when paired, or what went wrong. */
     suspend fun pair(p: Pairing): String? = withContext(Dispatchers.IO) {
         val body = JSONObject().put("code", p.code).put("name", deviceName()).toString()
-        val req = Request.Builder().url("http://${p.host}:${p.port}/v1/pair")
-            .post(body.toRequestBody(JSON)).build()
-        try {
-            http.newCall(req).execute().use { r ->
-                val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
-                if (!r.isSuccessful) return@withContext o.optString("error").ifBlank { "The PC said ${r.code}" }
-                val dev = o.optJSONObject("device") ?: JSONObject()
-                store.pc = Pc(p.host, p.port, o.getString("token"), dev.optString("id"), o.optString("pc", p.pc))
-                store.inboxLast = 0
-                withContext(Dispatchers.Main) {
-                    clearInbox()
-                    _lines.value = emptyList()
-                    _link.value = Link(LinkKind.CONNECTING)
-                    wake.trySend(Unit)
+        var refused = false
+        var wrongPc: String? = null
+        for (h in tryOrder(p.hosts, wifi(), null)) {
+            val req = Request.Builder().url("https://$h:${p.port}/v1/pair").post(body.toRequestBody(JSON)).build()
+            try {
+                client(p.fp).newCall(req).execute().use { r ->
+                    val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                    if (!r.isSuccessful) return@withContext o.optString("error").ifBlank { "The PC said ${r.code}" }
+                    val dev = o.optJSONObject("device") ?: JSONObject()
+                    val addrs = o.optJSONArray("addrs")?.let { a ->
+                        Pairing.hosts((0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("ip") })
+                    }.orEmpty()
+                    val pc = Pc((addrs + h).distinct(), p.port, o.getString("token"), dev.optString("id"),
+                        o.optString("pc", p.pc), p.fp, last = h)
+                    withContext(Dispatchers.Main) {
+                        reset()
+                        store.pc = pc
+                        _link.value = Link(LinkKind.CONNECTING)
+                        wake.trySend(Unit)
+                    }
+                    return@withContext null
                 }
-                null
+            } catch (e: IOException) {
+                val why = describe(e)
+                if (why.startsWith(REFUSED)) refused = true
+                if (why.startsWith(PIN)) wrongPc = h
             }
-        } catch (e: IOException) {
-            val why = describe(e)
-            when {
-                why.startsWith(REFUSED) -> "Auren isn't serving on ${p.pc}. Is the daemon running? Try auren doctor."
-                !tailnetUp() -> "Tailscale is off on this phone. Turn it on and try again."
-                else -> "Can't reach ${p.pc} at ${p.host}. Is it awake and on Tailscale?"
-            }
+        }
+        when {
+            wrongPc != null -> "Something at $wrongPc answered, but it isn't ${p.pc}: its certificate doesn't match the code."
+            refused -> "Auren isn't serving on ${p.pc}. Is the daemon running? Try auren doctor."
+            else -> "Can't reach ${p.pc}. Is this phone on the same Wi-Fi, or on Tailscale?"
         }
     }
 
     /** Forget the PC on this phone. (`auren phone revoke` on the PC is what stops the token working.) */
     fun unpair() {
         store.pc = null
-        close()
-        stopMic()
-        pending.clear()
-        _lines.value = emptyList()
-        _state.value = AurenState()
-        clearInbox()
+        reset()
         _link.value = Link(LinkKind.UNPAIRED)
         wake.trySend(Unit)
     }
+
+    /**
+     * Everything that belonged to the PC this phone was paired with: its connection, unsent asks, the
+     * conversation, its state, its inbox and the inbox cursor. A new pairing starts clean.
+     */
+    private fun reset() {
+        gen++
+        ws?.cancel()
+        ws = null
+        host = null
+        connected = false
+        stopMic()
+        pending.clear()
+        voiceTurn = null
+        talkWhenConnected = false
+        _lines.value = emptyList()
+        _state.value = AurenState()
+        inboxLast = 0
+        store.inboxSeen = 0
+        clearInbox()
+    }
+
+    /** The addresses to try for a request: the live connection's first, then the usual order. */
+    private fun routes(pc: Pc): List<String> = (listOfNotNull(host) + tryOrder(pc.hosts, wifi(), pc.last)).distinct()
 
     /** POST /v1/share. Returns the PC's status ("ok", "busy", "error: ...") or why it couldn't send. */
     suspend fun share(kind: String, action: String, text: String, note: String, data: String? = null, mime: String? = null): String =
         withContext(Dispatchers.IO) {
             val pc = store.pc ?: return@withContext "error: not paired"
             val body = Outgoing.share(newId(), kind, action, text, note, data, mime)
-            val req = Request.Builder().url("${pc.base}/v1/share").header("Authorization", "Bearer ${pc.token}")
-                .post(body.toRequestBody(JSON)).build()
             var last = ""
-            repeat(2) {                        // one resend, same id: the PC runs it at most once
+            for (h in routes(pc)) {             // the same id on every try: the PC runs it at most once
+                val req = Request.Builder().url("${pc.base(h)}/v1/share").header("Authorization", "Bearer ${pc.token}")
+                    .post(body.toRequestBody(JSON)).build()
                 try {
-                    http.newCall(req).execute().use { r ->
+                    client(pc.fp).newCall(req).execute().use { r ->
                         if (r.code == 401) return@withContext "error: this phone isn't paired any more"
                         val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
                         return@withContext o.optString("status").ifBlank { o.optString("error", "error: ${r.code}") }
@@ -496,41 +595,40 @@ object Remote {
         val dir = File(app.cacheDir, "inbox").apply { mkdirs() }
         val out = File(dir, "${item.id}-${f.name.replace(Regex("[^\\w.-]"), "_")}")
         if (out.exists() && out.length() == f.size) return@withContext out
-        val req = Request.Builder().url("${pc.base}/v1/inbox/${item.id}/file")
-            .header("Authorization", "Bearer ${pc.token}").build()
-        try {
-            http.newCall(req).execute().use { r ->
-                if (!r.isSuccessful) return@withContext null
-                val tmp = File(dir, out.name + ".part")
-                r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } } ?: return@withContext null
-                tmp.renameTo(out)
-                out
+        for (h in routes(pc)) {
+            val req = Request.Builder().url("${pc.base(h)}/v1/inbox/${item.id}/file")
+                .header("Authorization", "Bearer ${pc.token}").build()
+            try {
+                client(pc.fp).newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) return@withContext null
+                    val tmp = File.createTempFile(out.name, ".part", dir)
+                    r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } } ?: return@withContext null
+                    if (!tmp.renameTo(out)) tmp.delete()
+                    return@withContext out.takeIf { it.exists() }
+                }
+            } catch (_: IOException) {
             }
-        } catch (_: IOException) {
-            null
         }
+        null
     }
 
     // --- the network --------------------------------------------------------------------------------
 
-    /** Whether this phone has a Tailscale address now (the Tailscale app's VPN is up). */
-    fun tailnetUp(): Boolean {
-        try {
-            val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            @Suppress("DEPRECATION")
-            for (n in cm.allNetworks) {
-                val props = cm.getLinkProperties(n) ?: continue
-                if (props.linkAddresses.any { a -> a.address is Inet4Address && isTailnet(a.address.hostAddress.orEmpty()) }) return true
-            }
-        } catch (_: Exception) {
+    /** This phone's own Wi-Fi (or Ethernet) IPv4 addresses with their prefix lengths: which LAN it is on. */
+    private fun wifi(): List<Pair<String, Int>> = try {
+        val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        @Suppress("DEPRECATION")
+        cm.allNetworks.flatMap { n ->
+            val caps = cm.getNetworkCapabilities(n)
+            val local = caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+            if (!local) emptyList()
+            else cm.getLinkProperties(n)?.linkAddresses.orEmpty()
+                .filter { it.address is Inet4Address }
+                .map { it.address.hostAddress.orEmpty() to it.prefixLength }
         }
-        return try {
-            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().any { ni ->
-                ni.isUp && ni.inetAddresses.toList().any { it is Inet4Address && isTailnet(it.hostAddress.orEmpty()) }
-            }
-        } catch (_: Exception) {
-            false
-        }
+    } catch (_: Exception) {
+        emptyList()
     }
 
     private fun deviceName(): String {
@@ -541,6 +639,8 @@ object Remote {
 
     private val JSON = "application/json".toMediaType()
     private const val REFUSED = "refused"
+    private const val PIN = "tls"
+    private const val GRACE_MS = 4_000L                // a quick app switch keeps the link
     private const val STALE_MS = 2 * 60_000L          // an ask older than this isn't resent: it would surprise
-    private val QUIET = setOf("not listening", "cancelled", "nothing is waiting for an answer")
+    private val QUIET = setOf("not listening", "cancelled", "nothing is waiting for an answer", "in progress")
 }

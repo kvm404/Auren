@@ -9,17 +9,62 @@ import java.net.URLDecoder
  */
 const val API = 1
 
-/** Tailscale hands out 100.64.0.0/10. The app only ever talks to such an address. */
-fun isTailnet(host: String): Boolean {
+private fun octets(host: String): List<Int>? {
     val parts = host.split(".")
-    if (parts.size != 4) return false
-    val n = parts.map { it.toIntOrNull() ?: return false }
-    if (n.any { it !in 0..255 }) return false
+    if (parts.size != 4) return null
+    val n = parts.map { p -> p.toIntOrNull()?.takeIf { it in 0..255 && p == it.toString() } ?: return null }
+    return n
+}
+
+/** Tailscale hands out 100.64.0.0/10. */
+fun isTailnet(host: String): Boolean {
+    val n = octets(host) ?: return false
     return n[0] == 100 && n[1] in 64..127
 }
 
-/** What `auren phone pair` shows: auren://pair?v=1&host=100.x.y.z&port=8735&code=...&pc=name */
-data class Pairing(val host: String, val port: Int, val code: String, val pc: String) {
+/** A private LAN address (RFC 1918): what the PC listens on for the phone's Wi-Fi. */
+fun isPrivateLan(host: String): Boolean {
+    val n = octets(host) ?: return false
+    return n[0] == 10 || (n[0] == 172 && n[1] in 16..31) || (n[0] == 192 && n[1] == 168)
+}
+
+/** The app only ever talks to an address like these, and only over TLS pinned to the PC's certificate. */
+fun isPcAddress(host: String) = isTailnet(host) || isPrivateLan(host)
+
+/** How the phone reaches an address, as the app shows it. */
+fun pathOf(host: String) = if (isTailnet(host)) "Tailscale" else "Wi-Fi"
+
+/** Whether [host] is on the network [net]/[prefix] (the phone's own Wi-Fi address and its prefix length). */
+fun onSubnet(host: String, net: String, prefix: Int): Boolean {
+    val a = octets(host) ?: return false
+    val b = octets(net) ?: return false
+    if (prefix !in 1..32) return false
+    val x = a.fold(0L) { acc, o -> acc * 256 + o }
+    val y = b.fold(0L) { acc, o -> acc * 256 + o }
+    val mask = (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+    return (x and mask) == (y and mask)
+}
+
+/**
+ * The order to try the PC's addresses in: a LAN address on the phone's current Wi-Fi first (the short, direct
+ * path), then Tailscale, then any other LAN address. Within each, the one that worked last goes first.
+ * [wifi] is the phone's own Wi-Fi addresses with their prefix lengths.
+ */
+fun tryOrder(hosts: List<String>, wifi: List<Pair<String, Int>>, last: String?): List<String> {
+    val local = hosts.filter { h -> isPrivateLan(h) && wifi.any { (ip, n) -> onSubnet(h, ip, n) } }
+    val tail = hosts.filter(::isTailnet)
+    val other = hosts.filter { isPrivateLan(it) && it !in local }
+    fun lastFirst(l: List<String>) = l.sortedByDescending { it == last }
+    return (lastFirst(local) + lastFirst(tail) + lastFirst(other)).distinct()
+}
+
+private val FINGERPRINT = Regex("[0-9a-f]{64}")
+
+/**
+ * What `auren phone pair` shows:
+ * auren://pair?v=1&hosts=100.x.y.z,192.168.0.5&port=8735&code=...&fp=<sha256 of the PC's certificate>&pc=name
+ */
+data class Pairing(val hosts: List<String>, val port: Int, val code: String, val fp: String, val pc: String) {
     companion object {
         fun parse(text: String): Pairing? {
             val s = text.trim()
@@ -29,12 +74,16 @@ data class Pairing(val host: String, val port: Int, val code: String, val pc: St
                 if (k.isEmpty()) null else k to URLDecoder.decode(it.substringAfter('='), "UTF-8")
             }.toMap()
             if ((q["v"]?.toIntOrNull() ?: return null) != API) return null
-            val host = q["host"] ?: return null
+            val hosts = hosts(q["hosts"].orEmpty().split(','))
             val port = q["port"]?.toIntOrNull() ?: return null
             val code = q["code"]?.takeIf { it.isNotBlank() } ?: return null
-            if (!isTailnet(host) || port !in 1..65535) return null
-            return Pairing(host, port, code, q["pc"].orEmpty().ifBlank { "PC" })
+            val fp = q["fp"]?.lowercase()?.replace(":", "")?.takeIf { FINGERPRINT.matches(it) } ?: return null
+            if (hosts.isEmpty() || port !in 1..65535) return null
+            return Pairing(hosts, port, code, fp, q["pc"].orEmpty().ifBlank { "PC" })
         }
+
+        /** The addresses the app will use: Tailscale or private LAN ones, nothing else. */
+        fun hosts(raw: List<String>) = raw.map(String::trim).filter(::isPcAddress).distinct()
     }
 }
 
@@ -50,6 +99,7 @@ data class AurenState(
     val awaiting: Boolean = false,
     val question: String = "",
     val until: Double = 0.0,
+    val ask: String = "",                // which question is open: a Yes/No names it, so it can't approve another
     val transcript: String = "",
     val reply: String = "",
     val tool: String = "",
@@ -72,6 +122,7 @@ data class AurenState(
             awaiting = o.optBoolean("awaiting"),
             question = o.optString("question"),
             until = o.optDouble("until", 0.0),
+            ask = o.optString("ask"),
             transcript = o.optString("transcript"),
             reply = o.optString("reply"),
             tool = o.optString("tool"),
@@ -116,7 +167,10 @@ data class Device(val id: String, val name: String)
 
 /** A message from the PC. */
 sealed interface Incoming {
-    data class Hello(val api: Int, val pc: String, val device: Device?, val inboxLast: Long, val state: AurenState) : Incoming
+    data class Hello(
+        val api: Int, val pc: String, val device: Device?, val inboxLast: Long, val state: AurenState,
+        val addrs: List<String> = emptyList(),
+    ) : Incoming
     data class State(val state: AurenState) : Incoming
     data class Reply(val id: String, val text: String, val at: Double) : Incoming
     data class Inbox(val item: InboxItem) : Incoming
@@ -126,6 +180,10 @@ sealed interface Incoming {
         val busy get() = status == "busy"
     }
     data class Busy(val id: String, val owner: String) : Incoming
+    /** The PC has no reply for this request and never will (it restarted, or the reply expired). */
+    data class Lost(val id: String) : Incoming
+    /** The request's turn ended without a reply (nothing was heard, or it was stopped). */
+    data class Ended(val id: String) : Incoming
     data object Revoked : Incoming
     data class Error(val id: String, val error: String) : Incoming
     data class Pong(val id: String) : Incoming
@@ -139,12 +197,17 @@ sealed interface Incoming {
                     o.optInt("api"), o.optString("pc"),
                     o.optJSONObject("device")?.let { Device(it.optString("id"), it.optString("name")) },
                     o.optLong("inboxLast"), AurenState.from(o.optJSONObject("state") ?: JSONObject()),
+                    o.optJSONArray("addrs")?.let { a ->
+                        Pairing.hosts((0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("ip") })
+                    }.orEmpty(),
                 )
                 "state" -> State(AurenState.from(o))
                 "reply" -> Reply(o.optString("id"), o.optString("text"), o.optDouble("at", 0.0))
                 "inbox" -> o.optJSONObject("item")?.let(InboxItem::from)?.let(::Inbox)
                 "ack" -> Ack(o.optString("id"), o.optString("status"), o.optBoolean("duplicate"))
                 "busy" -> Busy(o.optString("id"), o.optString("owner", "desk"))
+                "lost" -> Lost(o.optString("id"))
+                "ended" -> Ended(o.optString("id"))
                 "revoked" -> Revoked
                 "error" -> Error(o.optString("id"), o.optString("error"))
                 "pong" -> Pong(o.optString("id"))
@@ -154,14 +217,19 @@ sealed interface Incoming {
     }
 }
 
-/** Messages to the PC. Requests with an id are acked; resending one the PC already took is harmless. */
+/**
+ * Messages to the PC. Requests with an id are acked; resending one the PC already took is harmless. An answer
+ * is never resent: it is only for the question it names, and only while connected.
+ */
 object Outgoing {
     fun ask(id: String, text: String) = obj("ask").put("id", id).put("text", text).toString()
     fun talkStart(id: String, handsFree: Boolean, fresh: Boolean = false) =
         obj("talk.start").put("id", id).put("handsFree", handsFree).put("fresh", fresh).toString()
     fun talkStop() = obj("talk.stop").toString()
     fun cancel() = obj("cancel").toString()
-    fun answer(id: String, yes: Boolean) = obj("answer").put("id", id).put("yes", yes).toString()
+    fun answer(id: String, yes: Boolean, ask: String) = obj("answer").put("id", id).put("yes", yes).put("ask", ask).toString()
+    /** After a reconnect: the requests still waiting for a reply. Each gets it, or "lost". */
+    fun resume(ids: List<String>) = obj("resume").put("ids", org.json.JSONArray(ids)).toString()
     fun sync(after: Long) = obj("sync").put("after", after).toString()
     fun ping(id: String) = obj("ping").put("id", id).toString()
 

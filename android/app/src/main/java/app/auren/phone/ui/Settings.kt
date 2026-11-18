@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.auren.phone.LinkKind
+import app.auren.phone.pathOf
 import app.auren.phone.Remote
 
 @Composable
@@ -50,13 +51,12 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
         Card {
             Text(pc?.name ?: "Not paired", color = Au.Text, fontSize = 16.sp)
             if (pc != null) {
-                Text("${pc.host}:${pc.port}", color = Au.Dim, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                Text(pc.hosts.joinToString("  ") { "$it (${pathOf(it)})" } + "  port ${pc.port}", color = Au.Dim, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                     modifier = Modifier.padding(top = 2.dp))
                 Text(
                     when (link.kind) {
-                        LinkKind.CONNECTED -> "Connected over Tailscale"
+                        LinkKind.CONNECTED -> "Connected over ${link.via}"
                         LinkKind.CONNECTING -> "Connecting…"
-                        LinkKind.NO_TAILSCALE -> "Tailscale is off on this phone"
                         LinkKind.SERVER_OFF -> "The PC is up; Auren isn't serving"
                         LinkKind.UNREACHABLE -> "Can't reach the PC"
                         LinkKind.REVOKED -> "This phone's key was revoked"

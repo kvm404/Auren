@@ -104,7 +104,7 @@ fun PairScreen(prefill: String?, onPaired: () -> Unit, onBack: (() -> Unit)?) {
         Text("Talk to your PC from here.", color = Au.Text, fontSize = 20.sp)
         Text(
             "On the PC, run auren phone pair. Scan the code it shows, or paste the link under it. " +
-                "Both devices need Tailscale.",
+                "Pair on the same Wi-Fi as the PC, or with Tailscale on both.",
             color = Au.Dim, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 6.dp),
         )
         Text("auren phone pair", color = Au.Gold, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
