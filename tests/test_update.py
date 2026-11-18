@@ -48,6 +48,7 @@ def env(tmp_path, monkeypatch):
     for name, path in {"INSTALL_INFO": info, "SOURCE": tmp_path / "cache" / "source",
                        "STATUS": tmp_path / "run" / "update.json", "LOG": tmp_path / "state" / "update.log",
                        "NOTIFIED": tmp_path / "state" / "notified", "LOCK": tmp_path / "run" / "update.lock",
+                       "SUGGESTED": tmp_path / "state" / "package-suggested",
                        "STATE_FILE": tmp_path / "run" / "state.json"}.items():
         monkeypatch.setattr(update, name, path)
     monkeypatch.setenv("INSTALLS", str(tmp_path / "installs"))
@@ -473,3 +474,110 @@ def test_moved_installed_release_tag_is_refused_with_a_fresh_cache(env, operatio
     assert "tag" in result["message"] and "changed" in result["message"]
     assert env.installs() == [] and env.calls == []
     assert json.loads(env.info.read_text())["commit"] == env.first
+
+
+# --- the Arch package ---------------------------------------------------------------------------------
+
+@pytest.fixture
+def package(env, monkeypatch, tmp_path):
+    from auren import config
+    monkeypatch.setattr(config, "PACKAGED", True)
+    monkeypatch.setattr(update, "_version", lambda: "0.1.0")
+    monkeypatch.setattr(update, "DEFAULT_REMOTE", str(env.remote))     # the package checks Auren's own repo
+    share = tmp_path / "usr/share/auren"
+    (share / "bar-plugin").mkdir(parents=True)
+    (share / "bar-plugin/Panel.qml").write_text("v1")
+    monkeypatch.setattr(config, "PACKAGE_SHARE", share)
+    monkeypatch.setattr(update.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "yay" else None)
+    versions = ["0.1.0-1"]
+    monkeypatch.setattr(update, "_package_version", lambda: versions[0])
+    monkeypatch.setattr(update, "_aur_version", lambda: "")     # unreachable: the GitHub release decides
+    ran = []
+    real_run = subprocess.run
+
+    def run(cmd, **kw):                                 # yay only: git still runs for the fake GitHub
+        if not cmd[0].endswith("yay"):
+            return real_run(cmd, **kw)
+        ran.append(cmd)
+        versions[0] = "0.1.1-1"
+        (share / "bar-plugin/Panel.qml").write_text("v2")
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(update.subprocess, "run", run)
+    env.ran, env.share = ran, share
+    return env
+
+
+def test_the_package_is_compared_by_version(package):
+    r = update.check()                                          # releases v0.1.0 only
+    assert r["state"] == "current" and r["installed"]["mode"] == "package"
+    commit(package.remote, "a.py")                              # v0.1.1
+    r = update.check()
+    assert r["state"] == "available" and r["latest"]["tag"] == "v0.1.1" and "yay" in r["note"]
+
+
+def test_the_package_updates_in_a_terminal(package, monkeypatch):
+    opened = []
+    monkeypatch.setattr(update.subprocess, "Popen", lambda cmd, **kw: opened.append(cmd))
+    monkeypatch.setattr(update.shutil, "which",
+                        lambda name: "/usr/bin/omarchy-launch-floating-terminal-with-presentation"
+                        if name.startswith("omarchy-launch") else None)
+    update.start()
+    assert opened and opened[0][1].endswith("auren update pacman")
+    assert package.installs() == []                             # the self-updater never ran
+
+
+def test_the_package_update_stops_auren_runs_yay_and_starts_it_again(package):
+    assert update.run_package() == 0
+    assert package.ran == [["/usr/bin/yay", "-S", "--needed", "auren"]]
+    assert ("stop", "auren", "auren-mascot") in package.calls
+    assert package.active["auren"] and not package.active["auren-mascot"]     # as they were
+    assert update.status()["state"] == "done" and "0.1.1-1" in update.status()["message"]
+    assert package.shell == [True]                              # the bar plugin changed
+
+
+def test_after_a_self_update_the_package_is_suggested_once(env):
+    env.install_info(env.first)
+    commit(env.remote, "a.py")
+    assert update.run() == 0
+    commit(env.remote, "b.py")
+    assert update.run() == 0
+    assert len([n for n in notice.shown if "Arch package" in " ".join(n)]) == 1
+
+
+def test_a_release_not_on_the_aur_yet_isnt_offered(package, monkeypatch):
+    commit(package.remote, "a.py")                              # GitHub has v0.1.1
+    monkeypatch.setattr(update, "_aur_version", lambda: "0.1.0-1")
+    assert update.check()["state"] == "current"
+    monkeypatch.setattr(update, "_aur_version", lambda: "0.1.0-2")   # a rebuild counts
+    assert update.check()["state"] == "available"
+
+
+
+def test_versions_compare_without_pacman_too(monkeypatch):
+    def no_vercmp(*a, **kw):
+        raise OSError
+    monkeypatch.setattr(update.subprocess, "run", no_vercmp)
+    assert update._newer("0.1.0-2", "0.1.0-1") and update._newer("0.1.10-1", "0.1.9-3")
+    assert not update._newer("0.1.0-1", "0.1.0-1") and not update._newer("0.1.0", "0.1.1-1")
+
+
+def test_the_package_update_does_nothing_when_auren_wont_stop(package):
+    package.broken.add("stop")
+    assert update.run_package() == 1
+    assert package.ran == [] and "didn't stop" in update.status()["message"]
+    assert package.active["auren"]
+
+
+def test_the_package_update_starts_auren_again_if_yay_blows_up(package, monkeypatch):
+    def boom(cmd, **kw):
+        raise RuntimeError("terminal gone")
+    monkeypatch.setattr(update.subprocess, "run", boom)
+    with pytest.raises(RuntimeError):
+        update.run_package()
+    assert package.active["auren"]                              # restarted in the finally
+
+
+def test_opening_the_update_terminal_counts_as_started(package, monkeypatch):
+    monkeypatch.setattr(update.subprocess, "Popen", lambda cmd, **kw: None)
+    monkeypatch.setattr(update.shutil, "which", lambda name: "/usr/bin/x" if name.startswith("omarchy-launch") else None)
+    assert update.main(["apply"]) == 0

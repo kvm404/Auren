@@ -1,19 +1,22 @@
 """auren on the command line.
 
   auren daemon                # the voice daemon (the auren systemd service runs this)
+  auren setup                 # set Auren up for you: talk keys, bar plugin, API key, voice, services
   auren doctor                # what works on this machine, and how to fix what doesn't
   auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
-  auren voice-model           # download the voice model (install.sh runs this)
+  auren voice-model           # download the voice model (auren setup runs this)
   auren update                # check for a newer version, and install it if you say so
   auren browser               # the browser tools: status, setup, which browser to use
   auren chat                  # type requests, see tool calls and the reply
   auren ask "open whatsapp"   # one request
 
+Run with nothing after it, `auren` sets Auren up the first time, then shows this help.
+
 macOS only:
   auren open                  # start Auren and show its setup window (what opening Auren.app does)
   auren app install|uninstall # Auren.app in ~/Applications (install-macos.sh builds it)
   auren mascot                # the mascot and the menu bar icon (the com.auren.mascot launch agent runs this)
-  auren service install|start|stop|restart|status   # the launch agents (install.sh sets them up)
+  auren service install|start|stop|restart|status   # the launch agents (install-macos.sh sets them up)
   auren permissions           # ask for the Microphone, Accessibility and Screen Recording permissions
 """
 
@@ -128,7 +131,23 @@ def _service(args: list[str]) -> int:
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="auren", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    if len(sys.argv) == 1:                   # `auren` alone: set up the first time (what pacman says to run)
+        from . import config, setup
+        if config.PACKAGED and not setup.done():
+            return setup.main([])
+        if not config.PACKAGED and (config.PACKAGE_BIN / "auren").exists():    # an install.sh copy hides it
+            print(f"This is the install.sh copy of Auren. To use the package instead, run: "
+                  f"{config.PACKAGE_BIN / 'auren'} setup\n")
+        p.print_help()
+        return 0
+    if sys.argv[1] == "setup":               # its own flags and --help
+        from .setup import main as setup_main
+        return setup_main(sys.argv[2:])
+    if sys.argv[1] == "with-display":        # the mascot's service (display.py)
+        from .display import main as display_main
+        return display_main(sys.argv[2:])
     sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("setup", add_help=False)
     sub.add_parser("chat")
     sub.add_parser("doctor")
     sub.add_parser("config").add_argument("args", nargs=argparse.REMAINDER)
@@ -152,6 +171,10 @@ def main() -> None:
         sp.add_argument("--backup", action="store_true", help="use the backup brain (Codex) directly")
     a = p.parse_args()
     if a.cmd == "daemon":
+        from .display import wait
+        code = wait()                        # under systemd, the session's display may not be here yet
+        if code is not None:
+            return code
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
     if a.cmd in ("mascot", "permissions", "service", "open", "app"):

@@ -8,6 +8,11 @@ Every path Auren uses comes from here, following the XDG base directories:
     DATA_HOME    ~/.local/share/auren     the installed program: venv, UI files, auren-ctl, voice model
     RUNTIME_DIR  $XDG_RUNTIME_DIR/auren   socket, state file, loudness level
 
+On Omarchy, Auren is installed one of two ways. install.sh puts the program itself in DATA_HOME. The Arch package
+puts it in /usr (PACKAGE_LIB, PACKAGE_SHARE, /usr/bin), and `auren setup` links DATA_HOME's bin/,
+mascot/ and bar-plugin/ to it, so key bindings, the mascot and the bar plugin find everything at the
+same paths either way.
+
 On macOS the same folders are used (XDG variables are rarely set there), except RUNTIME_DIR, which is
 ~/Library/Application Support/auren-runtime/auren: not $TMPDIR, which macOS empties of files unused
 for 3 days, sockets included. The brain's working folder stays outside $HOME, in $TMPDIR.
@@ -103,6 +108,21 @@ SETTINGS = CONFIG_DIR / "settings.json"     # the old settings file, moved into 
 ROUTINES_DIR = CONFIG_DIR / "routines"
 MODELS_DIR = DATA_HOME / "models"
 DATA = Path(__file__).parent / "data"
+
+# The Arch package's files (packaging/arch/PKGBUILD)
+PACKAGE_LIB = Path("/usr/lib/auren")           # its Python environment, this code included
+PACKAGE_SHARE = Path("/usr/share/auren")       # mascot/ and bar-plugin/
+PACKAGE_UNITS = Path("/usr/lib/systemd/user")
+PACKAGE_BIN = Path("/usr/bin")
+PACKAGE_NAME = "auren"
+
+
+def _packaged() -> bool:
+    return Path(__file__).resolve().is_relative_to(PACKAGE_LIB)
+
+
+PACKAGED = _packaged()                         # running from the Arch package, not an install.sh install
+REINSTALL = f"yay -S {PACKAGE_NAME}" if PACKAGED else "./install.sh"   # what puts missing program files back
 
 
 def secret(name: str) -> str | None:

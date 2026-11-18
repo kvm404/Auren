@@ -7,7 +7,8 @@
 # available, confirm, updating, failed (Updates page), refused (Vocabulary page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
 # awaiting (Auren is asking two yes/no questions: every page of that run shows it), autosend (auto-send is on,
 # after 5 s: every page of that run too).
-# PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does.
+# PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does. PANEL_PACKAGED=1 shows an install
+# made with the Arch package.
 #
 # It runs a separate Quickshell off-screen with Omarchy's own UI parts, except the popup window and the
 # bar button, which are drawn in place (tests/panel/Ui). Every XDG folder points to a temp dir with a
@@ -50,16 +51,20 @@ autosend=false
 printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","codexModel":"gpt-6-luna","codexEffort":"low","safety":"ask","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1},"autosend":%s,"autosendAfter":5%s}' \
   "$now" "$keeper" "$autosend" "$asking" >"$tmp/run/auren/state.json"
 # A stand-in for `auren vocab`, with a few words of the user's own.
-mkdir -p "$tmp/data/auren/venv/bin"
-cat >"$tmp/data/auren/venv/bin/auren" <<'SH'
+mkdir -p "$tmp/data/auren/bin"
+cat >"$tmp/data/auren/bin/auren" <<'SH'
 #!/bin/sh
 echo '{"ok": true, "message": "", "limit": 80, "mine": ["Zorblax", "Kaushal", "pull request", "Tensaku"], "defaults": ["herdr", "Codex", "Claude", "OpenCode", "Antigravity", "Grok", "Omarchy", "Hyprland", "systemctl", "subagent", "window", "tab", "browser", "Quickshell", "Auren", "Veyra", "npm", "bun", "PR", "plugin"]}'
 SH
-chmod +x "$tmp/data/auren/venv/bin/auren"
+chmod +x "$tmp/data/auren/bin/auren"
 printf '{"at":%s,"source":"voice","transcript":"Open Excalidraw.","reply":"Excalidraw is open now.","tools":["launch_app"],"think_s":3.2,"brain":"claude"}\n' \
   "$now" >"$tmp/state/auren/history.jsonl"
-printf '{"version":"0.1.0","commit":"54ebe81000000000000000000000000000000000","committed":%s,"mode":"install"}' \
-  "$((now - 86400))" >"$tmp/data/auren/install.json"
+if [[ -n ${PANEL_PACKAGED:-} ]]; then        # installed with the Arch package: updates run yay in a terminal
+  printf '{"version":"0.1.0","mode":"package","package":"auren","installed_at":%s}' "$now" >"$tmp/data/auren/install.json"
+else
+  printf '{"version":"0.1.0","commit":"54ebe81000000000000000000000000000000000","committed":%s,"mode":"install"}' \
+    "$((now - 86400))" >"$tmp/data/auren/install.json"
+fi
 
 cd "$cfg"
 SHOTS="$shots" OUT="$out" PANEL_MAX_HEIGHT="${PANEL_MAX_HEIGHT:-}" XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/run" XDG_STATE_HOME="$tmp/state" \

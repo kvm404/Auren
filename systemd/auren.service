@@ -1,14 +1,17 @@
 [Unit]
 Description=Auren voice assistant (ears, brain, hands, voice)
-After=wayland-session-waitenv.service pipewire.service
+After=graphical-session.target wayland-session-waitenv.service pipewire.service
 PartOf=graphical-session.target
-ConditionEnvironment=WAYLAND_DISPLAY
+# No ConditionEnvironment=WAYLAND_DISPLAY: systemd checks a condition once, so a display that arrives
+# late at login would keep Auren off until the next login. The daemon waits for it itself
+# (src/auren/display.py): 75 means "start again", 78 "there's no display, stop".
 
 [Service]
 @ENV@
-ExecStart=@SHARE@/venv/bin/auren daemon
+ExecStart=@AUREN@ daemon
 Restart=on-failure
 RestartSec=3
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=graphical-session.target
