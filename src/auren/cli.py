@@ -4,6 +4,7 @@
   auren doctor                # what works on this machine, and how to fix what doesn't
   auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
   auren voice-model           # download the voice model (install.sh runs this)
+  auren phone pair            # pair the phone app (also: auren phone devices, auren phone revoke <id>)
   auren update                # check for a newer version, and install it if you say so
   auren browser               # the browser tools: status, setup, which browser to use
   auren chat                  # type requests, see tool calls and the reply
@@ -60,6 +61,7 @@ def main() -> None:
     sub.add_parser("vocab").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("update").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("browser", add_help=False).add_argument("args", nargs=argparse.REMAINDER)
+    sub.add_parser("phone", add_help=False).add_argument("args", nargs=argparse.REMAINDER)
     dmn = sub.add_parser("daemon")
     dmn.add_argument("--quiet", action="store_true", help="no voice; replies shown on the OSD")
     ask = sub.add_parser("ask")
@@ -85,6 +87,9 @@ def main() -> None:
     if a.cmd == "browser":
         from .browser_cli import main as browser_main
         return browser_main(a.args)
+    if a.cmd == "phone":
+        from .phone import main as phone_main
+        return phone_main(a.args)
     if a.cmd == "update":
         from .update import main as update_main
         return update_main(a.args)

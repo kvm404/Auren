@@ -28,6 +28,11 @@ class Integration:
     what: str
     tools: frozenset[str]
     offer_unset: bool = False       # its tools are offered while it's missing too (they explain how to set it up)
+    key: str = ""           # the config.toml switch, if not integrations.<name>
+
+    @property
+    def setting(self) -> str:
+        return self.key or f"integrations.{self.name}"
 
 
 INTEGRATIONS = {
@@ -39,6 +44,7 @@ INTEGRATIONS = {
     "screen": Integration("screen", "mouse control",
                           frozenset({"click_at", "drag_at", "scroll_at", "excalidraw_draw", "excalidraw_read",
                                      "spotify_play"})),
+    "phone": Integration("phone", "phone remote", frozenset({"send_to_phone"}), key="phone.enabled"),
 }
 
 
@@ -69,12 +75,15 @@ def _installed(name: str) -> tuple[bool, str]:
         return True, ""
     if name == "screen":
         return (True, "") if os.access("/dev/uinput", os.W_OK) else (False, "/dev/uinput isn't writable")
+    if name == "phone":
+        from . import phone
+        return (True, "") if phone.devices() else (False, "no phone is paired (auren phone pair)")
     raise KeyError(name)
 
 
 def state(name: str) -> tuple[str, str]:
     """("on" | "off" | "missing", why): off when config turns it off; missing when it's wanted but not here."""
-    if settings()[f"integrations.{name}"] is False:
+    if settings()[INTEGRATIONS[name].setting] is False:
         return "off", "turned off in config.toml"
     ok, why = installed(name)
     return ("on", "") if ok else ("missing", why)

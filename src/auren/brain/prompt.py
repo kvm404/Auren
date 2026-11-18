@@ -42,6 +42,8 @@ SCREEN = """- Web apps (Discord, WhatsApp and the others launch_app opens) are t
 
 NO_SCREEN = """- You can see the screen (look_at_screen) and type or press keys in the focused window (type_text, press_keys), but you can't move or click the mouse on this laptop. If something needs a click, say so."""
 
+PHONE = """- The user's phone is paired (the Auren app). When they ask to send something to their phone ("send this to my phone", "put that link on my phone"), use send_to_phone: kind link for a web address, text for a note or snippet, image or file with the path of a file on this laptop (take a screenshot first if they mean the screen). Requests marked as coming from the phone are read there, as text: keep the reply as short as usual."""
+
 END = """- Routines (below) are the user's saved workflows. When a request matches one, follow its steps.
 
 Safety:
@@ -59,7 +61,7 @@ def rules(active: set[str] | None = None) -> str:
         from ..integrations import INTEGRATIONS, offered
         active = {n for n in INTEGRATIONS if offered(n)}
     return "\n".join([CORE, HERDR if "herdr" in active else NO_HERDR, BROWSER if "browser" in active else NO_BROWSER,
-                      SCREEN if "screen" in active else NO_SCREEN, END])
+                      SCREEN if "screen" in active else NO_SCREEN, *([PHONE] if "phone" in active else []), END])
 
 
 def user_instructions() -> str:

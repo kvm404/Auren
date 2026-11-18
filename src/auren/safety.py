@@ -520,6 +520,11 @@ def _is_top(path: str) -> bool:
     return path in ("/", "/home", os.path.expanduser("~")) or os.path.dirname(path) == "/home"
 
 
+def mentions_secrets(text: str) -> bool:
+    """Does this (a path, a note) look like keys, passwords or tokens (.env, ~/.ssh, "api key")?"""
+    return bool(_COMMAND_KINDS[SECRETS].search(text or ""))
+
+
 def command_risk(command: str) -> str | None:
     """Why a shell command needs confirmation, or None if it can run straight away."""
     risk = assess_command(command)

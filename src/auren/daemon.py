@@ -27,6 +27,10 @@ live transcript, what auren is doing, and the sentence being spoken), and the
 loudness to $XDG_RUNTIME_DIR/auren/level. When the mascot isn't running, the
 Omarchy OSD shows short messages instead. Every exchange is logged to
 ~/.local/state/auren/history.jsonl.
+
+The phone remote (phone_server.py) talks to the same pipeline. One turn runs at a time, from listening to
+the end of the answer: while the desk has one, the phone gets "busy", and the other way round. Stop works
+from both. A phone's turn is answered on the phone, as text: the PC doesn't speak it or show notices.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 
 from . import notice
 from .brain import Brain, BrainError, Interrupted
@@ -69,10 +74,24 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
 
 
 # A request with more than one part ("close it and open Spotify"): after a yes to one part, the brain must go on.
+# Told to the brain with a request from the phone: the user isn't at the laptop, and reads the reply.
+PHONE_NOTE = "(From the user's phone: they may be away from the laptop. Your reply is shown on the phone as text.)"
 COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|next|too|as well)\b|[,;]|[.?!]\s*\S", re.I)
 
 
+@dataclass(eq=False)
+class Turn:
+    """One request, from its listen (or typed text) to the end of its answer."""
+    origin: str = "desk"        # "desk" (keys, mascot, auren-ctl) or "phone"
+    id: str = ""                # the phone's request id
+    device: str = ""            # the phone's device id
+    open: bool = True           # until the answer ends (or nothing was heard, or it was cancelled)
+
+
 class Daemon:
+    owner: Turn | None = None             # the latest turn: while it is open, another origin gets "busy"
+    _hearing: Turn | None = None          # the turn the current listen belongs to
+    phone = None                          # the phone server's hub (phone_server.Hub), when it runs
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
     _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
     _earlier: tuple[str, ...] = ()       # what happened to answers the brain wasn't told of yet (told with the next message)
@@ -111,8 +130,10 @@ class Daemon:
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
                                    "voices": self.voice.names if self.voice else [],
                                    "tts": tuning(self.settings), "autosend": self.autosend,
-                                   "autosendAfter": self.autosend_after, **extra}))
+                                   "autosendAfter": self.autosend_after, "origin": self._origin(), **extra}))
         tmp.replace(STATE_FILE)
+        if self.phone:
+            self.phone.state_changed()
         if state != "listening":           # partial transcripts would flood the log
             log.info("state %s %s", state, detail[:120])
         self._watch_handover()
@@ -143,10 +164,41 @@ class Daemon:
         try:
             extra = {k: v for k, v in json.loads(STATE_FILE.read_text()).items()
                      if k not in ("state", "detail", "since", "pid", "brain", "mode", "effort", "codexModel", "codexEffort",
-                                  "voice", "voiceName", "voices", "tts", "safety", "autosend", "autosendAfter")}
+                                  "voice", "voiceName", "voices", "tts", "safety", "autosend", "autosendAfter", "origin")}
         except (OSError, json.JSONDecodeError):
             extra = {}
         self.set_state(self.state, self.detail, **extra)
+
+    # --- turns: one at a time, from the desk or the phone ---------------------------------------------
+
+    def _origin(self) -> str | None:
+        return self.owner.origin if self.owner and self.owner.open else None
+
+    def busy_for(self, origin: str) -> bool:
+        """Is a turn of the other origin under way?"""
+        return self._origin() not in (None, origin)
+
+    def admit(self, turn: Turn) -> bool:
+        """Start this turn, unless the other origin has one: then it's refused (busy)."""
+        if self.busy_for(turn.origin):
+            return False
+        self.owner = turn
+        return True
+
+    def _phone_turn(self) -> bool:
+        return self._origin() == "phone"
+
+    def _show(self, *args, **kwargs) -> None:
+        if not self._phone_turn():           # the user is at the phone: nothing pops up on the PC
+            notice.show(*args, **kwargs)
+
+    def _notify(self, *args, **kwargs) -> None:
+        if not self._phone_turn():
+            notice.notify(*args, **kwargs)
+
+    def _desk_refused(self) -> str:
+        notice.show("Auren is busy with your phone", "auren", 2000)
+        return "busy"
 
     def _from_thread(self, state: str, detail: str = "", **extra) -> None:
         self.loop.call_soon_threadsafe(lambda: self.set_state(state, detail, **extra))
@@ -188,6 +240,8 @@ class Daemon:
         if cmd in ("talk", "talk-fresh", "listen", "listen-fresh") and not self.listening and self.state in ("thinking", "working"):
             await self.cancel()                      # the talk key stops an answer in progress
             return "stopped"
+        if cmd in ("talk", "talk-fresh", "listen", "listen-fresh", "start", "stop") and self.busy_for("desk"):
+            return self._desk_refused()              # the phone is talking or being answered
         if cmd == "talk":
             return await (self.release() if self.listening else self.press())
         if cmd == "talk-fresh":
@@ -217,7 +271,10 @@ class Daemon:
             await self.cancel()
             return "cancelled"
         if cmd == "ask" and arg:
-            asyncio.create_task(self.respond(arg, source="typed"))
+            turn = Turn("desk")
+            if not self.admit(turn):
+                return self._desk_refused()
+            asyncio.create_task(self.respond(arg, source="typed", turn=turn))
             return "asked"
         if cmd == "say" and arg:
             asyncio.create_task(self.say(arg))
@@ -269,12 +326,7 @@ class Daemon:
         if cmd == "autosend":
             return self._autosend(arg.split())
         if cmd in ("yes", "no"):
-            waiting = self.tools.confirmations.batch(SESSION)
-            if not waiting:
-                return "nothing is waiting for an answer"
-            # Only what is shown now: a second click, or a question asked meanwhile, isn't covered by this one.
-            asyncio.create_task(self.answer(cmd == "yes", "button", {t for t, _ in waiting}))
-            return ("approved " if cmd == "yes" else "dropped ") + str(len(waiting))
+            return self.yes_no(cmd == "yes", Turn("desk"), "button")
         if cmd == "status":
             return json.dumps({"state": self.state, "detail": self.detail,
                                "brain": "codex" if self.brain.using_backup else "claude",
@@ -286,6 +338,50 @@ class Daemon:
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
         return f"unknown command: {cmd}"
+
+    def yes_no(self, yes: bool, turn: Turn, source: str) -> str:
+        """The answer buttons (the mascot's, auren-ctl yes|no, the phone's)."""
+        waiting = self.tools.confirmations.batch(SESSION)
+        if not waiting:
+            return "nothing is waiting for an answer"
+        if not self.admit(turn):
+            return "busy" if turn.origin == "phone" else self._desk_refused()
+        # Only what is shown now: a second click, or a question asked meanwhile, isn't covered by this one.
+        asyncio.create_task(self.answer(yes, source, {t for t, _ in waiting}, turn))
+        return ("approved " if yes else "dropped ") + str(len(waiting))
+
+    # --- the phone (phone_server.Hub calls these) --------------------------------------------------
+
+    def phone_ask(self, turn: Turn, text: str, source: str = "phone") -> str:
+        if not self.admit(turn):
+            return "busy"
+        asyncio.create_task(self.respond(text, source=source, turn=turn))
+        return "ok"
+
+    async def phone_talk(self, turn: Turn, audio: asyncio.Queue, hands_free: bool = False, fresh: bool = False) -> str:
+        if self.listening or self.state in ("thinking", "working") or not self.admit(turn):
+            return "busy"
+        out = await self.press(fresh, hands_free, turn=turn, audio=audio)
+        return "ok" if out == "listening" else out
+
+    async def phone_talk_stop(self, device: str) -> str:
+        if not self.listening or not self._hearing or self._hearing.origin != "phone":
+            return "not listening"
+        return await self.release()
+
+    async def phone_gone(self, device: str) -> None:
+        """A phone disconnected: a listen it was feeding can't go on."""
+        if self.listening and self._hearing and self._hearing.origin == "phone" and self._hearing.device == device:
+            await self.cancel()
+
+    async def phone_paired_changed(self) -> None:
+        """The first phone was paired or the last one unpaired: Claude's tools and rules change with it, and
+        they're fixed when it starts, so it starts again (a fresh conversation), between answers."""
+        async with self.busy:
+            self._fresh()
+            await asyncio.to_thread(self.brain.forget)
+            log.info("phone paired or unpaired: fresh conversation, with send_to_phone %s",
+                     "offered" if self.phone and self.phone.paired else "left out")
 
     def _save(self, changes: dict) -> None:
         """Use these settings now and write only them to config.toml: edits made to the file since the
@@ -359,9 +455,14 @@ class Daemon:
         self._refresh_state()
         return "tts " + " ".join(f"{k} {v}" for k, v in values.items())
 
-    async def press(self, fresh: bool = False, hands_free: bool = False) -> str:
+    async def press(self, fresh: bool = False, hands_free: bool = False, turn: Turn | None = None,
+                    audio: asyncio.Queue | None = None) -> str:
         if self.listening:
             return "already listening"
+        turn = turn or Turn("desk")
+        if not self.admit(turn):
+            return self._desk_refused()
+        self._hearing = turn
         if self.voice:
             self.voice.stop()            # talking over auren interrupts it
         if fresh:                        # restart the brain while the user speaks; the answer waits for it
@@ -369,18 +470,20 @@ class Daemon:
         def ended() -> None:                 # hands-free: the user stopped talking, so send it
             if self.listening is session:
                 asyncio.create_task(self.release())
-        session = self.listening = Listening(self.vocab, on_level=self.level.set, on_end=ended if hands_free else None)
+        session = self.listening = Listening(self.vocab, on_level=self.level.set, on_end=ended if hands_free else None,
+                                             audio=audio)
         session.on_partial = lambda _text: self._show_listening(session, fresh)
         self._reminding = False
         try:
             await self.listening.start()
         except Exception as e:  # noqa: BLE001
             self.listening = None
+            self._notify("Auren couldn't start listening", str(e), "error")
+            turn.open = False
             self.set_state("error", str(e))
-            notice.notify("Auren couldn't start listening", str(e), "error")
             return f"error: {e}"
         self.set_state("listening", "", fresh=fresh)
-        notice.show("Listening (fresh start)…" if fresh else "Listening…", "listening", 1200)
+        self._show("Listening (fresh start)…" if fresh else "Listening…", "listening", 1200)
         self._quiet_watch = asyncio.create_task(self._watch_quiet(session, fresh))
         return "listening"
 
@@ -410,7 +513,7 @@ class Daemon:
                 if self.listening is None:                   # not if the user started another listen meanwhile
                     self.level.set(0)
                     self.set_state("error", f"listening failed: {e}"[:200])
-            notice.notify("Auren stopped listening", str(e)[:200], "error")
+            self._notify("Auren stopped listening", str(e)[:200], "error")
 
     async def _watch_quiet_until_sent(self, session: Listening, fresh: bool) -> None:
         while self.listening is session:
@@ -438,7 +541,7 @@ class Daemon:
             if (what == "remind") != self._reminding:      # due now, or talking again took it away
                 self._show_listening(session, fresh, what)
                 if self._reminding:
-                    notice.show("Press Super+A to send", "listening", 3000)
+                    self._show("Press Super+A to send", "listening", 3000)
 
     async def _set_claude(self, effort: str | None = None, model: str | None = None) -> None:
         what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)
@@ -476,42 +579,49 @@ class Daemon:
         session, self.listening = self.listening, None
         if session is None:
             return "not listening"
+        turn = self._hearing or Turn("desk")
         self.level.set(0)
         if session.held_seconds < MIN_HOLD:
             await session.cancel()
+            turn.open = False
             self.set_state("idle", "key tap ignored")
             return "too short"
         t = time.perf_counter()
         text = await session.finish()
         heard_in = time.perf_counter() - t
         if session.error and not text:
+            self._notify("Auren couldn't hear you", session.error, "error")
+            turn.open = False
             self.set_state("error", session.error)
-            notice.notify("Auren couldn't hear you", session.error, "error")
             return "error"
         if not text:
+            self._show("Didn't catch that", "unheard")
+            turn.open = False
             self.set_state("idle", "heard nothing")
-            notice.show("Didn't catch that", "unheard")
             return "heard nothing"
         log.info("heard (%.2fs after release): %s", heard_in, text)
-        asyncio.create_task(self.respond(text, source="voice", heard_s=heard_in))
+        source = "phone-voice" if turn.origin == "phone" else "voice"
+        asyncio.create_task(self.respond(text, source=source, heard_s=heard_in, turn=turn))
         return "heard: " + text
 
     async def cancel(self) -> None:
         if self.listening:
             await self.listening.cancel()
             self.listening = None
+            if self._hearing:
+                self._hearing.open = False      # an answer in progress closes its own turn when it ends
         self.level.set(0)
         if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)
             await asyncio.to_thread(self.brain.interrupt)
-            notice.show("Stopped", "stopped")
+            self._show("Stopped", "stopped")
         if self.voice:
             self.voice.stop()
         self.set_state("idle", "cancelled")
 
     # --- answering ------------------------------------------------------------------------
 
-    async def forget(self, say: bool = True) -> None:
+    async def forget(self, say: bool = True, turn: Turn | None = None) -> None:
         async with self.busy:
             self.set_state("thinking", "Starting fresh…")
             self._fresh()
@@ -520,29 +630,44 @@ class Daemon:
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
                            "tools": [], "brain": "claude"})
         if say:
-            await self.say("Okay, fresh start. I've forgotten our conversation.")
+            await self._say("Okay, fresh start. I've forgotten our conversation.", turn)
         else:
             self.idle()
 
-    async def respond(self, text: str, source: str, heard_s: float | None = None) -> None:
-        if FORGET.match(text):
-            await self.forget()
-            return
-        async with self.busy:                          # one request at a time; later ones wait
-            # A plain yes or no to what it just asked is read here, not by the brain: the user's own words
-            # are the proof, and nothing waits for a model to turn them into a tool call.
-            if self.tools.answerable(SESSION) and (answer := parse_answer(text)):
-                await self._answer(answer == "yes", source, text, heard_s)
-            else:
-                await self._think(text, source, heard_s)
+    async def respond(self, text: str, source: str, heard_s: float | None = None, turn: Turn | None = None) -> None:
+        """Answer a request. Its turn (admitted by the caller) stays open until the answer ends."""
+        turn = turn or Turn("desk")
+        try:
+            if FORGET.match(text):
+                await self.forget(turn=turn)
+                return
+            async with self.busy:                          # one request at a time; later ones wait
+                # A plain yes or no to what it just asked is read here, not by the brain: the user's own words
+                # are the proof, and nothing waits for a model to turn them into a tool call.
+                if self.tools.answerable(SESSION) and (answer := parse_answer(text)):
+                    await self._answer(answer == "yes", source, text, heard_s, turn=turn)
+                else:
+                    await self._think(text, source, heard_s, turn=turn)
+        finally:
+            self._close(turn)
 
-    async def answer(self, yes: bool, source: str, tokens: set[str] | None = None) -> None:
-        """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no), to these questions."""
-        async with self.busy:
-            await self._answer(yes, source, tokens=tokens)
+    def _close(self, turn: Turn) -> None:
+        if turn.open:
+            turn.open = False
+            if self.phone and turn is self.owner:
+                self.phone.state_changed()        # the phone sees the turn is over (the state may not change)
+
+    async def answer(self, yes: bool, source: str, tokens: set[str] | None = None, turn: Turn | None = None) -> None:
+        """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no, the phone), to these questions."""
+        turn = turn or Turn("desk")
+        try:
+            async with self.busy:
+                await self._answer(yes, source, tokens=tokens, turn=turn)
+        finally:
+            self._close(turn)
 
     async def _answer(self, yes: bool, source: str, text: str = "", heard_s: float | None = None,
-                      tokens: set[str] | None = None) -> None:
+                      tokens: set[str] | None = None, turn: Turn | None = None) -> None:
         batch = [p for t, p in self.tools.confirmations.batch(SESSION) if tokens is None or t in tokens]
         if not batch:
             return
@@ -555,10 +680,10 @@ class Daemon:
         if not yes:
             self.tools.answer(SESSION, False, tokens)
             self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)} and the user said no, so none of it was done.",)
-            await self._finish_answer(said, source, heard_s, t0, "Okay, I won't.", [])
+            await self._finish_answer(said, source, heard_s, t0, "Okay, I won't.", [], turn)
             return
         self.set_state("working", "Doing it", transcript=said)
-        notice.show("Doing it", "auren", always=True)
+        self._show("Doing it", "auren", always=True)
         outcomes = await asyncio.to_thread(self.tools.answer, SESSION, True, tokens)
         if self.tools.cancelled(SESSION):             # stopped meanwhile: what was running finished, nothing more
             self._earlier += ("The user said yes and then stopped you; some of it may have run.",)
@@ -567,22 +692,23 @@ class Daemon:
             return
         if outcomes and all(o.ok and o.say for o in outcomes) and self._request and not COMPOUND.search(self._request):
             self._earlier += (f"You asked {'; '.join(repr(q) for q in asked)}, the user said yes and it was done.",)
-            await self._finish_answer(said, source, heard_s, t0, " ".join(o.say for o in outcomes), ["confirm_action"])
+            await self._finish_answer(said, source, heard_s, t0, " ".join(o.say for o in outcomes), ["confirm_action"],
+                                      turn)
             return
         # Anything else: the brain sees what happened, so it can go on with the task or say how it went.
         await self._think(said, source, heard_s, brain_text=_followup(outcomes, len(batch)), same_task=True,
-                          already=["confirm_action"])
+                          already=["confirm_action"], turn=turn)
 
     async def _finish_answer(self, said: str, source: str, heard_s: float | None, t0: float, reply: str,
-                             tools: list[str]) -> None:
+                             tools: list[str], turn: Turn | None = None) -> None:
         log.info("answered %r without the brain (%.2fs): %s", said, time.perf_counter() - t0, reply)
         self.tools.replied(SESSION, reply)
         self._history({"at": time.time(), "source": source, "transcript": said, "reply": reply, "tools": tools,
                        "heard_s": heard_s, "think_s": round(time.perf_counter() - t0, 2), "brain": "none"})
-        await self.say(reply)
+        await self._say(reply, turn)
 
     async def _think(self, text: str, source: str, heard_s: float | None = None, brain_text: str | None = None,
-                     same_task: bool = False, already: list[str] | None = None) -> None:
+                     same_task: bool = False, already: list[str] | None = None, turn: Turn | None = None) -> None:
         """Ask the brain (the lock is held). text: what the user said; brain_text: what the brain gets, if not that."""
         t0 = time.perf_counter()
         # Counted here, before "thinking" shows: a cancel from now on sticks (the worker can't undo it). The judge
@@ -591,8 +717,10 @@ class Daemon:
                             said="" if brain_text is not None else text)
         earlier, self._earlier = self._earlier, ()
         to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
+        if turn and turn.origin == "phone":
+            to_brain = f"{PHONE_NOTE}\n{to_brain}"
         self.set_state("thinking", text, transcript=text)
-        notice.show("Thinking…", "thinking")
+        self._show("Thinking…", "thinking")
         tools = list(already or [])
         reply = ""
 
@@ -611,7 +739,7 @@ class Daemon:
                     self.loop.call_soon_threadsafe(lambda d=doing, t=ev[1], m=mouse: progress(
                         "working", d, tool=t, mouse=m, transcript=text))
                     if (kind := notice_kind(ev[1])) and not self.tools.cancelled(SESSION):
-                        notice.show(doing, kind, always=True)      # actions show on the OSD with the bubble up too
+                        self._show(doing, kind, always=True)      # actions show on the OSD with the bubble up too
                 elif ev[0] == "switch":
                     self.loop.call_soon_threadsafe(lambda d=ev[1]: progress("thinking", d))
                 elif ev[0] == "say":
@@ -642,13 +770,24 @@ class Daemon:
                        "heard_s": heard_s, "think_s": round(think_s, 2),
                        "brain": "codex" if self.brain.using_backup else "claude"})
         if reply:
-            await self.say(reply)
+            await self._say(reply, turn)
         else:
+            if turn and turn.origin == "phone" and self.phone:
+                self.phone.reply(turn, "")
             self.idle()
+
+    async def _say(self, text: str, turn: Turn | None) -> None:
+        """The reply to a turn: a phone's is shown on the phone as text (it may read it out itself), not spoken here."""
+        if turn and turn.origin == "phone":
+            if self.phone:
+                self.phone.reply(turn, text)
+            self.idle()
+            return
+        await self.say(text)
 
     async def say(self, text: str) -> None:
         if not self.voice_on:
-            notice.notify("Auren", text)
+            self._notify("Auren", text)
             self.set_state("speaking", text, reply=text, silent=True)
             await asyncio.sleep(min(8.0, 1.5 + len(text) / 18))    # time to read it in the mascot's bubble
             if self.state == "speaking":
@@ -704,9 +843,23 @@ class Daemon:
         os.chmod(SOCKET, 0o600)
         self.set_state("starting")
         asyncio.create_task(self.warm_up())
+        self._phone_task = asyncio.create_task(self._serve_phone())
         log.info("listening on %s", SOCKET)
         async with server:
             await server.serve_forever()
+
+
+    async def _serve_phone(self) -> None:
+        """The phone remote's server, on the Tailscale address only, while phone.enabled isn't false."""
+        if self.settings.get("phone.enabled") is False:
+            from .phone import STATUS
+            STATUS.unlink(missing_ok=True)
+            return
+        try:
+            from .phone_server import supervise
+            await supervise(self)
+        except Exception:  # noqa: BLE001 - the phone failing never takes the desk down
+            log.exception("the phone server stopped")
 
 
 def after_quiet(quiet: float, heard: bool, autosend: bool, autosend_after: float) -> str:
@@ -763,6 +916,8 @@ def main(speak: bool = True) -> int:
             pass
         d.brain.stop()
         d.tools.stop()
+        from .phone import STATUS as PHONE_STATUS
+        PHONE_STATUS.unlink(missing_ok=True)
         if SOCKET.exists():
             SOCKET.unlink()
         lock.close()

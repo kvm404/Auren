@@ -88,12 +88,16 @@ def connection_params(vocab: list[str], hands_free: bool = False) -> dict:
 
 
 class Listening:
-    """One push-to-talk turn. With on_end it is hands-free: on_end is called when the user stops talking."""
+    """One push-to-talk turn. With on_end it is hands-free: on_end is called when the user stops talking.
+    With `audio`, the sound comes from that queue (16 kHz mono s16le chunks, then None at the end: the phone's
+    microphone) instead of this PC's microphone."""
 
     def __init__(self, vocab: list[str], on_partial: Callable[[str], None] | None = None, source: list[str] | None = None,
-                 on_level: Callable[[float], None] | None = None, on_end: Callable[[], None] | None = None):
+                 on_level: Callable[[float], None] | None = None, on_end: Callable[[], None] | None = None,
+                 audio: asyncio.Queue[bytes | None] | None = None):
         self.vocab, self.on_partial, self.on_level, self.on_end = vocab, on_partial, on_level, on_end
         self.source = source or []           # extra pw-record args (e.g. --target) for testing
+        self.audio = audio
         self.mic: asyncio.subprocess.Process | None = None
         self.ws = None
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -117,23 +121,35 @@ class Listening:
         if not key:
             raise RuntimeError("no AssemblyAI key (ASSEMBLYAI_API_KEY in ~/.config/auren/secrets.env)")
         self.opened_at = time.perf_counter()
-        # The mic starts first so nothing said while the socket connects is lost.
-        self.mic = await asyncio.create_subprocess_exec(
-            "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        self._tasks.append(asyncio.create_task(self._read_mic()))
+        if self.audio is not None:
+            self._tasks.append(asyncio.create_task(self._read_audio()))
+        else:
+            # The mic starts first so nothing said while the socket connects is lost.
+            self.mic = await asyncio.create_subprocess_exec(
+                "pw-record", *self.source, "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            self._tasks.append(asyncio.create_task(self._read_mic()))
         self._tasks.append(asyncio.create_task(self._stream(f"{URL}?{urlencode(connection_params(self.vocab, self.on_end is not None))}", key)))
 
     async def _read_mic(self) -> None:
         while chunk := await self.mic.stdout.read(CHUNK):
-            await self.queue.put(chunk)
-            if len(chunk) >= 2:
-                samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
-                level = loudness(samples)
-                self._hear_level(level)
-                if self.on_level:
-                    self.on_level(level)
+            await self._heard_chunk(chunk)
         await self.queue.put(None)
+
+    async def _read_audio(self) -> None:
+        while (chunk := await self.audio.get()) is not None:
+            if chunk:
+                await self._heard_chunk(chunk)
+        await self.queue.put(None)
+
+    async def _heard_chunk(self, chunk: bytes) -> None:
+        await self.queue.put(chunk)
+        if len(chunk) >= 2:
+            samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16) / 32768.0
+            level = loudness(samples)
+            self._hear_level(level)
+            if self.on_level:
+                self.on_level(level)
 
     async def _stream(self, url: str, key: str) -> None:
         try:
@@ -223,6 +239,8 @@ class Listening:
         self.released_at = time.perf_counter()
         if self.mic and self.mic.returncode is None:
             self.mic.send_signal(signal.SIGINT)
+        if self.audio is not None:
+            self.audio.put_nowait(None)          # the end of the phone's sound: the rest goes through
         # Return as soon as the final turn is in; don't wait for the connection to close. A hands-free turn
         # already has its final: wait briefly for the session to end cleanly instead, since sessions the
         # service never sees end count against its limit on concurrent sessions for a while.
@@ -239,6 +257,8 @@ class Listening:
         return " ".join(f for f in self.finals if f).strip()
 
     async def cancel(self) -> None:
+        if self.audio is not None:
+            self.audio.put_nowait(None)
         if self.mic and self.mic.returncode is None:
             self.mic.send_signal(signal.SIGINT)
             try:

@@ -180,6 +180,8 @@ def checks() -> list[Check]:
              "browser": "auren browser setup, or turn it off: auren config set integrations.browser false",
              "screen": "add a udev rule giving your user access to /dev/uinput (see README)"}
     for name, i in integrations.INTEGRATIONS.items():
+        if name == "phone":
+            continue                     # its own group, below
         st, why = integrations.state(name)
         if st == "off":
             out.append(Check(g, i.what, OK, "turned off"))
@@ -210,6 +212,8 @@ def checks() -> list[Check]:
                      ", ".join(str(f).replace(str(Path.home()), "~") for f in folders) or "none found",
                      "" if folders else 'auren config set projects.folders "~/where/they/are"'))
 
+    out += phone_checks()
+
     # --- install ----------------------------------------------------------------------------------
     g = "Install"
     ctl = DATA_HOME / "bin/auren-ctl"
@@ -235,6 +239,36 @@ def checks() -> list[Check]:
         else:
             out.append(Check(g, unit, OK if state == "active" else WARN, state,
                              "" if state == "active" else f"systemctl --user start {unit}"))
+    return out
+
+
+def phone_checks() -> list[Check]:
+    """The phone remote: off by config, Tailscale (the server is on its address only), the server, the phones."""
+    from . import phone
+    from .settings import current as settings
+    g = "Phone"
+    if settings()["phone.enabled"] is False:
+        return [Check(g, "phone remote", OK, "turned off")]
+    wanted = settings()["phone.enabled"] is True
+    out = []
+    host, why = phone.tailscale_ip()
+    if host:
+        out.append(Check(g, "Tailscale", OK, host))
+    else:
+        out.append(Check(g, "Tailscale", FAIL if wanted else WARN, f"{why}: the phone server stays off without it",
+                         "install Tailscale (omarchy install tailscale) and run: tailscale up"
+                         if "installed" in why else "tailscale up"))
+    st = phone.status()
+    daemon_up = _run(["systemctl", "--user", "is-active", "auren"])[1] == "active" or st.get("pid")
+    if st.get("on"):
+        out.append(Check(g, "phone server", OK, f"{st['host']}:{st['port']} (Tailscale only)"))
+    elif host:
+        out.append(Check(g, "phone server", WARN, st.get("why") or "the Auren daemon isn't running",
+                         "systemctl --user restart auren" if daemon_up else "systemctl --user start auren"))
+    paired = phone.devices()
+    out.append(Check(g, "paired phones", OK if paired else WARN,
+                     ", ".join(f"{d['name']} ({d['id']})" for d in paired) or "none: send_to_phone is left out",
+                     "" if paired else "auren phone pair"))
     return out
 
 

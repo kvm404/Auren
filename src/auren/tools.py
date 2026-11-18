@@ -593,6 +593,26 @@ def notify(text: str) -> str:
 
 
 @tool()
+def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "") -> str:
+    """Send something to the user's paired phone: it shows up in the Auren app's inbox there. kind "text"
+    (content: a note, a snippet, an address), "link" (content: an http(s) URL), "image" or "file" (path: a file
+    on this laptop, copied to the phone). title: a few words saying what it is."""
+    from . import phone
+
+    def send() -> str:
+        if not phone.devices():
+            raise ValueError("no phone is paired: the user can pair one with auren phone pair")
+        it = phone.add(kind, title, content, path)
+        return f"sent to the phone's inbox (item {it['id']})"
+
+    what = path or content if kind in ("image", "file") else content
+    if kind in ("image", "file", "text") and safety.mentions_secrets(what):
+        return _gate({safety.SECRETS}, f"Send {title or what[:60]!r} to your phone? It may hold a secret.", send,
+                     say=lambda result: "Sent it to your phone." if not result.startswith("error:") else None)
+    return _run(send)
+
+
+@tool()
 def set_reminder(minutes: int, text: str) -> str:
     """Desktop reminder after a number of minutes."""
     return _run(desktop.reminder, minutes, text)
