@@ -14,6 +14,16 @@
   hidden folder. Opening the app (or **Set up Auren…** in the menu bar) shows a setup window that
   asks for the microphone, Accessibility and Screen Recording, takes the AssemblyAI key and checks
   for Claude Code or Codex, one button each.
+- Auren is an Arch package: `yay -S auren`, then `auren`. The package installs the program in `/usr`
+  (with its own Python environment) and the services for every user; the first `auren` runs
+  `auren setup`, which does the per-user part: talk keys, bar plugin, AssemblyAI key, voice model,
+  browser tools, starting Auren. Its questions use gum, like Omarchy's own scripts, and come first.
+- `auren setup` runs again safely, takes flags for every question (`--keys`, `--browser`, `--brain`,
+  `--yes`), and moves an `install.sh` install to the package, keeping settings, keys and the voice
+  model. `auren setup --remove` undoes it (`--purge` also deletes settings and history).
+- Updating a package install from the bar opens a terminal that runs `yay -S --needed auren` between
+  stopping Auren and starting it again. An `install.sh` install still updates itself, and says once
+  afterwards that the package exists.
 
 ### Changed
 
@@ -21,6 +31,11 @@
   nothing: sending, publishing, root, packages, secrets, buying and wiping just run. The old Full
   access (`free`: windows and files run, sending and the floor still ask) is now called Auto.
   `auren-ctl safety never` or the panel's Brain page sets it; existing configs keep what they had.
+- `install.sh` is for working on Auren from a checkout. It installs the program, then runs
+  `auren setup`, so both ways share one setup (its flags are the same). The bar plugin runs
+  `~/.local/share/auren/bin/auren`, which both create.
+- Auren's services no longer skip starting when the session's display isn't there yet at login
+  (systemd never retries a skipped condition): they wait for it and restart once it's there.
 
 ### Fixed
 

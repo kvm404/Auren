@@ -12,7 +12,9 @@ uv sync --frozen
 ./install.sh --dev
 ```
 
-The development install links Python and UI files to this checkout. Python changes need a daemon
+The development install links Python and UI files to this checkout, then runs `auren setup` (the
+same per-user setup the Arch package uses). If the `auren` package is installed too, this install
+takes its place for you (its services and commands come first). Python changes need a daemon
 restart while idle; Quickshell can reload QML on save. Structural mascot changes can require a
 mascot service restart. Follow the README to configure your own credentials and bindings.
 
@@ -26,6 +28,10 @@ uv run ruff check src tests
 uv run pytest -q
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input tests/mascot
 ```
+
+To build the Arch package from your checkout (committed files at `HEAD`), run
+`packaging/arch/build-local.sh [out-dir]`, then `sudo pacman -U` the package it prints. CI builds and
+installs it in a clean Arch container on every PR.
 
 The Qt executable's path can vary by distribution. CI runs Python lint/tests and the Qt interaction
 tests. Python tests replace configuration, notices, and the send judge so they do not use your API

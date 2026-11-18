@@ -100,8 +100,11 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
-| `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
-| `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode, dirty, committed, installed_at |
+| `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program (for the package, `auren setup` links `bin/`, `mascot/` and `bar-plugin/` to `/usr`) |
+| `~/.local/share/auren/install.json` | `install.sh`, `auren setup` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode (`install`, `dev`, or `package`), dirty, committed, installed_at |
+| `~/.local/share/auren/setup.json` | `auren setup` | That setup finished: mode (`install` or `package`), version, at |
+| `~/.config/systemd/user/auren{,-mascot}.service.d/auren-xdg.conf` | `auren setup` | Custom XDG folders, for the package's services |
+| `~/.local/state/auren/package-suggested` | `auren update` | That the Arch package was suggested once, after an `install.sh` install updated itself |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |
 | `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (current, available, updating, done, failed, error, unknown), `channel` (`releases`), `installed`, `step`, `message`, `latest` (commit, short, date, subject, release tag, name, url), `commits`, `count`, `checked_at`, `started_at`, `finished_at`, `note`, `log` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |

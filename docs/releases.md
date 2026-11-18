@@ -18,6 +18,16 @@ The panel can notify you about new releases and checks every six hours. Until th
 published, the checker reports that no published release is available. A private repository also
 needs a `gh` login, `GH_TOKEN`, or `GITHUB_TOKEN` with read access. Public checks do not require `gh`.
 
+### The Arch package
+
+The `auren` package is pacman's to update. `auren update check` compares its version with the latest
+release; `auren update` (and the panel's Update button, in a terminal it opens) waits until Auren is
+idle, stops it, runs `yay -S --needed auren` (or `paru`), which asks for your password, and starts it
+again as it was. A changed bar plugin or mascot restarts the Omarchy shell. Updating the whole system
+with `yay -Syu` updates Auren too; restart it afterwards (pacman's message says how).
+
+### install.sh installs
+
 A normal install updates from its own clone in `~/.cache/auren/source/`. The checkout you originally
 installed from is left alone. The updater waits until Auren is idle, stops its services, installs the
 release, and restores the prior commit if installation fails. It preserves whether each service was
@@ -43,11 +53,12 @@ Releases are published after the release-preparation PR is reviewed, merged, and
 merged commit. The first release is **v0.1.0**, an early release for Omarchy users and contributors.
 It is a regular GitHub release so the release-only updater can discover it.
 
-1. Update the version in `pyproject.toml` and `omarchy-plugin/manifest.json`, refresh `uv.lock` if
-   needed, and add release notes under that version in `CHANGELOG.md`. Change the tag in the
-   README's `git clone --branch` line to the new version, so new installs get this release.
+1. Update the version in `pyproject.toml`, `omarchy-plugin/manifest.json` and `pkgver` in
+   `packaging/arch/PKGBUILD` (reset `pkgrel` to 1), refresh `uv.lock` if needed, and add release
+   notes under that version in `CHANGELOG.md`.
 2. Update user docs and `docs/ipc.md` for changed behavior. Run the contributor checks, including Qt
-   tests, and smoke-test an install on an Omarchy session. Keep live test results separate from
+   tests, and smoke-test an install on an Omarchy session: build the package from the release commit
+   with `packaging/arch/build-local.sh`, install it, and run `auren setup`. Keep live test results separate from
    automated test results in the PR.
 3. Merge the PR and confirm CI passes on the merged commit. From a clean checkout, fetch and check
    out that exact commit. Do not tag an unmerged branch or a working tree with edits.
@@ -60,13 +71,27 @@ It is a regular GitHub release so the release-only updater can discover it.
    gh release create v0.1.0 --verify-tag --title "Auren v0.1.0" --notes-file /tmp/auren-release-notes.md --latest
    ```
 
-5. Run `auren update check` from an existing install and verify the tag and commit. Check that a
-   clean install using the README's tagged clone works. Confirm later pushes to `main` leave the
-   installed release current.
+5. The `aur` workflow publishes the release to the AUR: it sets the PKGBUILD's version and the
+   checksum of GitHub's source tarball for the tag, writes `.SRCINFO`, and pushes both to
+   `aur.archlinux.org/auren.git`. Check that it passed and that `yay -Si auren` shows the new
+   version. If it failed, fix the cause and run it again from Actions (`aur`, with the tag).
+6. Run `auren update check` from an existing install and verify the tag. Check that a clean
+   `yay -S auren` works. Confirm later pushes to `main` leave the installed release current.
 
-GitHub supplies source archives for the tag. Auren currently installs from a Git checkout with
-`install.sh`; there is no separate binary or AUR package. Publishing a release does not change the
-repository's visibility.
+Publishing a release does not change the repository's visibility.
+
+### The AUR, once
+
+The package belongs to the AUR account that first pushed it. To set it up:
+
+1. Make an account on [aur.archlinux.org](https://aur.archlinux.org) and add an SSH public key to it
+   (a key made only for this: `ssh-keygen -t ed25519 -f aur -C "auren release"`).
+2. Add the private key to the repository's Actions secrets as `AUR_SSH_KEY`.
+3. Publish a release (or run the `aur` workflow for an existing tag): the first push creates the
+   `auren` package.
+
+The PKGBUILD in this repository has `sha256sums=('SKIP')`; only the copy on the AUR carries the
+checksum, filled in by the workflow from the published tarball.
 
 Never move a published version tag. Fix a bad release with another version. Drafts and prereleases
 can be used for review and testing, but the updater deliberately ignores them.

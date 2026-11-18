@@ -51,19 +51,46 @@ design was agreed on 2026-10-12; release preparation is tracked through pull req
 
 ## Install layout
 
-`install.sh` puts everything under `~/.local/share/auren/` (`$XDG_DATA_HOME/auren`):
+Two ways in, one layout in your home folder.
+
+The Arch package (`packaging/arch/PKGBUILD`, `yay -S auren`) installs the program system-wide:
+
+- `/usr/lib/auren/`: the Python environment, built from `uv.lock` against Arch's Python.
+- `/usr/bin/auren`, `/usr/bin/auren-ctl`: wrappers that run it (and say to rebuild when Arch's
+  Python has moved on).
+- `/usr/share/auren/{mascot,bar-plugin}/`: the UI files.
+- `/usr/lib/systemd/user/auren{,-mascot}.service`: the services.
+
+`install.sh` installs a checkout for one user, under `~/.local/share/auren/` (`$XDG_DATA_HOME/auren`):
 
 - `venv/`: the Python environment, from `uv.lock` (`uv sync --frozen`). `--dev` installs the checkout
   editable, so code changes need only a service restart.
 - `mascot/`, `bar-plugin/`: the UI files (copied, or symlinked to the checkout with `--dev`).
-- `bin/auren-ctl`: what key bindings, the mascot and the bar plugin call.
-- `models/`: the voice model.
-- `install.json`: what was installed (version, commit, branch, the repo it came from, `install` or `dev`),
-  written last, so it only names an install that finished. `auren update` compares it with GitHub.
+- `~/.config/systemd/user/auren{,-mascot}.service`: the services, pointing at these paths, so the
+  checkout can live anywhere.
+- `install.json`: what was installed (version, commit, branch, the repo it came from, `install` or `dev`).
+  `auren update` compares it with GitHub.
 
-The systemd units point at these paths, so the checkout can live anywhere.
+Then `auren setup` (`src/auren/setup.py`) does the per-user part for both. For the package it links
+`~/.local/share/auren/bin/{auren,auren-ctl}`, `mascot/` and `bar-plugin/` to `/usr`, so whichever way
+Auren came, key bindings, the mascot and the bar plugin find it at the same paths:
+
+- `bin/auren-ctl`: what key bindings, the mascot and the bar plugin call; `bin/auren`: what the bar
+  plugin runs.
+- `models/`: the voice model.
+- `setup.json`: that setup finished (the first `auren` runs it when it hasn't, for the package).
+
+The services start with the graphical session. systemd can start them before the session's
+`WAYLAND_DISPLAY` reaches the user manager; rather than a `ConditionEnvironment=` (checked once, so a
+late display would keep Auren off until the next login), they wait for it (`src/auren/display.py`)
+and restart once it's there.
 
 ## Updates
+
+A package install is pacman's to update: `auren update` compares the installed version with the
+latest release, and updating runs `yay -S --needed auren` in a terminal (it needs your password),
+between stopping Auren when it's idle and starting it again. The rest of this section is about
+`install.sh` installs.
 
 `auren update` (`src/auren/update.py`, and the panel's Updates page) resolves GitHub's latest published
 non-prerelease release, fetches that exact version tag, and installs its commit. Unreleased `main`

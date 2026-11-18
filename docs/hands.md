@@ -147,7 +147,7 @@ Tried live (2026-10-10, 2.3–4 s per request; delegating to Codex ~10 s):
 - **Which one is used** (`obu.choose`): a browser the brain names, else `browser.name` / `browser.profile` in config (a profile that doesn't exist is an error), else a connected one, preferring the default browser (on Omarchy `omarchy-cmd-default-browser`, since `xdg-settings` only names Omarchy's launcher script), then its last-used profile, then the newest. With none connected: the default browser if it's set up, else the first one that is. Auren starts it, or opens a window in that profile if the browser runs without it, and waits for the extension.
 - **Bookmarks and downloads** come from that same profile's folder.
 
-**Setup** (`auren browser setup [browser]`, `./install.sh --browser`, or the brain's `browser_setup`):
+**Setup** (`auren browser setup [browser]`, `auren setup --browser`, or the brain's `browser_setup`):
 1. downloads Open Browser Use (a pinned release from GitHub, checked against its SHA-256) to `~/.local/share/auren/obu/`, a path that stays put when Node or mise change;
 2. registers it with the browser: writes `NativeMessagingHosts/com.ifuryst.open_browser_use.extension.json` in the browser's config folder, unless a working one is there (a user's own setup is left alone);
 3. opens the extension's Chrome Web Store page in that browser, where the user clicks Add, then waits for it to connect.
