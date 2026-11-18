@@ -7,8 +7,10 @@
 Everything lives in STATE_DIR/phone (mode 700): devices.json and pairing.json (mode 600) hold only SHA-256
 hashes of the tokens and of the code, never the secrets themselves. The inbox (inbox.jsonl, files/) is what
 Auren sent to the phone; its item ids only grow, so a phone that was away asks for what came after the last
-one it has (the cursor). The server itself is in phone_server.py and runs inside the daemon, on the
-Tailscale address only (see docs/phone.md).
+one it has (the cursor). The server itself is in phone_server.py and runs inside the daemon, over HTTPS on
+the Tailscale address and the PC's private Wi-Fi/LAN addresses (see docs/phone.md). Its certificate is
+self-signed (cert.pem, key.pem mode 600); the pairing code carries its SHA-256 fingerprint and the app trusts
+only that.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ DEVICES = PHONE_DIR / "devices.json"
 PAIRING = PHONE_DIR / "pairing.json"
 INBOX = PHONE_DIR / "inbox.jsonl"
 FILES = PHONE_DIR / "files"
+CERT = PHONE_DIR / "cert.pem"
+KEY = PHONE_DIR / "key.pem"
 STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, and why not
 PAIR_TTL = 300                      # seconds a pairing code works
 PAIR_TRIES = 5                      # wrong codes before the pairing is dropped
@@ -46,6 +50,10 @@ MAX_FILE = 50 * 1024 * 1024         # biggest file send_to_phone sends
 KEEP = 200                          # inbox items kept (older ones and their files go)
 KINDS = ("text", "link", "image", "file")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")    # Tailscale's addresses (CGNAT range)
+PRIVATE = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))  # RFC 1918
+# Interfaces that aren't the room's Wi-Fi or Ethernet: containers, bridges, VMs and VPN tunnels.
+VIRTUAL = ("docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxc", "lxd", "podman", "cni", "flannel",
+           "zt", "wg", "tun", "tap", "tailscale")
 
 
 class PhoneError(Exception):
@@ -298,15 +306,116 @@ def tailscale_ip() -> tuple[str | None, str]:
     return None, "Tailscale is off or logged out" + (f" ({why[0][:80]})" if why else "") + ": tailscale up"
 
 
-def pair_uri(host: str, port: int, code: str) -> str:
+def is_lan(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and any(a in n for n in PRIVATE)
+
+
+def lan_addresses() -> tuple[list[str], str]:
+    """The PC's private IPv4 addresses on real Wi-Fi or Ethernet, or ([], why none). Loopback, point-to-point
+    links (VPN tunnels such as WARP), single-host /32s, container and VM bridges and public addresses are
+    left out: a phone in the same room only reaches the PC through its LAN address."""
+    if not shutil.which("ip"):
+        return [], "the ip command isn't installed"
+    try:
+        out = subprocess.run(["ip", "-j", "-4", "addr", "show", "up"], capture_output=True, text=True, timeout=5)
+        links = json.loads(out.stdout or "[]")
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        return [], f"couldn't list the network interfaces ({type(e).__name__})"
+    return pick_lan(links), ""
+
+
+def pick_lan(links: list[dict]) -> list[str]:
+    """The kept addresses of `ip -j -4 addr` output (see lan_addresses)."""
+    found = []
+    for link in links if isinstance(links, list) else []:
+        name = str(link.get("ifname", ""))
+        flags = set(link.get("flags") or [])
+        if "LOOPBACK" in flags or "POINTOPOINT" in flags or name.startswith(VIRTUAL):
+            continue
+        for a in link.get("addr_info") or []:
+            ip, plen = str(a.get("local", "")), a.get("prefixlen", 32)
+            if a.get("family", "inet") == "inet" and plen < 32 and is_lan(ip) and ip not in found:
+                found.append(ip)
+    return found
+
+
+def addresses(lan: bool = True) -> tuple[list[tuple[str, str]], dict]:
+    """Where the server listens: [(ip, "tailscale" | "lan")], Tailscale first, and why a path is missing
+    ({"tailscale": why, "lan": why}). Never 0.0.0.0, never a public address."""
+    why = {}
+    ts, why_ts = tailscale_ip()
+    out = [(ts, "tailscale")] if ts else []
+    if not ts:
+        why["tailscale"] = why_ts
+    if lan:
+        ips, why_lan = lan_addresses()
+        out += [(ip, "lan") for ip in ips]
+        if not ips:
+            why["lan"] = why_lan or "no Wi-Fi or Ethernet with a private address"
+    else:
+        why["lan"] = "off (phone.lan = false)"
+    return out, why
+
+
+def cert() -> tuple[Path, Path, str]:
+    """The server's self-signed certificate and key, made on first use and then kept: (cert, key, SHA-256
+    fingerprint of the certificate, lowercase hex). It names no address, so a new LAN IP needs no new one;
+    the app checks the fingerprint, not the name."""
+    with _locked("cert"):
+        if not (CERT.is_file() and KEY.is_file()):
+            _make_cert()
+        os.chmod(KEY, 0o600)
+        return CERT, KEY, fingerprint(CERT.read_bytes())
+
+
+def fingerprint(pem: bytes) -> str:
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    der = x509.load_pem_x509_certificate(pem).public_bytes(Encoding.DER)
+    return hashlib.sha256(der).hexdigest()
+
+
+def _make_cert() -> None:
+    import datetime as dt
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Auren on {socket.gethostname()}"[:64])])
+    now = dt.datetime.now(dt.UTC)
+    crt = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+           .serial_number(x509.random_serial_number())
+           .not_valid_before(now - dt.timedelta(days=1)).not_valid_after(now + dt.timedelta(days=3650))
+           .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+           .sign(key, hashes.SHA256()))
+    _write(KEY, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                  serialization.NoEncryption()))
+    _write(CERT, crt.public_bytes(serialization.Encoding.PEM))
+
+
+def pair_uri(hosts: list[str], port: int, code: str, fp: str) -> str:
+    """What the QR code says: every address the phone may reach the PC on, and the certificate's pin."""
     from urllib.parse import urlencode
-    return "auren://pair?" + urlencode({"v": API, "host": host, "port": port, "code": code, "pc": socket.gethostname()})
+    return "auren://pair?" + urlencode({"v": API, "hosts": ",".join(hosts), "port": port, "code": code,
+                                        "fp": fp, "pc": socket.gethostname()})
 
 
 def status() -> dict:
-    """What the daemon wrote about its server: {"on": bool, "host", "port", "why"}."""
+    """What the daemon wrote about its server: {"on": bool, "port", "addrs": [{"ip", "via", "ok", "why"}],
+    "fp", "why"}."""
     data = _read(STATUS, {})
     return data if isinstance(data, dict) else {}
+
+
+def listening(st: dict) -> list[dict]:
+    return [a for a in st.get("addrs") or [] if a.get("ok")]
 
 
 # --- the CLI ------------------------------------------------------------------------------------
@@ -360,14 +469,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"The phone server is off: {why}", file=sys.stderr)
         print("auren doctor says more.", file=sys.stderr)
         return 1
+    bound = listening(st)
     code, expires = start_pairing()
-    uri = pair_uri(st["host"], int(st["port"]), code)
+    uri = pair_uri([a["ip"] for a in bound], int(st["port"]), code, st["fp"])
     before = {d["id"] for d in devices()}
     if not a.no_qr:
         print(_qr(uri))
     print("Scan this with the Auren app (Pair), or paste the line below into it:\n")
     print(uri + "\n")
-    print(f"It works once, for {PAIR_TTL // 60} minutes, from a phone on your tailnet ({st['host']}:{st['port']}).")
+    where = ", ".join(f"{a['ip']} ({'Tailscale' if a['via'] == 'tailscale' else 'Wi-Fi/LAN'})" for a in bound)
+    print(f"It works once, for {PAIR_TTL // 60} minutes, from a phone on the same Wi-Fi or your tailnet: {where},"
+          f" port {st['port']}.")
     if a.no_wait:
         return 0
     try:

@@ -2,6 +2,7 @@
 turn at a time across the desk and the phone."""
 
 import asyncio
+import contextlib
 import json
 import os
 import stat
@@ -22,7 +23,8 @@ SESSION = daemon.SESSION
 def phone_dir(tmp_path, monkeypatch):
     d = tmp_path / "phone"
     for name, value in {"PHONE_DIR": d, "DEVICES": d / "devices.json", "PAIRING": d / "pairing.json",
-                        "INBOX": d / "inbox.jsonl", "FILES": d / "files", "STATUS": tmp_path / "phone.json"}.items():
+                        "INBOX": d / "inbox.jsonl", "FILES": d / "files", "STATUS": tmp_path / "phone.json",
+                        "CERT": d / "cert.pem", "KEY": d / "key.pem"}.items():
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
     return d
@@ -81,10 +83,72 @@ def test_the_cli_lists_and_revokes(capsys):
 def test_pair_needs_the_daemons_server(capsys):
     assert phone.main(["pair", "--no-wait"]) == 1
     assert "phone server is off" in capsys.readouterr().err
-    phone.STATUS.write_text(json.dumps({"on": True, "host": "100.100.1.2", "port": 8735}))
+    phone.STATUS.write_text(json.dumps({"on": True, "port": 8735, "fp": "ab" * 32, "addrs": [
+        {"ip": "100.100.1.2", "via": "tailscale", "ok": True}, {"ip": "192.168.1.20", "via": "lan", "ok": True},
+        {"ip": "10.0.0.5", "via": "lan", "ok": False, "why": "taken"}]}))
     assert phone.main(["pair", "--no-wait", "--no-qr"]) == 0
     uri = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("auren://pair?"))
-    assert "host=100.100.1.2" in uri and "port=8735" in uri and phone.pairing_open()
+    from urllib.parse import parse_qs, urlparse
+    q = {k: v[0] for k, v in parse_qs(urlparse(uri).query).items()}
+    assert q["hosts"] == "100.100.1.2,192.168.1.20" and q["port"] == "8735" and q["fp"] == "ab" * 32
+    assert "code" in q and phone.pairing_open()
+
+
+# --- the certificate and the addresses -----------------------------------------------------------------
+
+def test_the_certificate_is_made_once_and_its_key_is_private():
+    import hashlib
+    import ssl
+    crt, key, fp = phone.cert()
+    assert stat.S_IMODE(os.stat(key).st_mode) == 0o600
+    assert fp == hashlib.sha256(ssl.PEM_cert_to_DER_cert(crt.read_text())).hexdigest() and len(fp) == 64
+    before = (crt.read_bytes(), key.read_bytes())
+    assert phone.cert()[2] == fp and (crt.read_bytes(), key.read_bytes()) == before    # kept, not made again
+
+
+IP_ADDR = [   # `ip -j -4 addr show up`, trimmed
+    {"ifname": "lo", "flags": ["LOOPBACK", "UP"], "addr_info": [{"family": "inet", "local": "127.0.0.1", "prefixlen": 8}]},
+    {"ifname": "enp7s0", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "192.168.0.100", "prefixlen": 24}]},
+    {"ifname": "wlo1", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "10.1.2.3", "prefixlen": 16},
+                                                                   {"family": "inet", "local": "203.0.113.9", "prefixlen": 24}]},
+    {"ifname": "tailscale0", "flags": ["POINTOPOINT", "UP"], "addr_info": [{"family": "inet", "local": "100.92.1.2", "prefixlen": 32}]},
+    {"ifname": "CloudflareWARP", "flags": ["POINTOPOINT", "UP"], "addr_info": [{"family": "inet", "local": "172.16.0.2", "prefixlen": 32}]},
+    {"ifname": "docker0", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "172.17.0.1", "prefixlen": 16}]},
+    {"ifname": "br-1a2b", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "172.18.0.1", "prefixlen": 16}]},
+    {"ifname": "virbr0", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "192.168.122.1", "prefixlen": 24}]},
+    {"ifname": "eth9", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "172.20.5.5", "prefixlen": 32}]},
+    {"ifname": "eth1", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "198.51.100.7", "prefixlen": 24}]},
+]
+
+
+def test_the_lan_addresses_are_private_and_on_real_interfaces():
+    assert phone.pick_lan(IP_ADDR) == ["192.168.0.100", "10.1.2.3"]     # no loopback, VPN, docker, VM, /32, public
+
+
+def test_the_server_listens_on_tailscale_and_the_lan(monkeypatch):
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: ("100.92.1.2", ""))
+    monkeypatch.setattr(phone, "lan_addresses", lambda: (["192.168.0.100"], ""))
+    assert phone.addresses() == ([("100.92.1.2", "tailscale"), ("192.168.0.100", "lan")], {})
+    assert phone.addresses(lan=False) == ([("100.92.1.2", "tailscale")], {"lan": "off (phone.lan = false)"})
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: (None, "Tailscale is off"))
+    monkeypatch.setattr(phone, "lan_addresses", lambda: ([], ""))
+    addrs, why = phone.addresses()
+    assert addrs == [] and why["tailscale"] == "Tailscale is off" and "Wi-Fi" in why["lan"]
+
+
+def test_doctor_warns_but_doesnt_fail_with_one_path(monkeypatch):
+    from auren import doctor, settings
+    monkeypatch.setattr(settings, "current", lambda: {"phone.enabled": True, "phone.lan": True})
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("192.168.0.100", "lan")], {"tailscale": "Tailscale is off"}))
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "inactive"))
+    phone.STATUS.write_text(json.dumps({"on": True, "port": 8735, "fp": "ab" * 32,
+                                        "addrs": [{"ip": "192.168.0.100", "via": "lan", "ok": True}]}))
+    found = {c.name: c for c in doctor.phone_checks()}
+    assert found["Tailscale"].status == doctor.WARN and found["Wi-Fi/LAN"].status == doctor.OK
+    assert found["listening on 192.168.0.100"].status == doctor.OK
+    assert all(c.status != doctor.FAIL for c in found.values())
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([], {"tailscale": "off", "lan": "none"}))
+    assert any(c.status == doctor.FAIL for c in doctor.phone_checks())          # phone.enabled = true, nowhere to listen
 
 
 # --- the inbox -----------------------------------------------------------------------------------
@@ -147,6 +211,15 @@ def test_send_to_phone_asks_before_sending_secrets(rt, tmp_path):
     assert asked["status"] == "needs_confirmation" and phone.items() == []
 
 
+def test_send_to_phone_follows_a_link_before_deciding_it_holds_no_secret(rt, tmp_path):
+    _paired()
+    (tmp_path / ".env").write_text("KEY=1")
+    (tmp_path / "notes.txt").symlink_to(tmp_path / ".env")
+    rt.set_level("free")
+    asked = json.loads(rt.call(SESSION, "send_to_phone", {"kind": "file", "path": str(tmp_path / "notes.txt")})[0])
+    assert asked["status"] == "needs_confirmation" and phone.items() == []
+
+
 def test_send_to_phone_is_offered_only_with_a_paired_phone(monkeypatch):
     monkeypatch.setattr(integrations, "_installed", lambda name: REAL_INSTALLED(name) if name == "phone" else (True, ""))
     integrations._cache.clear()
@@ -162,18 +235,25 @@ def test_send_to_phone_is_offered_only_with_a_paired_phone(monkeypatch):
 
 class _Daemon:
     """What the hub calls on the daemon, recorded."""
-    listening = None
+    listening = _hearing = None
     state = "idle"
     settings: dict = {}
 
     def __init__(self):
-        self.asked, self.cancelled, self.answers, self.busy = [], 0, [], False
+        self.asked, self.cancelled, self.answers, self.busy, self.open = [], 0, [], False, set()
+        self.taken_meanwhile = False         # busy_for says free, but the turn is gone by the time it's asked
 
     def _origin(self):
         return "desk" if self.busy else None
 
+    def busy_for(self, origin, device=""):
+        return self.busy
+
+    def open_turn(self, device, rid):
+        return (device, rid) in self.open
+
     def phone_ask(self, turn, text, source="phone"):
-        if self.busy:
+        if self.busy or self.taken_meanwhile:
             return "busy"
         self.asked.append((turn.id, text, source))
         return "ok"
@@ -187,8 +267,8 @@ class _Daemon:
     async def cancel(self):
         self.cancelled += 1
 
-    def yes_no(self, yes, turn, source):
-        self.answers.append(yes)
+    def yes_no(self, yes, turn, source, ask=None):
+        self.answers.append((yes, ask))
         return "approved 1"
 
     async def phone_gone(self, device):
@@ -295,7 +375,9 @@ def test_a_busy_pc_says_so_and_the_request_can_be_sent_again(server):
         ws.send_json({"type": "cancel"})
         assert ws.receive_json()["status"] == "cancelled" and d.cancelled == 1
         ws.send_json({"type": "answer", "id": "a1", "yes": True})
-        assert ws.receive_json()["status"] == "approved 1" and d.answers == [True]
+        assert ws.receive_json()["status"] == "approved 1" and d.answers == [(True, "")]   # no ask id: none matches
+        ws.send_json({"type": "answer", "id": "a2", "yes": False, "ask": "abc"})
+        assert ws.receive_json()["status"] == "approved 1" and d.answers[-1] == (False, "abc")
 
 
 def test_a_revoked_phone_is_cut_off(server):
@@ -362,10 +444,14 @@ class _Level:
 
 class _Hub:
     def __init__(self):
-        self.replies = []
+        self.replies, self.ended = [], []
 
     def reply(self, turn, text):
         self.replies.append((turn.id, text))
+
+    def closed(self, turn):
+        if turn.id not in [r for r, _ in self.replies]:
+            self.ended.append(turn.id)
 
     def state_changed(self):
         pass
@@ -386,7 +472,7 @@ class _Harness(daemon.Daemon):
         self.said.append(text)
 
     def set_state(self, state, detail="", **extra):
-        self.state = state
+        self.state, self.extra = state, extra
 
     def _history(self, record):
         self.history.append(record)
@@ -478,6 +564,317 @@ def test_nothing_heard_on_the_phone_frees_the_turn(tmp_path, monkeypatch):
         assert await d.command("ask hi") == "asked"
 
     _turns(tmp_path, monkeypatch, scenario)
+
+
+def test_a_stop_while_the_transcript_comes_wins(tmp_path, monkeypatch):
+    gate = asyncio.Event
+
+    class SlowEars(_Ears):
+        async def finish(self, timeout=8):
+            self.finishing.set()
+            await self.go.wait()                       # the transcript is on its way
+            return self.heard
+
+    async def scenario(d):
+        SlowEars.finishing, SlowEars.go = gate(), gate()
+        assert await d.phone_talk(Turn("phone", "t1", "dev"), asyncio.Queue()) == "ok"
+        release = asyncio.create_task(d.phone_talk_stop("dev"))
+        await SlowEars.finishing.wait()
+        await d.cancel()                               # Stop, acked while release waits for the words
+        SlowEars.go.set()
+        assert await release == "cancelled"
+        assert not d.busy_for("desk") and d.phone.ended == ["t1"]
+
+    monkeypatch.setattr(daemon, "Listening", SlowEars)
+    monkeypatch.setattr(daemon, "QUIET_TICK", 0.01)
+
+    async def go():
+        d = _Harness(tmp_path)
+        d.busy, d.loop = asyncio.Lock(), asyncio.get_running_loop()
+        await scenario(d)
+        await asyncio.sleep(0)
+        return d
+
+    d = asyncio.run(go())
+    assert d.brain.asked == [] and d.history == []     # nothing was sent
+
+
+def test_one_phone_at_a_time_and_only_it_stops_its_listen(tmp_path, monkeypatch):
+    async def scenario(d):
+        assert await d.phone_talk(Turn("phone", "a1", "phone-a"), asyncio.Queue()) == "ok"
+        assert d.phone_ask(Turn("phone", "b1", "phone-b"), "hi") == "busy"          # another phone is someone else
+        assert await d.phone_talk_stop("phone-b") == "not listening" and d.listening is not None
+        assert d.open_turn("phone-a", "a1") and not d.open_turn("phone-b", "a1")
+        assert (await d.phone_talk_stop("phone-a")).startswith("heard")
+        await _until(lambda: d.phone.replies)
+        await _until(lambda: not d.busy_for("phone", "phone-b"))
+        assert d.phone_ask(Turn("phone", "b2", "phone-b"), "now me") == "ok"
+
+    d = _turns(tmp_path, monkeypatch, scenario)
+    assert d.phone.replies[0] == ("a1", "It's noon.")
+
+
+def test_a_desk_ask_doesnt_hide_an_open_desk_listen(tmp_path, monkeypatch):
+    async def scenario(d):
+        assert await d.command("talk") == "listening"
+        assert await d.command("ask what's the date") == "asked"     # the desk's own: it queues
+        await _until(lambda: d.said)                                   # that answer ended...
+        assert d.phone_ask(Turn("phone", "p1", "dev"), "hi") == "busy"   # ...but the listen is still open
+        assert (await d.command("talk")).startswith("heard")
+        await _until(lambda: len(d.said) == 2)
+        await _until(lambda: not d.busy_for("phone", "dev"))
+
+    _turns(tmp_path, monkeypatch, scenario)
+
+
+def test_a_phone_yes_approves_only_the_question_it_showed(tmp_path, monkeypatch):
+    ran = []
+
+    async def scenario(d):
+        d.tools.new_turn(SESSION)
+        turn = d.tools._session(SESSION).turn
+        d.tools.confirmations.request(SESSION, turn, "Close Calc?", lambda: ran.append("calc") or "ok")
+        d.idle()
+        shown = d.extra["ask"]
+        assert shown == daemon.ask_id(d.tools.confirmations.batch(SESSION))
+        d.tools.new_turn(SESSION)                       # a later message asked something else
+        d.tools.confirmations.request(SESSION, turn + 1, "Delete the logs?", lambda: ran.append("logs") or "ok")
+        assert d.yes_no(True, Turn("phone", "y1", "dev"), "phone", shown) == "that question is no longer open"
+        assert d.yes_no(True, Turn("phone", "y2", "dev"), "phone", "") == "that question is no longer open"
+        d.idle()
+        assert d.yes_no(True, Turn("phone", "y3", "dev"), "phone", d.extra["ask"]) == "approved 1"
+        await _until(lambda: ran)
+
+    _turns(tmp_path, monkeypatch, scenario)
+    assert ran == ["logs"]
+
+
+# --- the hub: replies, resends, the microphone ------------------------------------------------------
+
+def _conn(dev_id: str) -> phone_server.Conn:
+    return phone_server.Conn(None, {"id": dev_id, "name": dev_id})
+
+
+def _drain(conn) -> list[dict]:
+    out = []
+    while not conn.out.empty():
+        out.append(conn.out.get_nowait())
+    return out
+
+
+def test_a_retry_while_the_first_still_runs_gets_in_progress():
+    class Slow(_Daemon):
+        async def phone_talk(self, turn, audio, hands_free=False, fresh=False):
+            self.started.set()
+            await self.go.wait()
+            return "ok"
+
+    async def go():
+        d = Slow()
+        d.started, d.go = asyncio.Event(), asyncio.Event()
+        hub, conn = phone_server.Hub(d), _conn("dev")
+        first = asyncio.create_task(hub.request(conn, {"type": "talk.start", "id": "t1"}))
+        await d.started.wait()
+        again = await hub.request(conn, {"type": "talk.start", "id": "t1"})
+        d.go.set()
+        return again, await first, await hub.request(conn, {"type": "talk.start", "id": "t1"})
+
+    again, first, later = asyncio.run(go())
+    assert again == {"type": "ack", "id": "t1", "status": "in progress", "duplicate": True}
+    assert first["status"] == "ok" and later["duplicate"] is True and later["status"] == "ok"
+
+
+def test_replies_go_to_their_phone_and_wait_for_it_to_come_back():
+    d = _Daemon()
+    hub = phone_server.Hub(d)
+    a, b = _conn("phone-a"), _conn("phone-b")
+    hub.conns |= {a, b}
+    hub.reply(Turn("phone", "r1", "phone-a"), "It's noon.")
+    assert [m["text"] for m in _drain(a)] == ["It's noon."] and _drain(b) == []
+    hub.closed(Turn("phone", "r1", "phone-a"))                 # replied: no "ended" on top
+    hub.closed(Turn("phone", "r2", "phone-a"))                 # nothing heard: it ended without a reply
+    assert _drain(a) == [{"type": "ended", "id": "r2"}]
+    back = _conn("phone-a")                                    # the socket dropped and came back
+    d.open.add(("phone-a", "r3"))
+    hub.resume(back, ["r1", "r2", "r3", "r4"])
+    got = _drain(back)
+    assert [m["type"] for m in got] == ["reply", "ended", "lost"] and got[2]["id"] == "r4"   # r3 is still coming
+    hub.resume(_conn("phone-b"), ["r1"])                        # another phone's id is not its own
+    assert hub.replies and _drain(b) == []
+
+
+def test_kept_replies_expire(monkeypatch):
+    hub = phone_server.Hub(_Daemon())
+    hub.reply(Turn("phone", "r1", "dev"), "old")
+    monkeypatch.setattr(phone_server, "REPLY_TTL", -1)
+    back = _conn("dev")
+    hub.resume(back, ["r1"])
+    assert _drain(back) == [{"type": "lost", "id": "r1"}]
+
+
+def test_microphone_frames_only_feed_the_phone_that_started_the_listen():
+    d = _Daemon()
+    hub = phone_server.Hub(d)
+    a, b = _conn("phone-a"), _conn("phone-b")
+    audio: asyncio.Queue = asyncio.Queue()
+    a.audio = b.audio = audio                                  # b pretending to feed a's listen
+    d.listening = type("L", (), {"audio": audio})()
+    d._hearing = Turn("phone", "t1", "phone-a")
+    hub.audio(b, b"\x01\x02")
+    hub.audio(a, b"\x03\x04")
+    assert audio.get_nowait() == b"\x03\x04" and audio.empty()
+
+
+# --- the hub over HTTP: sharing and pairing --------------------------------------------------------
+
+def test_a_phone_unpaired_while_its_upload_came_is_refused(server, monkeypatch):
+    client, d, _ = server
+    dev, token = _paired()
+    calls = []
+
+    def auth(tok):
+        calls.append(tok)
+        return dev if len(calls) == 1 else None                # revoked after the headers, before the body
+
+    monkeypatch.setattr(phone, "authenticate", auth)
+    r = client.post("/v1/share", headers=_auth(token), json={"id": "s1", "kind": "text", "action": "ask", "text": "x"})
+    assert r.status_code == 401 and d.asked == [] and len(calls) == 2
+
+
+def test_a_shared_image_is_kept_only_for_a_request_that_runs(server, monkeypatch, tmp_path):
+    client, d, _ = server
+    _, token = _paired()
+    monkeypatch.setattr(phone_server, "_downloads_dir", lambda: tmp_path / "dl")
+    img = {"kind": "image", "action": "ask", "data": "iVBORw0KGgo=", "mime": "image/png"}
+    d.busy = True
+    assert client.post("/v1/share", headers=_auth(token), json={"id": "i1", **img}).status_code == 409
+    assert not (tmp_path / "dl").exists()                      # nothing written for a busy PC
+    d.busy, d.taken_meanwhile = False, True
+    assert client.post("/v1/share", headers=_auth(token), json={"id": "i2", **img}).status_code == 409
+    assert list((tmp_path / "dl").iterdir()) == []             # written, then removed when the turn was gone
+    d.taken_meanwhile = False
+    for rid in ("i3", "i4"):
+        assert client.post("/v1/share", headers=_auth(token), json={"id": rid, **img}).json()["status"] == "ok"
+    assert len(list((tmp_path / "dl").iterdir())) == 2         # the same second, two names
+
+
+def test_pairing_is_refused_before_the_body_when_closed_and_bodies_are_capped(server, monkeypatch, caplog):
+    client, _, _ = server
+    read = []
+    real = phone_server._read_body
+
+    async def spy(request, limit):
+        read.append(limit)
+        return await real(request, limit)
+
+    monkeypatch.setattr(phone_server, "_read_body", spy)
+    caplog.set_level("WARNING", logger="auren")
+    r = client.post("/v1/pair", content=b"x" * 100_000)
+    assert r.status_code == 403 and read == [] and "refused from" in caplog.text
+    phone.start_pairing()
+    assert client.post("/v1/pair", content=b"{" + b" " * phone_server.MAX_PAIR + b"}").status_code == 413
+    _, token = _paired()
+    big = b"x" * (phone_server.MAX_SHARE + 1)
+    assert client.post("/v1/share", headers=_auth(token), content=big).status_code == 413
+
+
+def test_pairing_attempts_are_limited(server):
+    client, _, _ = server
+    codes = [client.post("/v1/pair", json={"code": "guess", "name": "x"}).status_code
+             for _ in range(phone_server.PAIR_RATE + 2)]
+    assert codes[:phone_server.PAIR_RATE] == [403] * phone_server.PAIR_RATE and codes[-1] == 429
+
+
+# --- the server itself: TLS, pinned; reload starts, stops and moves it ----------------------------------
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _pinned(fp: str):
+    """What the app does: no CA, no hostname; the certificate must be the one the QR code named."""
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+
+    def check(ssl_object):
+        import hashlib
+        got = hashlib.sha256(ssl_object.getpeercert(binary_form=True)).hexdigest()
+        if got != fp:
+            raise ConnectionRefusedError(f"pin mismatch: {got}")
+
+    return ctx, check
+
+
+async def _hello(port: int, fp: str) -> dict:
+    ctx, check = _pinned(fp)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=ctx)
+    try:
+        check(writer.get_extra_info("ssl_object"))
+        writer.write(b"GET /v1/hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        raw = await reader.read()
+    finally:
+        writer.close()
+    return json.loads(raw.split(b"\r\n\r\n", 1)[1])
+
+
+async def _refused(port: int) -> bool:
+    try:
+        _, w = await asyncio.open_connection("127.0.0.1", port)
+    except OSError:
+        return True
+    w.close()
+    return False
+
+
+def test_the_server_speaks_only_pinned_tls_and_reload_stops_and_moves_it(tmp_path, monkeypatch):
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import ConnectionClosed
+
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("127.0.0.1", "lan")], {"tailscale": "off"}))
+    _, token = _paired()
+    port, moved = _free_port(), _free_port()
+
+    async def go():
+        d = _Harness(tmp_path)
+        d.busy, d.loop = asyncio.Lock(), asyncio.get_running_loop()
+        d.settings.update({"phone.enabled": True, "phone.port": port})
+        d._phone_task = asyncio.create_task(d._serve_phone())
+        await _until(lambda: phone.status().get("on"), 10)
+        st = phone.status()
+        fp = phone.cert()[2]
+        assert st["fp"] == fp and st["addrs"] == [{"ip": "127.0.0.1", "via": "lan", "ok": True}]
+        hello = await _hello(port, fp)
+        assert hello["fp"] == fp and hello["addrs"] == [{"ip": "127.0.0.1", "via": "lan"}]
+        with pytest.raises(ConnectionRefusedError, match="pin mismatch"):
+            await _hello(port, "00" * 32)                           # another certificate: the app hangs up
+        r, w = await asyncio.open_connection("127.0.0.1", port)     # cleartext gets no HTTP answer
+        w.write(b"GET /v1/hello HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert b"auren" not in await asyncio.wait_for(r.read(), 5)
+        w.close()
+
+        ctx, check = _pinned(fp)
+        ws = await connect(f"wss://127.0.0.1:{port}/v1/ws", ssl=ctx, additional_headers=_auth(token))
+        check(ws.transport.get_extra_info("ssl_object"))
+        assert json.loads(await ws.recv())["type"] == "hello"
+        d.settings["phone.enabled"] = False                         # auren config set phone.enabled false; reload
+        await d._restart_phone()
+        with pytest.raises(ConnectionClosed):
+            await asyncio.wait_for(ws.recv(), 5)
+        assert await _refused(port) and not phone.STATUS.exists() and d.phone is None
+        d.settings.update({"phone.enabled": True, "phone.port": moved})
+        await d._restart_phone()
+        await _until(lambda: phone.status().get("port") == moved and phone.status().get("on"), 10)
+        assert (await _hello(moved, fp))["app"] == "auren" and await _refused(port)
+        d._phone_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await d._phone_task
+        assert await _refused(moved)
+
+    asyncio.run(go())
 
 
 # --- the ears, fed from a queue ------------------------------------------------------------------------

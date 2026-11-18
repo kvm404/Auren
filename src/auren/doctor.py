@@ -243,26 +243,42 @@ def checks() -> list[Check]:
 
 
 def phone_checks() -> list[Check]:
-    """The phone remote: off by config, Tailscale (the server is on its address only), the server, the phones."""
+    """The phone remote: off by config, its two paths (Tailscale, the same Wi-Fi/LAN), each address the server
+    listens on, and the phones. One missing path is a warning, not a failure: the other still works."""
     from . import phone
     from .settings import current as settings
     g = "Phone"
-    if settings()["phone.enabled"] is False:
+    conf = settings()
+    if conf["phone.enabled"] is False:
         return [Check(g, "phone remote", OK, "turned off")]
-    wanted = settings()["phone.enabled"] is True
+    wanted = conf["phone.enabled"] is True
+    lan = conf.get("phone.lan", True) is not False
     out = []
-    host, why = phone.tailscale_ip()
-    if host:
-        out.append(Check(g, "Tailscale", OK, host))
+    addrs, missing = phone.addresses(lan)
+    ts = next((ip for ip, via in addrs if via == "tailscale"), None)
+    why_ts = missing.get("tailscale", "")
+    out.append(Check(g, "Tailscale", OK, ts) if ts else Check(
+        g, "Tailscale", WARN, f"{why_ts}: the phone works only on the same Wi-Fi",
+        "install Tailscale (omarchy install tailscale) and run: tailscale up" if "installed" in why_ts else "tailscale up"))
+    lan_ips = [ip for ip, via in addrs if via == "lan"]
+    if not lan:
+        out.append(Check(g, "Wi-Fi/LAN", OK, "off (phone.lan = false): Tailscale only"))
     else:
-        out.append(Check(g, "Tailscale", FAIL if wanted else WARN, f"{why}: the phone server stays off without it",
-                         "install Tailscale (omarchy install tailscale) and run: tailscale up"
-                         if "installed" in why else "tailscale up"))
+        out.append(Check(g, "Wi-Fi/LAN", OK, ", ".join(lan_ips)) if lan_ips else Check(
+            g, "Wi-Fi/LAN", WARN, f"{missing.get('lan', 'none')}: the phone works only over Tailscale", ""))
+    if not addrs:
+        out.append(Check(g, "phone server", FAIL if wanted else WARN, "nowhere to listen: no Tailscale and no Wi-Fi/LAN",
+                         "tailscale up, or join a Wi-Fi network"))
     st = phone.status()
     daemon_up = _run(["systemctl", "--user", "is-active", "auren"])[1] == "active" or st.get("pid")
     if st.get("on"):
-        out.append(Check(g, "phone server", OK, f"{st['host']}:{st['port']} (Tailscale only)"))
-    elif host:
+        for a in st.get("addrs") or []:
+            path = "Tailscale" if a.get("via") == "tailscale" else "Wi-Fi/LAN"
+            out.append(Check(g, f"listening on {a['ip']}", OK, f"port {st['port']}, HTTPS ({path})")
+                       if a.get("ok") else Check(g, f"listening on {a['ip']}", WARN, a.get("why", ""), "set phone.port"))
+        if st.get("fp"):
+            out.append(Check(g, "certificate", OK, f"self-signed, pinned by the app (SHA-256 {st['fp'][:16]}…)"))
+    elif addrs:
         out.append(Check(g, "phone server", WARN, st.get("why") or "the Auren daemon isn't running",
                          "systemctl --user restart auren" if daemon_up else "systemctl --user start auren"))
     paired = phone.devices()

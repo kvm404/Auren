@@ -36,7 +36,9 @@ from both. A phone's turn is answered on the phone, as text: the PC doesn't spea
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -74,6 +76,7 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
 
 
 # A request with more than one part ("close it and open Spotify"): after a yes to one part, the brain must go on.
+PHONE_KEYS = ("phone.enabled", "phone.port", "phone.lan")    # a reload that changes one restarts the phone server
 # Told to the brain with a request from the phone: the user isn't at the laptop, and reads the reply.
 PHONE_NOTE = "(From the user's phone: they may be away from the laptop. Your reply is shown on the phone as text.)"
 COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|next|too|as well)\b|[,;]|[.?!]\s*\S", re.I)
@@ -89,8 +92,9 @@ class Turn:
 
 
 class Daemon:
-    owner: Turn | None = None             # the latest turn: while it is open, another origin gets "busy"
+    _open: tuple[Turn, ...] = ()          # admitted turns, oldest first: while one is open, anyone else gets "busy"
     _hearing: Turn | None = None          # the turn the current listen belongs to
+    _finishing = None                     # the listen whose transcript release() is waiting for (a Stop drops it)
     phone = None                          # the phone server's hub (phone_server.Hub), when it runs
     _request = ""                       # what the user asked, when Auren answered with questions (not told to the brain again)
     _handover_until: float | None = None  # the end of Codex's turn that a state refresh is set for
@@ -171,19 +175,30 @@ class Daemon:
 
     # --- turns: one at a time, from the desk or the phone ---------------------------------------------
 
-    def _origin(self) -> str | None:
-        return self.owner.origin if self.owner and self.owner.open else None
+    def _live(self) -> tuple[Turn, ...]:
+        self._open = tuple(t for t in self._open if t.open)
+        return self._open
 
-    def busy_for(self, origin: str) -> bool:
-        """Is a turn of the other origin under way?"""
-        return self._origin() not in (None, origin)
+    def _origin(self) -> str | None:
+        live = self._live()
+        return live[0].origin if live else None
+
+    def busy_for(self, origin: str, device: str = "") -> bool:
+        """Is someone else's turn under way? Someone is the desk, or one phone: a second phone is someone else.
+        The same someone's next request queues behind its first (the brain answers one at a time)."""
+        return any((t.origin, t.device) != (origin, device) for t in self._live())
 
     def admit(self, turn: Turn) -> bool:
-        """Start this turn, unless the other origin has one: then it's refused (busy)."""
-        if self.busy_for(turn.origin):
+        """Start this turn, unless someone else has one open: then it's refused (busy). A new turn never
+        replaces an open one: each stays counted until it closes."""
+        if self.busy_for(turn.origin, turn.device):
             return False
-        self.owner = turn
+        self._open = (*self._live(), turn)
         return True
+
+    def open_turn(self, device: str, rid: str) -> bool:
+        """Is this phone's request still being heard or answered (so its reply is still to come)?"""
+        return any(t.origin == "phone" and t.device == device and t.id == rid for t in self._live())
 
     def _phone_turn(self) -> bool:
         return self._origin() == "phone"
@@ -339,11 +354,14 @@ class Daemon:
             return "bye"
         return f"unknown command: {cmd}"
 
-    def yes_no(self, yes: bool, turn: Turn, source: str) -> str:
-        """The answer buttons (the mascot's, auren-ctl yes|no, the phone's)."""
+    def yes_no(self, yes: bool, turn: Turn, source: str, ask: str | None = None) -> str:
+        """The answer buttons (the mascot's, auren-ctl yes|no, the phone's). The phone names the question it
+        answers (`ask`, from the state it showed): a yes meant for another batch approves nothing."""
         waiting = self.tools.confirmations.batch(SESSION)
         if not waiting:
             return "nothing is waiting for an answer"
+        if ask is not None and ask != ask_id(waiting):
+            return "that question is no longer open"
         if not self.admit(turn):
             return "busy" if turn.origin == "phone" else self._desk_refused()
         # Only what is shown now: a second click, or a question asked meanwhile, isn't covered by this one.
@@ -364,14 +382,18 @@ class Daemon:
         out = await self.press(fresh, hands_free, turn=turn, audio=audio)
         return "ok" if out == "listening" else out
 
+    def _hears(self, device: str) -> bool:
+        h = self._hearing
+        return bool(h and h.open and h.origin == "phone" and h.device == device)
+
     async def phone_talk_stop(self, device: str) -> str:
-        if not self.listening or not self._hearing or self._hearing.origin != "phone":
+        if not self.listening or not self._hears(device):       # only the phone that started it ends it
             return "not listening"
         return await self.release()
 
     async def phone_gone(self, device: str) -> None:
-        """A phone disconnected: a listen it was feeding can't go on."""
-        if self.listening and self._hearing and self._hearing.origin == "phone" and self._hearing.device == device:
+        """A phone disconnected: a listen it was feeding can't go on (nor the transcript it was waiting for)."""
+        if (self.listening or self._finishing) and self._hears(device):
             await self.cancel()
 
     async def phone_paired_changed(self) -> None:
@@ -422,6 +444,8 @@ class Daemon:
             asyncio.create_task(self._set_claude(**claude))
         elif new["brain"] != old["brain"]:
             asyncio.create_task(self._warm())
+        if any(new.get(k) != old.get(k) for k in PHONE_KEYS):
+            asyncio.create_task(self._restart_phone())
         self._refresh_state()
         return "Auren picked it up"
 
@@ -479,7 +503,7 @@ class Daemon:
         except Exception as e:  # noqa: BLE001
             self.listening = None
             self._notify("Auren couldn't start listening", str(e), "error")
-            turn.open = False
+            self._close(turn)
             self.set_state("error", str(e))
             return f"error: {e}"
         self.set_state("listening", "", fresh=fresh)
@@ -583,20 +607,27 @@ class Daemon:
         self.level.set(0)
         if session.held_seconds < MIN_HOLD:
             await session.cancel()
-            turn.open = False
+            self._close(turn)
             self.set_state("idle", "key tap ignored")
             return "too short"
         t = time.perf_counter()
-        text = await session.finish()
+        self._finishing = session
+        try:
+            text = await session.finish()
+        finally:
+            stopped, self._finishing = self._finishing is not session, None
+        if stopped:                          # Stop came while the transcript was coming: nothing is sent
+            self._close(turn)
+            return "cancelled"
         heard_in = time.perf_counter() - t
         if session.error and not text:
             self._notify("Auren couldn't hear you", session.error, "error")
-            turn.open = False
+            self._close(turn)
             self.set_state("error", session.error)
             return "error"
         if not text:
             self._show("Didn't catch that", "unheard")
-            turn.open = False
+            self._close(turn)
             self.set_state("idle", "heard nothing")
             return "heard nothing"
         log.info("heard (%.2fs after release): %s", heard_in, text)
@@ -605,11 +636,12 @@ class Daemon:
         return "heard: " + text
 
     async def cancel(self) -> None:
-        if self.listening:
-            await self.listening.cancel()
-            self.listening = None
+        if self.listening or self._finishing:
+            session, self.listening, self._finishing = self.listening, None, None
+            if session:
+                await session.cancel()
             if self._hearing:
-                self._hearing.open = False      # an answer in progress closes its own turn when it ends
+                self._close(self._hearing)      # an answer in progress closes its own turn when it ends
         self.level.set(0)
         if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)
@@ -654,8 +686,11 @@ class Daemon:
     def _close(self, turn: Turn) -> None:
         if turn.open:
             turn.open = False
-            if self.phone and turn is self.owner:
+            self._live()
+            if self.phone:
                 self.phone.state_changed()        # the phone sees the turn is over (the state may not change)
+                if turn.origin == "phone":
+                    self.phone.closed(turn)       # a turn that ended without a reply says so (no endless wait)
 
     async def answer(self, yes: bool, source: str, tokens: set[str] | None = None, turn: Turn | None = None) -> None:
         """A yes or no that didn't come as words (the bubble's buttons, auren-ctl yes|no, the phone), to these questions."""
@@ -811,7 +846,8 @@ class Daemon:
             question = waiting[0].question if len(waiting) == 1 else (
                 f"{len(waiting)} things, one answer:\n" + "\n".join("• " + p.question for p in waiting))
             self.set_state("idle", detail, awaiting=True, question=question,
-                           until=min(p.at for p in waiting) + TOKEN_TTL)
+                           until=min(p.at for p in waiting) + TOKEN_TTL,
+                           ask=ask_id(self.tools.confirmations.batch(SESSION)))
         else:
             self.set_state("idle", detail)
 
@@ -849,8 +885,18 @@ class Daemon:
             await server.serve_forever()
 
 
+    async def _restart_phone(self) -> None:
+        """phone.enabled, phone.port or phone.lan changed: stop the server (its sockets and the phones'
+        connections close) and start it again as the settings now say, or not at all."""
+        old = getattr(self, "_phone_task", None)
+        if old:
+            old.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await old
+        self._phone_task = asyncio.create_task(self._serve_phone())
+
     async def _serve_phone(self) -> None:
-        """The phone remote's server, on the Tailscale address only, while phone.enabled isn't false."""
+        """The phone remote's server, on the Tailscale and private LAN addresses, while phone.enabled isn't false."""
         if self.settings.get("phone.enabled") is False:
             from .phone import STATUS
             STATUS.unlink(missing_ok=True)
@@ -860,6 +906,12 @@ class Daemon:
             await supervise(self)
         except Exception:  # noqa: BLE001 - the phone failing never takes the desk down
             log.exception("the phone server stopped")
+
+
+def ask_id(batch: list[tuple[str, object]]) -> str:
+    """Which yes/no question this is: the same batch of tokens, the same id. Not the tokens themselves (they
+    are what a yes redeems), only a digest."""
+    return hashlib.sha256(",".join(sorted(t for t, _ in batch)).encode()).hexdigest()[:12]
 
 
 def after_quiet(quiet: float, heard: bool, autosend: bool, autosend_after: float) -> str:

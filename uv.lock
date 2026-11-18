@@ -43,6 +43,7 @@ name = "auren"
 version = "0.1.5"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "evdev" },
     { name = "mcp" },
     { name = "numpy" },
@@ -63,6 +64,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "evdev", specifier = ">=2.0.0" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "numpy", specifier = ">=2.5.3" },

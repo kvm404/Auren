@@ -599,14 +599,21 @@ def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "")
     on this laptop, copied to the phone). title: a few words saying what it is."""
     from . import phone
 
+    what = path or content if kind in ("image", "file") else content
+    names = [what]
+    if kind in ("image", "file") and what:
+        # The file that is sent is where the path leads: a harmless name can be a link to a .env or a key.
+        real = os.path.realpath(os.path.expanduser(what))
+        names.append(real)
+        path, content = real, ""                   # what was checked is what is sent, even if the link changes
+
     def send() -> str:
         if not phone.devices():
             raise ValueError("no phone is paired: the user can pair one with auren phone pair")
         it = phone.add(kind, title, content, path)
         return f"sent to the phone's inbox (item {it['id']})"
 
-    what = path or content if kind in ("image", "file") else content
-    if kind in ("image", "file", "text") and safety.mentions_secrets(what):
+    if kind in ("image", "file", "text") and any(safety.mentions_secrets(n) for n in names):
         return _gate({safety.SECRETS}, f"Send {title or what[:60]!r} to your phone? It may hold a secret.", send,
                      say=lambda result: "Sent it to your phone." if not result.startswith("error:") else None)
     return _run(send)
