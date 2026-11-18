@@ -121,17 +121,23 @@ class Hub:
         from .daemon import Turn
         return Turn("phone", rid, device["id"])
 
-    def _remember(self, rid: str, status: str) -> None:
-        if rid:
-            self.seen[rid] = status
+    @staticmethod
+    def _key(device: dict, rid: str) -> str:
+        """Request ids are each phone's own: the same id from another phone is another request."""
+        return f"{device['id']}/{rid}" if rid else ""
+
+    def _remember(self, key: str, status: str) -> None:
+        if key:
+            self.seen[key] = status
             while len(self.seen) > SEEN:
                 self.seen.popitem(last=False)
 
     async def request(self, conn: Conn, msg: dict) -> dict | None:
         """One message from a phone. Returns the ack (None: nothing to answer)."""
         kind, rid, dev = msg.get("type"), str(msg.get("id") or "")[:64], conn.device
-        if kind in ("ask", "talk.start", "answer") and rid in self.seen:
-            return {"type": "ack", "id": rid, "status": self.seen[rid], "duplicate": True}
+        key = self._key(dev, rid)
+        if kind in ("ask", "talk.start", "answer") and key in self.seen:
+            return {"type": "ack", "id": rid, "status": self.seen[key], "duplicate": True}
         d = self.daemon
         if kind == "ask":
             text = str(msg.get("text") or "").strip()[:MAX_TEXT]
@@ -158,7 +164,7 @@ class Hub:
         else:
             return {"type": "error", "id": rid, "error": f"unknown message {kind!r}"}
         if status == "ok" or status.startswith(("approved", "dropped")):
-            self._remember(rid, status)
+            self._remember(key, status)
         ack = {"type": "ack", "id": rid, "status": status}
         if status == "busy":
             conn.send({"type": "busy", "id": rid, "owner": d._origin() or "desk"})
@@ -173,8 +179,9 @@ class Hub:
 
     async def share(self, device: dict, body: dict) -> dict:
         rid = str(body.get("id") or "")[:64]
-        if rid in self.seen:
-            return {"status": self.seen[rid], "duplicate": True}
+        key = self._key(device, rid)
+        if key in self.seen:
+            return {"status": self.seen[key], "duplicate": True}
         kind, action = body.get("kind"), body.get("action")
         text = str(body.get("text") or "").strip()[:MAX_TEXT]
         note = str(body.get("note") or "").strip()[:MAX_TEXT]
@@ -197,7 +204,7 @@ class Hub:
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             return {"status": f"error: {e}"[:200]}
         if status == "ok":
-            self._remember(rid, status)
+            self._remember(key, status)
         return {"status": status}
 
     async def _share(self, device, rid, kind, action, text, note, data, mime) -> str:

@@ -265,6 +265,21 @@ def test_a_resent_request_id_runs_once(server):
     assert d.asked == [("r1", "what time is it", "phone")]
 
 
+def test_request_ids_are_each_phones_own(server):
+    client, d, _ = server
+    _, one = _paired()
+    _, two = _paired()
+    for token in (one, two):                    # the same id from another phone is a new request
+        with client.websocket_connect("/v1/ws", headers=_auth(token)) as ws:
+            ws.receive_json()
+            ws.send_json({"type": "ask", "id": "r1", "text": "hi"})
+            assert ws.receive_json() == {"type": "ack", "id": "r1", "status": "ok"}
+    assert len(d.asked) == 2
+    for token in (one, two):
+        r = client.post("/v1/share", headers=_auth(token), json={"id": "s1", "kind": "text", "action": "ask", "text": "x"})
+        assert "duplicate" not in r.json()
+
+
 def test_a_busy_pc_says_so_and_the_request_can_be_sent_again(server):
     client, d, _ = server
     _, token = _paired()

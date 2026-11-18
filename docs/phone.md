@@ -104,7 +104,7 @@ Phone to PC:
 | `ping` | `id` | `{"type":"pong"}` |
 
 Every request gets `{"type":"ack", id, status}`. `id` is the phone's request id: an `ask`, `talk.start` or
-`answer` that was already accepted (the PC remembers the last 500) isn't run again but acked with its first
+`answer` that phone already sent and the PC accepted (it remembers the last 500) isn't run again but acked with its first
 status and `"duplicate": true`, so a phone that reconnects can safely resend. A `busy` request isn't
 remembered and also gets `{"type":"busy", id, owner}` first.
 
