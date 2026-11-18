@@ -147,7 +147,11 @@ def main() -> None:
         sp.add_argument("--no-think", action="store_true")
         sp.add_argument("--effort", choices=Brain.EFFORTS, help="Claude's effort (default: brain.effort)")
         sp.add_argument("--backup", action="store_true", help="use the backup brain (Codex) directly")
-    a = p.parse_args()
+    a, extra = p.parse_known_args()
+    if extra and a.cmd != "selftest":          # its options come first, where REMAINDER doesn't take them
+        p.error(f"unrecognized arguments: {' '.join(extra)}")
+    if extra:
+        a.args = extra + a.args
     if a.cmd == "daemon":
         from .daemon import main as daemon_main
         return daemon_main(speak=not a.quiet)
