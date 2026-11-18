@@ -16,6 +16,7 @@ Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. 
 | `state.json` | daemon | Current state, below (written whole, then renamed) |
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
 | `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
+| `phone.json` | daemon | The phone server: `on`, `host`, `port`, `why` ([phone.md](phone.md)) |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
@@ -40,6 +41,7 @@ Always present:
 | `tts` | `{speed, steps, volume, pause}` |
 | `safety` | Approval level: `ask`, `task`, `free` or `never` ([safety.md](safety.md#approval-levels)) |
 | `autosend`, `autosendAfter` | Auto-send on, and its delay in seconds ([daemon.md](daemon.md)) |
+| `origin` | Who owns the turn now: `desk`, `phone`, or `null` when nobody does ([phone.md](phone.md#how-a-phone-turn-works)) |
 
 Sometimes present:
 
@@ -55,7 +57,9 @@ Sometimes present:
 ## Socket commands
 
 Sent with `auren-ctl <command>` (`~/.local/share/auren/bin/auren-ctl`, also linked into `~/.local/bin`);
-the reply is one line. It exits 1 when the daemon isn't running.
+the reply is one line. It exits 1 when the daemon isn't running. While the phone owns the turn, `talk`,
+`start`, `stop`, `ask` and `yes`/`no` are refused ("Auren is busy with your phone"), except that `talk`
+while Auren thinks or works stops the answer as always; `cancel` stops it at any time.
 
 | Command | Does |
 |---|---|
@@ -82,7 +86,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level), `[phone]` (enabled, port). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
@@ -91,6 +95,7 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `~/.local/state/auren/mascot.json` | mascot | Its place and size |
 | `~/.local/state/auren/history.jsonl` | daemon | Every exchange (read by the bar plugin) |
 | `~/.local/state/auren/daemon.log` | daemon | Log |
+| `~/.local/state/auren/phone/` | daemon, `auren phone` | Paired phones (token hashes), the open pairing, the phone's inbox ([phone.md](phone.md#files)) |
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
@@ -101,6 +106,11 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (current, available, updating, done, failed, error, unknown), `channel` (`releases`), `installed`, `step`, `message`, `latest` (commit, short, date, subject, release tag, name, url), `commits`, `count`, `checked_at`, `started_at`, `finished_at`, `note`, `log` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |
 | `~/.config/auren/panel.json` | bar plugin | The panel's own settings (`notifyUpdates`) |
+
+## Phone remote
+
+The phone talks to the daemon over HTTP and a WebSocket on the Tailscale address, with a device token;
+the protocol is in [phone.md](phone.md#protocol-api-v1).
 
 ## English-only replies
 

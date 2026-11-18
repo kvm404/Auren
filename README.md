@@ -71,6 +71,9 @@ Things to try:
 - "Find the cheapest flight to Goa next Friday." (with the browser tools)
 - "Ask Codex to fix the failing tests in my project."
 
+From your phone: the Android app in `android/` is a remote over Tailscale (talk, type, answer, stop, and
+get links and files from Auren). Pair it with `auren phone pair`; see [Phone remote](docs/phone.md).
+
 If something doesn't work, run `auren doctor`.
 
 ## Under the hood

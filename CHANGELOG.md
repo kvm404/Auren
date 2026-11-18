@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- A phone remote: an Android app (`android/`) that talks to Auren on your PC over Tailscale. Hold to talk,
+  hands-free or typed requests; see what Auren is doing and its replies (read aloud on the phone if you
+  like); answer its questions and stop it; get the links, text, images and files it sends with the new
+  `send_to_phone` tool; share from any app to Auren, the PC's clipboard or the PC's browser; a Quick
+  Settings tile. Pair with `auren phone pair` (a QR code), list with `auren phone devices`, unpair with
+  `auren phone revoke`. One turn at a time across the desk and the phone; phone replies aren't spoken on
+  the PC. The server listens only on the Tailscale address; `[phone]` in `config.toml` turns it off, and
+  `auren doctor` says why it's off. See [docs/phone.md](docs/phone.md).
+
 ### Changed
 
 - **Full access now means full access.** A new level, `never`, shown as Full access, asks about
