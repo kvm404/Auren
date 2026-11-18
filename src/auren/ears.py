@@ -25,6 +25,7 @@ like speech holds the clock too.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import signal
 import time
@@ -171,32 +172,42 @@ class Listening:
                     await ws.send(json.dumps({"type": "Terminate"}))
 
                 sender = asyncio.create_task(send())
-                async for raw in ws:
-                    msg = json.loads(raw)
-                    if msg.get("type") == "Turn":
-                        text = msg.get("transcript", "")
-                        if msg.get("end_of_turn"):
-                            self.finals.append(text.strip())
-                            self.partial = ""
-                            self._turn_ended(text)
-                            if self.released_at:
-                                self._final.set()
-                            elif self.on_end and text.strip():
-                                self.on_end()
-                        elif text:
-                            self.partial = text
-                            self._heard_live(text)
-                            if self.on_partial:          # after counting: the daemon reads quiet_seconds
-                                self.on_partial(text)
-                    elif msg.get("type") == "Termination":
-                        break
-                    elif msg.get("type") == "Error" or "error" in msg:
-                        self.error = str(msg)[:200]
-                await sender
+                try:
+                    await self._receive(ws)
+                    await sender
+                finally:
+                    # The stream can end, fail or be cancelled with the sender still waiting on the queue.
+                    sender.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await sender
         except Exception as e:  # noqa: BLE001 - reported to the user, never crashes the daemon
             self.error = f"{type(e).__name__}: {e}"[:200]
         finally:
             self._done.set()
+
+    async def _receive(self, ws) -> None:
+        """The transcripts, until the service ends the session."""
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg.get("type") == "Turn":
+                text = msg.get("transcript", "")
+                if msg.get("end_of_turn"):
+                    self.finals.append(text.strip())
+                    self.partial = ""
+                    self._turn_ended(text)
+                    if self.released_at:
+                        self._final.set()
+                    elif self.on_end and text.strip():
+                        self.on_end()
+                elif text:
+                    self.partial = text
+                    self._heard_live(text)
+                    if self.on_partial:          # after counting: the daemon reads quiet_seconds
+                        self.on_partial(text)
+            elif msg.get("type") == "Termination":
+                break
+            elif msg.get("type") == "Error" or "error" in msg:
+                self.error = str(msg)[:200]
 
     def _heard_live(self, text: str) -> None:
         """A live transcript of the turn in progress. More words than it had reset the quiet clock; a partial

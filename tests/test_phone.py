@@ -915,3 +915,29 @@ def test_listening_streams_pcm_from_a_queue(monkeypatch):
 
     text, levels = asyncio.run(go())
     assert text == "32000 bytes" and got == [32000] and len(levels) == 10
+
+
+def test_listening_leaves_no_sender_behind_when_the_service_drops(monkeypatch):
+    """The live log: a phone turn ending printed "Task was destroyed but it is pending!" for the sender. A
+    stream that fails (or is cancelled) with the sender still waiting on the queue must cancel and await it."""
+    import websockets
+
+    async def drops(ws):
+        await ws.send(json.dumps({"type": "Begin"}))
+        await ws.send(json.dumps({"type": "Turn", "transcript": "hello", "end_of_turn": True}))
+        await ws.close(code=1011)
+
+    async def go():
+        async with websockets.serve(drops, "127.0.0.1", 0) as srv:
+            monkeypatch.setattr(ears, "URL", f"ws://127.0.0.1:{srv.sockets[0].getsockname()[1]}")
+            monkeypatch.setattr(ears, "secret", lambda name: "key")
+            session = ears.Listening([], audio=asyncio.Queue(), on_end=lambda: None)
+            await session.start()
+            await asyncio.wait_for(session._done.wait(), 3)
+            await asyncio.sleep(0)
+            senders = [t for t in asyncio.all_tasks() if t.get_coro().__qualname__.endswith("<locals>.send")]
+            text = await session.finish(timeout=1)
+            return senders, text, session.error
+
+    senders, text, error = asyncio.run(go())
+    assert senders == [] and text == "hello" and error
