@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The PC serves plain HTTP/WS on its Tailscale address only; Tailscale (WireGuard) encrypts the link.
+  A network security config can't name an IP range, so cleartext is allowed here and the app enforces
+  the range itself: Pairing.parse refuses any host outside 100.64.0.0/10, and the PC is only ever a
+  host that came from a pairing link (see Protocol.kt, isTailnet).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

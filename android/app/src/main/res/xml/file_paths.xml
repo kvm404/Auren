@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Inbox files downloaded from the PC, to open or share with other apps. -->
+    <cache-path name="inbox" path="inbox/" />
+</paths>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- antenna -->
+    <path android:strokeColor="#2F4B82" android:strokeWidth="2.2" android:strokeLineCap="round" android:pathData="M54,40 L54,30" />
+    <path android:fillColor="#F5B83D" android:pathData="M54,27 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+    <!-- head -->
+    <path android:fillColor="#4E73B8" android:pathData="M35,39 h38 a10,10 0 0 1 10,10 v15 a10,10 0 0 1 -10,10 h-38 a10,10 0 0 1 -10,-10 v-15 a10,10 0 0 1 10,-10 z" />
+    <!-- visor -->
+    <path android:fillColor="#0C1222" android:pathData="M39,45 h30 a7,7 0 0 1 7,7 v9 a7,7 0 0 1 -7,7 h-30 a7,7 0 0 1 -7,-7 v-9 a7,7 0 0 1 7,-7 z" />
+    <!-- eyes -->
+    <path android:fillColor="#FFD15C" android:pathData="M45.5,51 h3 a1.5,1.5 0 0 1 1.5,1.5 v7 a1.5,1.5 0 0 1 -1.5,1.5 h-3 a1.5,1.5 0 0 1 -1.5,-1.5 v-7 a1.5,1.5 0 0 1 1.5,-1.5 z" />
+    <path android:fillColor="#FFD15C" android:pathData="M59.5,51 h3 a1.5,1.5 0 0 1 1.5,1.5 v7 a1.5,1.5 0 0 1 -1.5,1.5 h-3 a1.5,1.5 0 0 1 -1.5,-1.5 v-7 a1.5,1.5 0 0 1 1.5,-1.5 z" />
+</vector>
