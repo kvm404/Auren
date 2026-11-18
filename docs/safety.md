@@ -132,8 +132,11 @@ The system profile masks secrets (see [system-profile.md](system-profile.md)). T
 The phone remote ([phone.md](phone.md)) adds no new way in: a phone request runs at the desk's level and
 asks the same questions, which can be answered from the phone or the desk. Only paired phones get in: a
 one-time code (5 minutes, 5 tries) is traded for a random device token, and the PC keeps only its SHA-256
-hash. `auren phone revoke` cuts a phone off at once. The server listens only on the Tailscale address,
-never on the local network, and stays off without Tailscale. Anyone holding the phone unlocked, with the
+hash. `auren phone revoke` cuts a phone off at once. The server listens on the Tailscale address and the
+PC's private LAN addresses (never `0.0.0.0` or a public address; `phone.lan = false` keeps it off the
+LAN), over TLS the app pins to the PC's own certificate, so nobody else on the Wi-Fi can read or fake it.
+Pairing is refused unless `auren phone pair` is open, is rate limited, and refused tries are logged. A
+Yes/No from the phone names the question it was shown; a stale one approves nothing. Anyone holding the phone unlocked, with the
 app paired, can ask Auren for anything you could at the desk: treat it like the laptop's keyboard. Sending
 a file or text that looks like a secret to the phone asks first.
 

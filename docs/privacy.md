@@ -13,7 +13,7 @@ receive data as described below. Auren has no separate telemetry or analytics se
 | Claude Code's model provider, for the full-access send judge | The last six conversation lines, the proposed message and destination, and a screenshot for a screen-based send |
 | GitHub | Release checks and source downloads; authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh` login when available. Browser setup downloads the Open Browser Use release from github.com/iFurySt/open-browser-use |
 | Voice model host | The Supertonic model download during setup or `auren voice-model` |
-| Your paired phone, over Tailscale | Auren's state (transcripts, replies, questions), phone turns' replies, and what `send_to_phone` sends (text, links, images, files). Phone audio goes from the phone through the PC to AssemblyAI, like the PC's microphone |
+| Your paired phone, over Tailscale or the local Wi-Fi (TLS pinned to the PC's certificate) | Auren's state (transcripts, replies, questions), phone turns' replies, and what `send_to_phone` sends (text, links, images, files). Phone audio goes from the phone through the PC to AssemblyAI, like the PC's microphone |
 
 Browser actions use your real logged-in browser through Open Browser Use. Normal site requests,
 downloads, and actions therefore use that browser's session. Coding tasks handed to herdr agents
@@ -42,7 +42,7 @@ Paths follow the XDG base directories. These defaults apply unless you override 
 | `~/.local/state/auren/jobs/` | Shell job output |
 | `~/.local/state/auren/herdr-jobs.json` | Jobs Auren created in herdr |
 | `~/.local/state/auren/update.log` | The most recent update's installation output |
-| `~/.local/state/auren/phone/` | Paired phones (names, token hashes), the phone inbox and copies of files sent to the phone (newest 200) |
+| `~/.local/state/auren/phone/` | Paired phones (names, token hashes), the phone inbox, copies of files sent to the phone (newest 200), and the phone server's self-signed certificate and private key |
 | `~/.cache/auren/profile-static.json` | Cached machine profile |
 | `~/.cache/auren/source/` | The updater's source checkout |
 | `$XDG_RUNTIME_DIR/auren/` | Current state, captions, confirmations in process memory, sockets, and brain working files |
@@ -56,7 +56,7 @@ To remove Auren's retained conversation and machine data, stop Auren and its mas
 routines, and settings. Stop any active update before removing its cache or runtime files. Delete the
 runtime folder only after Auren, its mascot, and any updater have stopped.
 
-The phone app keeps the PC's address, its token, the inbox it has synced and downloaded files in its own
+The phone app keeps the PC's addresses and certificate fingerprint, its token, the inbox it has synced and downloaded files in its own
 private storage; uninstalling the app or `auren phone revoke` removes its access.
 
 Claude requests use `--no-session-persistence`; Codex requests use `--ephemeral`. These flags do not

@@ -6,14 +6,20 @@ the phone is a microphone, a screen and a few buttons. The plan behind it is [ph
 
 ## Setting it up
 
-1. Install Tailscale on the PC and the phone, signed in to the same tailnet. The PC's server listens only
-   on its Tailscale address (`tailscale ip -4`), never on `0.0.0.0` or the local network.
+1. Put the phone on the PC's Wi-Fi, or install Tailscale on both (signed in to the same tailnet) to reach
+   the PC from anywhere. The PC's server listens on its Tailscale address (`tailscale ip -4`) and on its
+   private LAN addresses (10/8, 172.16/12, 192.168/16, on real interfaces only), never on `0.0.0.0`, a
+   public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
+   home and Tailscale away.
 2. Build and install the app: `cd android && ./gradlew installDebug` (or copy
    `android/app/build/outputs/apk/debug/app-debug.apk` to the phone).
 3. On the PC, run `auren phone pair`. It prints a QR code, the same thing as text (`auren://pair?...`), and
    waits. Scan the QR with the app, or paste the text. The code works once, for 5 minutes, and 5 wrong
-   codes cancel it.
-4. `auren doctor` has a **Phone** section: whether the server is on, on which address, and why not.
+   codes cancel it. The QR also carries every address the server listens on and the fingerprint of the
+   PC's certificate, which is what the app trusts from then on.
+4. `auren doctor` has a **Phone** section: Tailscale and Wi-Fi/LAN (each a warning when missing, never a
+   failure while the other works), every address the server listens on or why it can't, and the
+   certificate.
 
 | Command | Does |
 |---|---|
@@ -25,12 +31,14 @@ the phone is a microphone, a screen and a few buttons. The plan behind it is [ph
 
 ```toml
 [phone]
-enabled = "auto"   # auto or true: serve when Tailscale is up; false: never
+enabled = "auto"   # auto or true: serve on Tailscale and the LAN, whichever is there; false: never
 port = 8735
+lan = true         # false: Tailscale only, nothing on the Wi-Fi
 ```
 
-With Tailscale down the server stays off and tries again every 30 s; it moves with the address when it
-changes. `send_to_phone` and its prompt rule are offered to the brain only while at least one phone is
+The server checks its addresses every 5 s and moves with them (a new Wi-Fi, Tailscale coming up); with
+none it stays off. `auren config set` for any of these takes effect on the next reload: the server
+starts, stops, or moves to the new port, and phones connected to the old one are dropped. `send_to_phone` and its prompt rule are offered to the brain only while at least one phone is
 paired (pairing or revoking the last phone starts a fresh conversation so the brain's tools match).
 
 ## How a phone turn works
@@ -43,7 +51,7 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
 - **The desk's safety level applies.** Approvals show on the phone (Yes / No) and on the desk (bubble,
   panel, `auren-ctl yes|no`); either answer counts, the same way as [the buttons](safety.md#who-reads-the-answer),
   and what follows (the action, the brain carrying on) is a turn of the side that answered.
-- **Replies go to the phone as text**, and the phone may read them aloud (Android TTS, a setting). The PC
+- **Replies go to the phone that asked, as text**, and the phone may read them aloud (Android TTS, a setting). The PC
   doesn't speak a phone turn's reply and doesn't pop up notices for it; the mascot still shows the state.
 - **Voice:** the phone records 16 kHz mono 16-bit PCM and streams it over the WebSocket into the same
   speech pipeline as the PC's microphone (AssemblyAI). Hold to talk, or hands-free: it sends when you stop
@@ -71,25 +79,37 @@ Share text, a link or an image from any Android app to Auren, then pick:
 
 ## Protocol (API v1)
 
-Base URL `http://<tailscale ip>:<port>`. Every call except `GET /v1/hello` (without a token) and
-`POST /v1/pair` needs `Authorization: Bearer <device token>`; a missing, wrong or revoked token gets 401
-(on the WebSocket, the handshake is refused with 401). The traffic is plain HTTP inside Tailscale's
-encrypted tunnel; the app allows cleartext only to `100.64.0.0/10` addresses.
+Base URL `https://<address>:<port>`, any address from the QR code or the last hello. HTTPS and WSS only:
+the PC makes a self-signed certificate (EC P-256, ten years) on first start, and the app trusts that one
+certificate by its SHA-256 fingerprint (`fp`, of the DER bytes) and nothing else: no CA, no hostname
+check. So the same pin protects the LAN, where nothing else encrypts the link, and Tailscale. The app tries
+the PC's address on its current Wi-Fi subnet first, then Tailscale, then any other LAN address, the one
+that worked last first in each, and shows which path it is on.
+
+Every call except `GET /v1/hello` (without a token) and `POST /v1/pair` needs
+`Authorization: Bearer <device token>`; a missing, wrong or revoked token gets 401 (on the WebSocket, the
+handshake is refused with 401). `/v1/share` checks the token again after the upload, so a phone revoked
+meanwhile gets 401 and nothing runs.
+
+`POST /v1/pair` is refused (403) before its body is read while no pairing is open, takes at most 4 KB
+(413), and allows 10 tries a minute from everyone together (429). Refused tries are logged with the
+address they came from.
 
 | Call | Body / query | Answer |
 |---|---|---|
-| `GET /v1/hello` | | `{app, api, pc}`, plus `device` with a valid token |
-| `POST /v1/pair` | `{code, name}` | `{token, device, pc, api}`; 403 `{error}` for a wrong, used or expired code |
+| `GET /v1/hello` | | `{app, api, pc, addrs: [{ip, via: tailscale\|lan}], fp}`, plus `device` with a valid token |
+| `POST /v1/pair` | `{code, name}` | `{token, device, pc, api, addrs, fp}`; 403 `{error}` for a wrong, used or expired code |
 | `GET /v1/inbox` | `after`, `limit` (≤ 200) | `{items, next, last}` |
 | `GET /v1/inbox/{id}/file` | | the image or file (404 if gone) |
-| `POST /v1/share` | `{id, kind: text\|link\|image, action: ask\|clipboard\|open, text, note, data (base64), mime}` (≤ 20 MB) | `{status}`: `ok`, `busy` (409) or `error: …` |
+| `POST /v1/share` | `{id, kind: text\|link\|image, action: ask\|clipboard\|open, text, note, data (base64), mime}` (≤ 20 MB, else 413) | `{status}`: `ok`, `busy` (409) or `error: …` |
 | `WS /v1/ws` | | below |
 
 An inbox item: `{id, kind, title, at, text?, url?, file?: {name, size, mime}}`.
 
 **WebSocket.** Text frames are JSON objects; binary frames are PCM audio (16 kHz, mono, s16le) for the
-listen this phone started. On connect the PC sends
-`{"type":"hello", api, pc, device, inboxLast, state}`.
+listen this phone started (frames from any other phone are dropped). On connect the PC sends
+`{"type":"hello", api, pc, addrs, fp, device, inboxLast, state}`; the app takes its address list from
+`addrs`, so a PC whose LAN address changed is found again.
 
 Phone to PC:
 
@@ -97,21 +117,34 @@ Phone to PC:
 |---|---|---|
 | `ask` | `id`, `text` | `ok`, `busy`, `error: …` |
 | `talk.start` | `id`, `handsFree`, `fresh` | `ok`, `busy`; then stream binary frames |
-| `talk.stop` | | `heard …`, `heard nothing`, `not listening` |
+| `talk.stop` | | `heard …`, `heard nothing`, `not listening` (also for a listen another phone started) |
 | `cancel` | | `cancelled` (Stop: listening, thinking, working) |
-| `answer` | `id`, `yes` | `approved N`, `dropped N`, `nothing is waiting for an answer`, `busy` |
+| `answer` | `id`, `yes`, `ask` | `approved N`, `dropped N`, `that question is no longer open`, `nothing is waiting for an answer`, `busy` |
+| `resume` | `ids` | none: for each id, its `reply` if the PC kept it, else `lost`; nothing while it still runs |
 | `sync` | `after` | none: `inbox` messages for each item after the cursor |
 | `ping` | `id` | `{"type":"pong"}` |
 
 Every request gets `{"type":"ack", id, status}`. `id` is the phone's request id: an `ask`, `talk.start` or
 `answer` that phone already sent and the PC accepted (it remembers the last 500) isn't run again but acked with its first
-status and `"duplicate": true`, so a phone that reconnects can safely resend. A `busy` request isn't
-remembered and also gets `{"type":"busy", id, owner}` first.
+status and `"duplicate": true`, so a phone that reconnects can safely resend; one that arrives while the
+first is still running gets `in progress` with `"duplicate": true`. A `busy` request isn't remembered and
+also gets `{"type":"busy", id, owner}` first.
+
+An `answer` names the question it was tapped on: `ask` is the `ask` field of the state that showed it (a
+digest of the open confirmations). Any other value, or none, gets `that question is no longer open` and
+approves nothing, so a Yes kept from before a reconnect can't approve a different action. The app never
+queues or resends an answer; after a reconnect the question shows again.
+
+**Replies after a reconnect.** The PC keeps each phone's replies for 10 minutes (the newest 200). On
+hello the app sends `resume` with the requests still waiting; each gets its reply, or `lost` when the PC
+has neither the reply nor the turn any more, so the phone never waits forever.
 
 PC to phone: `state` (the [state.json](ipc.md#statejson) fields `state, detail, since, brain, safety, voice,
-awaiting, question, until, transcript, reply, silent, tool, remind, fresh`, plus `origin`: `desk`, `phone`
-or absent), `reply` (`{id, device, text, at}`, a phone turn's answer; empty text when there was nothing to
-say), `inbox` (`{item}`), `busy`, `revoked` (then close code 4401), `error`.
+awaiting, question, until, ask, transcript, reply, silent, tool, remind, fresh`, plus `origin`: `desk`,
+`phone` or absent), `reply` (`{id, device, text, at}`, a phone turn's answer, sent only to that phone;
+empty text when there was nothing to say), `ended` (`{id}`, the turn ended without a reply: nothing was
+heard, or it was stopped), `lost` (`{id}`, after `resume`), `inbox` (`{item}`), `busy`, `revoked` (then
+close code 4401), `error`. When the server stops or moves, open connections are closed (1012).
 
 ## Files
 
@@ -121,10 +154,15 @@ say), `inbox` (`{item}`), `busy`, `revoked` (then close code 4401), `error`.
 | `devices.json` (600) | Paired phones: `id`, `name`, `created`, `lastSeen`, and `hash` (SHA-256 of the token) |
 | `pairing.json` (600) | The open pairing: the code's hash, expiry, wrong tries |
 | `inbox.jsonl`, `files/` (600) | What Auren sent to the phone |
-| `$XDG_RUNTIME_DIR/auren/phone.json` | The server: `on`, `host`, `port`, `why` (when off) |
+| `cert.pem`, `key.pem` (600) | The server's self-signed certificate and its private key, made once |
+| `$XDG_RUNTIME_DIR/auren/phone.json` | The server: `on`, `port`, `addrs` (`[{ip, via, ok, why}]`), `fp`, `why` |
 
-On the phone, the PC's address and the device token are kept in the app's private storage.
+On the phone, the PC's addresses, its certificate fingerprint and the device token are kept in the app's
+private storage. Pairing again or unpairing clears the old PC's conversation, inbox and cursor.
 
-Tested: `tests/test_phone.py` (pairing, tokens and revoke, refused requests, one turn at a time, request
-ids, the inbox cursor, `send_to_phone`, listening from a PCM queue against a stand-in AssemblyAI) and the
-app's protocol unit tests (`android/app/src/test`).
+Tested: `tests/test_phone.py` (pairing and its limits, tokens and revoke, refused requests, one turn at a
+time per phone, request ids and in-progress retries, answers bound to their question, replies kept for a
+resume, the inbox cursor, `send_to_phone`, the certificate, the addresses it binds, pinned TLS with a
+wrong pin refused, reload stopping and moving the server, listening from a PCM queue against a stand-in
+AssemblyAI) and the app's unit tests (`android/app/src/test`: the protocol, the address order, the pin
+with a real TLS handshake, the inbox file, the screen lifecycle).

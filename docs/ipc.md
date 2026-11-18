@@ -16,7 +16,7 @@ Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. 
 | `state.json` | daemon | Current state, below (written whole, then renamed) |
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
 | `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
-| `phone.json` | daemon | The phone server: `on`, `host`, `port`, `why` ([phone.md](phone.md)) |
+| `phone.json` | daemon | The phone server: `on`, `port`, `addrs` (each `ip`, `via`, `ok`, `why`), `fp`, `why` ([phone.md](phone.md)) |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
@@ -86,7 +86,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 
 | Path | Writer | Content |
 |---|---|---|
-| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level), `[phone]` (enabled, port). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
+| `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level), `[phone]` (enabled, port, lan). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
 | `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
@@ -109,8 +109,9 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 
 ## Phone remote
 
-The phone talks to the daemon over HTTP and a WebSocket on the Tailscale address, with a device token;
-the protocol is in [phone.md](phone.md#protocol-api-v1).
+The phone talks to the daemon over HTTPS and a secure WebSocket on the Tailscale address or a private
+LAN address, pinned to the PC's self-signed certificate, with a device token; the protocol is in
+[phone.md](phone.md#protocol-api-v1).
 
 ## English-only replies
 
