@@ -4,13 +4,17 @@ The Android app (`android/`) is a remote for the Auren on your PC: talk or type 
 see what it's doing, answer its questions, stop it, and get what it sends you. The PC does all the work;
 the phone is a microphone, a screen and a few buttons. The plan behind it is [phone-plan.md](phone-plan.md).
 
+It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren phone` says so, and
+`send_to_phone` isn't offered); it comes in a later release.
+
 ## Setting it up
 
 1. Put the phone on the PC's Wi-Fi, or install Tailscale on both (signed in to the same tailnet) to reach
    the PC from anywhere. The PC's server listens on its Tailscale address (`tailscale ip -4`) and on its
    private LAN addresses (10/8, 172.16/12, 192.168/16, on interfaces with a network card behind them, or a
    bridge over one), never on `0.0.0.0`, a public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
-   home and Tailscale away.
+   home and Tailscale away. It listens only while a phone is paired or a pairing is open: until you run
+   `auren phone pair`, nothing on the network can reach it.
 2. Let the phone in through the firewall. Omarchy turns on `ufw`, which drops incoming connections, so the
    app says it can't reach the PC until port 8735 is allowed, from your LAN and over Tailscale only:
 
@@ -32,7 +36,7 @@ the phone is a microphone, a screen and a few buttons. The plan behind it is [ph
 
 | Command | Does |
 |---|---|
-| `auren phone pair [--no-wait] [--no-qr]` | A new one-time code (any earlier one stops working). Needs the daemon's server to be on |
+| `auren phone pair [--no-wait] [--no-qr]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen |
 | `auren phone devices` | The paired phones: id, name, when paired, last seen |
 | `auren phone revoke <id>` | Unpair one. Its token stops working at once and its open connection is closed |
 

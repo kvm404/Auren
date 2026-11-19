@@ -16,7 +16,8 @@ There is no cleartext: the certificate is self-signed (phone.cert) and the app t
 which it got from the pairing QR code. The server is never on 0.0.0.0: `supervise` binds it to `tailscale ip -4`
 and to each private address of a real Wi-Fi or Ethernet interface (phone.addresses), follows them when they
 change, says where it listens and why a path is missing in $XDG_RUNTIME_DIR/auren/phone.json (for
-`auren doctor` and `auren phone pair`), and stops when there is nowhere to listen.
+`auren doctor` and `auren phone pair`), and stops when there is nowhere to listen. It listens only while a
+phone is paired or a pairing is open (`auren phone pair` opens one): with no phone, nothing is listening.
 """
 
 from __future__ import annotations
@@ -49,6 +50,8 @@ log = logging.getLogger("auren")
 WATCH = 5.0                 # seconds between looks at the addresses (Wi-Fi changed, Tailscale came up)
 RETRY = 30                  # seconds before a port that was taken is tried again
 SWEEP = 1.0                 # seconds between checks for revoked phones and new inbox items
+IDLE = 0.5                  # seconds between looks for a pairing, while no phone is paired
+IDLE_WHY = "no phone is paired: auren phone pair starts the server"
 MAX_SHARE = 20 * 1024 * 1024
 MAX_PAIR = 4096             # a pairing request is a code and a name
 MAX_TEXT = 4000
@@ -609,12 +612,17 @@ class _Server(uvicorn.Server):
 
 
 def _write_status(on: bool, port: int = 0, addrs: list[dict] | None = None, fp: str = "", why: str = "",
-                  missing: dict | None = None) -> None:
+                  missing: dict | None = None, idle: bool = False) -> None:
     phone.STATUS.parent.mkdir(parents=True, exist_ok=True)
     tmp = phone.STATUS.with_name(f".{phone.STATUS.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps({"on": on, "port": port, "addrs": addrs or [], "fp": fp, "why": why,
-                               "missing": missing or {}, "pid": os.getpid(), "at": time.time()}))
+                               "missing": missing or {}, "idle": idle, "pid": os.getpid(), "at": time.time()}))
     tmp.replace(phone.STATUS)
+
+
+def wanted() -> bool:
+    """Is there a phone to serve: one paired, or a pairing open (auren phone pair)?"""
+    return bool(phone.devices()) or phone.pairing_open()
 
 
 def _bind(host: str, port: int) -> socket.socket:
@@ -687,9 +695,22 @@ async def supervise(daemon) -> None:
     lan = daemon.settings.get("phone.lan", True) is not False
     running: _Running | None = None
     started_for, seen, tried, rows = None, None, 0.0, []
+    idle = False
     try:
         certfile, keyfile, hub.fp = await asyncio.to_thread(phone.cert)
         while True:
+            if not await asyncio.to_thread(wanted):
+                # No phone to serve: nothing listens (on a café's Wi-Fi too) until auren phone pair opens a pairing.
+                if running:
+                    log.info("phone server: no phone is paired, stopping")
+                    await running.stop()
+                    running = None
+                if not idle:
+                    hub.addrs, started_for, seen, rows, idle = [], None, None, [], True
+                    _write_status(False, port, fp=hub.fp, why=IDLE_WHY, idle=True)
+                await asyncio.sleep(IDLE)
+                continue
+            idle = False
             addrs, missing = await asyncio.to_thread(phone.addresses, lan)
             down = running is None or running.task.done()
             # A change counts once it is seen twice in a row: one failed Tailscale probe doesn't drop the LAN.

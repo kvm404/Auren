@@ -84,6 +84,8 @@ def _installed(name: str) -> tuple[bool, str]:
             return (True, "") if ok else (False, "Auren isn't allowed under Privacy & Security → Accessibility")
         return (True, "") if os.access("/dev/uinput", os.W_OK) else (False, "/dev/uinput isn't writable")
     if name == "phone":
+        if sys.platform == "darwin":
+            return False, "the phone remote isn't on macOS yet"
         from . import phone
         return (True, "") if phone.devices() else (False, "no phone is paired (auren phone pair)")
     raise KeyError(name)

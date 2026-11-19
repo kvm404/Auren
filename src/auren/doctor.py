@@ -312,6 +312,8 @@ def phone_checks() -> list[Check]:
                        if a.get("ok") else Check(g, f"listening on {a['ip']}", WARN, a.get("why", ""), "set phone.port"))
         if st.get("fp"):
             out.append(Check(g, "certificate", OK, f"self-signed, pinned by the app (SHA-256 {st['fp'][:16]}…)"))
+    elif st.get("idle") and not phone.devices():
+        out.append(Check(g, "phone server", OK, "not listening until a phone is paired (auren phone pair starts it)"))
     elif addrs:
         out.append(Check(g, "phone server", WARN, st.get("why") or "the Auren daemon isn't running",
                          "systemctl --user restart auren" if daemon_up else "systemctl --user start auren"))

@@ -480,6 +480,34 @@ def listening(st: dict) -> list[dict]:
 
 # --- the CLI ------------------------------------------------------------------------------------
 
+MAC_LATER = "The phone remote isn't on macOS yet: it works with Auren on Omarchy for now."
+SERVE_WAIT = 15                     # seconds `auren phone pair` waits for the daemon to start the server
+
+
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except (TypeError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _serving(since: float, wait: float = SERVE_WAIT) -> dict:
+    """The daemon's server status once it listens somewhere for the pairing opened at `since`, or once it
+    wrote, after that, why it can't; else as it is when `wait` runs out."""
+    end = time.time() + wait
+    while True:
+        st = status()
+        if _alive(st.get("pid")) and (st.get("on") and listening(st)
+                                      or not st.get("idle") and st.get("at", 0) >= since):
+            return st
+        if time.time() >= end:
+            return st
+        time.sleep(0.3)
+
+
 def _ago(t: float) -> str:
     if not t:
         return "never"
@@ -507,6 +535,9 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("revoke", help="unpair a phone (its id from auren phone devices)")
     r.add_argument("id")
     a = ap.parse_args(argv)
+    if sys.platform == "darwin":
+        print(MAC_LATER, file=sys.stderr)
+        return 2
 
     if a.cmd == "devices":
         found = devices()
@@ -523,14 +554,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unpaired {gone['name']} ({gone['id']}). It can't connect any more.")
         return 0
 
-    st = status()
+    from .settings import current as settings
+    if settings()["phone.enabled"] is False:
+        print("The phone remote is turned off: auren config set phone.enabled auto", file=sys.stderr)
+        return 1
+    # The server listens only while a phone is paired or a pairing is open: open one, then wait for the server.
+    opened = time.time()
+    code, expires = start_pairing()
+    st = _serving(opened)
     if not st.get("on"):
-        why = st.get("why") or "the Auren daemon isn't running (systemctl --user start auren)"
+        PAIRING.unlink(missing_ok=True)
+        why = st.get("why") if _alive(st.get("pid")) and not st.get("idle") else \
+            "the Auren daemon isn't running (systemctl --user start auren)"
         print(f"The phone server is off: {why}", file=sys.stderr)
         print("auren doctor says more.", file=sys.stderr)
         return 1
     bound = listening(st)
-    code, expires = start_pairing()
     uri = pair_uri([a["ip"] for a in bound], int(st["port"]), code, st["fp"])
     before = {d["id"] for d in devices()}
     if not a.no_qr:

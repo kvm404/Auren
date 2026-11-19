@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import stat
+import sys
 import threading
 import time
 
@@ -1208,6 +1209,7 @@ def _supervised(monkeypatch, tmp_path, addrs_seq, scenario):
     async def go():
         d = _Daemon()
         d.settings = {"phone.port": _free_port()}
+        _paired()                                   # the server listens only with a phone to serve
         task = asyncio.create_task(phone_server.supervise(d))
         try:
             await scenario(d, starts)
@@ -1268,3 +1270,88 @@ def test_the_status_says_on_only_once_the_server_serves(monkeypatch, tmp_path):
         assert phone.status()["on"] is False and not d.phone.addrs
 
     _supervised(monkeypatch, tmp_path, lambda: ([("127.0.0.1", "lan")], {}), scenario)
+
+
+# --- nothing listens without a phone ------------------------------------------------------------------
+
+def test_with_no_phone_paired_nothing_listens_until_a_pairing_opens(monkeypatch, tmp_path):
+    """A PC on a café's Wi-Fi with no phone paired has no open port: the server starts when auren phone pair
+    opens a pairing, and stops again when it ends with no phone paired."""
+    starts = []
+    monkeypatch.setattr(phone_server, "WATCH", 0.05)
+    monkeypatch.setattr(phone_server, "IDLE", 0.02)
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("127.0.0.1", "lan")], {}))
+    real = phone_server._Running.__init__
+    monkeypatch.setattr(phone_server._Running, "__init__", lambda self, *a, **k: starts.append(1) or real(self, *a, **k))
+
+    async def go():
+        d = _Daemon()
+        d.settings = {"phone.port": _free_port()}
+        task = asyncio.create_task(phone_server.supervise(d))
+        try:
+            await _until(lambda: phone.status().get("idle"))
+            await asyncio.sleep(0.1)
+            idle = (phone.status(), list(starts))
+            phone.start_pairing()
+            await _until(lambda: phone.status().get("on"))
+            pairing = phone.status()
+            phone.PAIRING.unlink()                  # the code expired, nobody paired
+            await _until(lambda: phone.status().get("idle"))
+            return idle, pairing, phone.status()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    (idle, before), pairing, after = asyncio.run(go())
+    assert not idle["on"] and idle["why"] == phone_server.IDLE_WHY and before == []
+    assert pairing["on"] and [a["ip"] for a in pairing["addrs"]] == ["127.0.0.1"]
+    assert not after["on"] and after["idle"]
+
+
+def test_phone_pair_opens_the_pairing_before_waiting_for_the_server(monkeypatch, capsys):
+    """The daemon starts the server only once a pairing is open, so pair opens it first and shows the code
+    once the server listens."""
+    import os
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("auren.settings.current", lambda: {"phone.enabled": "auto"})
+    seen = []
+
+    def status():
+        if phone.pairing_open():
+            seen.append("open")
+            return {"on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(),
+                    "addrs": [{"ip": "192.168.1.5", "via": "lan", "ok": True}]}
+        return {"on": False, "idle": True, "pid": os.getpid()}
+
+    monkeypatch.setattr(phone, "status", status)
+    assert phone.main(["pair", "--no-wait", "--no-qr"]) == 0
+    assert seen and "192.168.1.5" in capsys.readouterr().out
+
+
+def test_phone_pair_says_when_the_daemon_isnt_running(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("auren.settings.current", lambda: {"phone.enabled": "auto"})
+    monkeypatch.setattr(phone, "SERVE_WAIT", 0.1)
+    monkeypatch.setattr(phone, "status", lambda: {})
+    assert phone.main(["pair", "--no-wait", "--no-qr"]) == 1
+    assert "daemon isn't running" in capsys.readouterr().err and not phone.pairing_open()
+
+
+# --- not on macOS yet ------------------------------------------------------------------------------------
+
+def test_the_phone_remote_is_off_on_a_mac(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _paired()
+    assert REAL_INSTALLED("phone") == (False, "the phone remote isn't on macOS yet")
+    assert phone.main(["devices"]) == 2 and "isn't on macOS yet" in capsys.readouterr().err
+
+
+def test_the_daemon_serves_no_phone_on_a_mac(monkeypatch):
+    called = []
+    monkeypatch.setattr(daemon, "MAC", True)
+    monkeypatch.setattr(phone_server, "supervise", lambda d: called.append(d))
+    d = _Daemon()
+    d.settings = {"phone.enabled": "auto"}
+    asyncio.run(daemon.Daemon._serve_phone(d))
+    assert called == []
