@@ -98,24 +98,6 @@ The code lives in `src/auren/mac/`. Each Linux module that differs ends with
 `if sys.platform == "darwin": from ..mac.<name> import *`, and the Mac module's `__all__` lists exactly
 what it replaces, so everything else (the brain, safety, speech, the tool definitions) is shared.
 
-## Checking it: `auren selftest`
-
-`auren selftest` checks the whole Mac setup and writes a report to `~/auren-selftest-<time>.txt` (and shows it in Finder),
-for a bug report or for whoever helps you set it up. It takes about a minute:
-
-- **Automatically:** the doctor's checks; the permissions, as the daemon sees them; whether the talk
-  keys are listening; whether the robot's window is on a screen. It also records 3 seconds from the
-  microphone, connects to AssemblyAI, captures the screen, lists the windows, copies and reads back the
-  clipboard, sends one short request to the brain and looks at the browser tools.
-- **With you:** Auren says a sentence and you say whether you heard it. You say whether you see the
-  robot. Auren answers a typed request that needs a tool. Then you press the talk key and say "what time
-  is it".
-
-The checks that need a permission run inside the daemon, because macOS gives the permissions to
-Auren.app, not to Terminal. `--quick` runs only the automatic checks, so nothing is said out loud. The
-report has the settings and the last lines of both logs, which show what was said to Auren lately. It
-doesn't have the AssemblyAI key.
-
 ## Known limits
 
 - Keyboard shortcuts are sent as US-layout key codes, so on other layouts some typed shortcuts may hit

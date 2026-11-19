@@ -81,7 +81,6 @@ the reply is one line. It exits 1 when the daemon isn't running.
 | `status` | JSON: state, brain, mode, effort, voice, safety |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
 | `permissions` / `permissions microphone\|accessibility\|screen` / `permissions status` | macOS only: ask for all the permissions, or one, or just report them, as JSON with `program` (Auren.app, or the Python macOS asks about without it) and `talk_keys` (the key listener is running). The setup window and `auren permissions` send it |
-| `selftest` | macOS only: run the checks that need Auren.app's permissions (permissions, talk keys, the mascot's window, 3 s of microphone, AssemblyAI, the voice, screen capture, windows, clipboard) and reply with a JSON list of `{name, status, detail}`, status `ok`, `warn`, `fail` or `skip`. `auren selftest` sends it |
 | `quit` | Stop the daemon |
 
 ## Files

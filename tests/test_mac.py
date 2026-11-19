@@ -2,7 +2,6 @@
 
 import re
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -379,136 +378,7 @@ def test_the_talk_keys_start_once_accessibility_is_allowed(monkeypatch):
     assert d._hotkeys == "tap"
 
 
-# --- auren selftest -------------------------------------------------------------------------------
-
-def test_selftest_reads_an_answer_from_the_history(monkeypatch, tmp_path):
-    from auren.mac import selftest
-    hist = tmp_path / "history.jsonl"
-    hist.write_text('{"source": "voice", "transcript": "old"}\n')
-    monkeypatch.setattr(selftest, "HISTORY", hist)
-    before = selftest._history_len()
-    with hist.open("a") as f:
-        f.write('{"source": "forget"}\nnot json\n{"source": "voice", "transcript": "what time is it", "reply": "Ten.",'
-                ' "tools": [], "heard_s": 0.4, "think_s": 1.2, "brain": "codex"}\n')
-    rec = selftest._wait_history(before, "voice", 1)
-    assert rec["transcript"] == "what time is it"
-    assert selftest._wait_history(selftest._history_len(), "voice", 0.1) is None
-
-
-@pytest.mark.parametrize("rec,wanted,status", [
-    (None, "", "fail"),
-    ({"transcript": "x", "reply": "Sorry, my brain hit an error: no", "tools": []}, "", "fail"),
-    ({"transcript": "x", "reply": "", "tools": []}, "", "fail"),
-    ({"transcript": "x", "reply": "Safari and Notes.", "tools": []}, "system_state", "warn"),
-    ({"transcript": "x", "reply": "Safari and Notes.", "tools": ["system_state"]}, "system_state", "ok"),
-])
-def test_selftest_judges_a_turn_by_its_reply_and_tools(rec, wanted, status):
-    from auren.mac import selftest
-    assert selftest._turn(rec, "turn", wanted)["status"] == status
-
-
-def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
-    import asyncio
-
-    from auren.mac import selftest
-
-    def broken(*a):
-        raise RuntimeError("no Quartz here")
-
-    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard", "_browser_folders",
-                 "_brain_folder"):
-        monkeypatch.setattr(selftest, name, broken)
-
-    async def fine(*a):
-        return selftest.result("async", "ok")
-
-    for name in ("_microphone", "_speech_service", "_voice"):
-        monkeypatch.setattr(selftest, name, fine)
-    rows = asyncio.run(selftest.inside(object()))
-    assert len(rows) == 11
-    assert [r["status"] for r in rows].count("fail") == 8
-    assert all("no Quartz here" in r["detail"] for r in rows if r["status"] == "fail")
-
-
-def test_selftest_writes_a_report_with_every_result_and_the_logs(monkeypatch, tmp_path):
-    from auren.mac import selftest
-    ok, bad = selftest.result("fine", "ok", "yes"), selftest.result("mascot window", "fail", "off every screen")
-    monkeypatch.setattr(selftest, "_about", lambda: ["macOS: 27.2"])
-    monkeypatch.setattr(selftest, "_doctor", lambda: [ok])
-    monkeypatch.setattr(selftest, "_daemon", lambda: ([bad], {"state": "idle"}))
-    monkeypatch.setattr(selftest, "_brain", lambda: ok)
-    monkeypatch.setattr(selftest, "_browser", lambda: selftest.result("browser tools", "skip", "turned off"))
-    monkeypatch.setattr(selftest, "_agents", lambda: [])
-    monkeypatch.setattr(selftest, "_settings", lambda: ["brain = 'auto'"])
-    monkeypatch.setattr(selftest, "_by_hand", lambda *a: pytest.fail("--quick asks nothing"))
-    monkeypatch.setattr(selftest, "STATE_DIR", tmp_path)
-    (tmp_path / "daemon.out.log").write_text("17:22 ready in 3.0s\n")
-    out = tmp_path / "report.txt"
-    assert selftest.main(["--quick", "--out", str(out)]) == 1
-    text = out.read_text()
-    assert "result: 1 failed, 0 warnings, 2 ok, 1 skipped" in text
-    assert "FAIL mascot window: off every screen" in text
-    assert "17:22 ready in 3.0s" in text and "brain = 'auto'" in text
-    assert out.stat().st_mode & 0o077 == 0
-
-
-def test_selftest_waits_for_the_words_asked_for_and_notes_the_states(monkeypatch, tmp_path):
-    from auren.mac import selftest
-    hist = tmp_path / "history.jsonl"
-    hist.write_text('{"source": "voice", "transcript": "पर ऑप्शन क्या था?", "reply": "Which option?"}\n')
-    monkeypatch.setattr(selftest, "HISTORY", hist)
-    monkeypatch.setattr("auren.ctl.send", lambda line, timeout=0: '{"state": "listening"}')
-    states: list[str] = []
-    # Someone else's words first: they're kept only if the asked-for ones never come
-    assert selftest._wait_history(0, "voice", 0.3, wanted="time", states=states)["reply"] == "Which option?"
-    assert states == ["listening"]
-    with hist.open("a") as f:
-        f.write('{"source": "voice", "transcript": "What time is it?", "reply": "Twelve."}\n')
-    assert selftest._wait_history(0, "voice", 5, wanted="time")["reply"] == "Twelve."
-
-
-def test_selftest_waits_past_a_cancelled_try(monkeypatch, tmp_path):
-    from auren.mac import selftest
-    hist = tmp_path / "history.jsonl"
-    hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n'
-                    '{"source": "voice", "transcript": "What time is this?", "reply": "Half past three."}\n')
-    monkeypatch.setattr(selftest, "HISTORY", hist)
-    assert selftest._wait_history(0, "voice", 1, wanted="time")["reply"] == "Half past three."
-    hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n')
-    assert selftest._wait_history(0, "voice", 0.3, wanted="time")["reply"] == "(cancelled)"
-
-
-
-def test_selftest_keeps_waiting_while_auren_is_still_on_it(monkeypatch, tmp_path):
-    """The friend's 20:20 report: he started talking near the end of the wait, auto-send fired, and the
-    test gave up before the answer, though Auren was still listening."""
-    from auren.mac import selftest
-    hist = tmp_path / "history.jsonl"
-    hist.write_text("")
-    monkeypatch.setattr(selftest, "HISTORY", hist)
-    calls = {"n": 0}
-
-    def status(line, timeout=0):
-        calls["n"] += 1
-        if calls["n"] == 6:          # read at the next poll, after the 1 s timeout
-            hist.write_text('{"source": "voice", "transcript": "What time is it?", "reply": "Eight twenty."}\n')
-        return '{"state": "%s"}' % ("idle" if calls["n"] < 2 else "listening" if calls["n"] < 4 else "thinking")
-    monkeypatch.setattr("auren.ctl.send", status)
-    states: list[str] = []
-    rec = selftest._wait_history(0, "voice", 1, wanted="time", states=states, more=10)
-    assert rec["reply"] == "Eight twenty." and states == ["idle", "listening", "thinking"]
-
-
-def test_selftest_stops_at_the_timeout_when_auren_never_listened(monkeypatch, tmp_path):
-    from auren.mac import selftest
-    hist = tmp_path / "history.jsonl"
-    hist.write_text("")
-    monkeypatch.setattr(selftest, "HISTORY", hist)
-    monkeypatch.setattr("auren.ctl.send", lambda line, timeout=0: '{"state": "speaking"}')
-    t = time.monotonic()
-    assert selftest._wait_history(0, "voice", 0.3, states=[], more=30) is None
-    assert time.monotonic() - t < 3
-
+# --- the mascot on macOS -----------------------------------------------------------------------
 
 def test_shared_mascots_use_a_font_macos_has():
     """"monospace" doesn't exist on macOS: Qt then searches every font mid-layout (the mascot log's

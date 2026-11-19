@@ -288,9 +288,6 @@ class Daemon:
             now = await asyncio.get_running_loop().run_in_executor(None, ask)
             return json.dumps({**now, "program": permissions.program(),
                                "talk_keys": bool(getattr(self, "_hotkeys", None))})
-        if cmd == "selftest" and MAC:             # the checks that need Auren.app's permissions (auren selftest)
-            from .mac import selftest
-            return json.dumps(await selftest.inside(self))
         if cmd == "quit":
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"

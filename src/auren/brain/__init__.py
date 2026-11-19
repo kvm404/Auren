@@ -285,7 +285,7 @@ class CodexBrain:
     def ask(self, transcript: str) -> Iterator[tuple]:
         self._interrupted = False
         workdir = brain_dir()
-        # Its own file: another Codex turn (auren ask, auren selftest, a second daemon) may run at the same time
+        # Its own file: another Codex turn (auren ask, a second daemon) may run at the same time
         last = workdir / f"codex-last-{os.getpid()}-{secrets.token_hex(4)}.txt"
         recent = "\n".join(f"User: {u}\nAuren: {a}" for u, a in self.history[-4:])
         message = "\n\n".join(x for x in (

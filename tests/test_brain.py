@@ -238,7 +238,7 @@ def test_a_brain_that_cant_start_doesnt_leave_the_daemon_stuck():
 
 
 def test_each_codex_turn_has_its_own_reply_file(monkeypatch, tmp_path):
-    """Two Codex runs at once (auren selftest's `auren ask` and the daemon) mustn't read each other's reply."""
+    """Two Codex runs at once (`auren ask` and the daemon) mustn't read each other's reply."""
     import types
     fake = tmp_path / "bin" / "codex"
     fake.parent.mkdir()
