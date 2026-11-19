@@ -12,6 +12,14 @@ def _own_config(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_old_voice_model(tmp_path_factory, monkeypatch):
+    """Tests never delete the developer's own old voice model (voice.retire_old_model)."""
+    from auren import voice
+    d = tmp_path_factory.mktemp("data")
+    monkeypatch.setattr(voice, "old_model", lambda: d / "models/supertonic-3")
+
+
+@pytest.fixture(autouse=True)
 def _every_integration(monkeypatch):
     """Tool tests don't depend on what's installed here (test_integrations covers that)."""
     from auren import integrations

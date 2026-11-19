@@ -624,12 +624,14 @@ def secrets(key: str) -> bool:
 
 
 def voice_model(ui: Ui) -> None:
-    from .voice import missing
+    from .voice import missing, retire_old_model
     if os.environ.get("AUREN_SKIP_VOICE_MODEL"):     # CI: not 100 MB per run
         ui.warn("voice model skipped (AUREN_SKIP_VOICE_MODEL): auren voice-model downloads it")
         return
     if not missing():
         ui.ok("Voice model: already downloaded")
+        if retire_old_model(lambda line: None):
+            ui.ok("Old voice model (Supertonic, about 380 MB) deleted")
         return
     code = ui.spin("Downloading the voice model (about 100 MB)…", [sys.executable, "-P", "-m", "auren.cli", "voice-model"])
     if code == 0:

@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import config
 from .config import MAC
 from .live import envelope
 
@@ -148,7 +150,33 @@ def download_model(log: Callable[[str], None] = print) -> str:
         raise VoiceModelMissing(f"couldn't download the voice model: {e}") from e
     if lost:
         raise VoiceModelMissing(f"couldn't download the voices {', '.join(lost)}")
+    retire_old_model(log)
     return f"Phonon 31m with {', '.join(VOICES)}"
+
+
+def old_model() -> Path:
+    """Where Auren before 0.1.7 kept its Supertonic model (about 380 MB)."""
+    return config.DATA_HOME / "models" / "supertonic-3"
+
+
+def retire_old_model(log: Callable[[str], None] = print) -> bool:
+    """Delete the Supertonic model Auren downloaded before Phonon, once Phonon is here (only Auren's own
+    folder: the SDK's cache, ~/.cache/supertonic3, may be another program's). True if it was deleted."""
+    old = old_model()
+    if not (old.is_dir() or old.is_symlink()):
+        return False
+    try:
+        if old.is_symlink():
+            old.unlink()
+        else:
+            shutil.rmtree(old)
+        with contextlib.suppress(OSError):
+            old.parent.rmdir()                  # models/, if nothing else is in it
+    except OSError as e:
+        log(f"couldn't delete the old voice model {old}: {e}")
+        return False
+    log(f"deleted the old voice model (Supertonic, {old})")
+    return True
 
 
 class Voice:

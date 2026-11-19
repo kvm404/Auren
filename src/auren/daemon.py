@@ -261,6 +261,8 @@ class Daemon:
         except ValueError as e:
             log.warning("%s", e)
         self.voice = voice
+        from .voice import retire_old_model
+        await asyncio.to_thread(retire_old_model, log.info)   # an update from Supertonic: its 380 MB go
 
     async def _fetch_voice(self) -> None:
         """Download the voice model and its voices, then speak with them (replies were text until then)."""

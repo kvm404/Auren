@@ -592,3 +592,44 @@ def test_the_voice_cache_follows_hugging_face_s_variables(monkeypatch, tmp_path)
     assert voice.hf_cache() == tmp_path / "hf/hub"
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     assert [p.name for p in voice.cache_dirs()] == ["models--gradium--phonon-31m-en", "models--gradium--phonon-voices"]
+
+
+def test_the_old_supertonic_model_goes_once_phonon_is_here(monkeypatch, tmp_path):
+    from auren import voice
+    old = tmp_path / "auren/models/supertonic-3"
+    (old / "onnx").mkdir(parents=True)
+    (old / "onnx/model.onnx").write_bytes(b"x" * 10)
+    (tmp_path / "auren/models/asr-en-70m").mkdir()          # someone else's model in the same folder stays
+    monkeypatch.setattr(voice, "old_model", lambda: old)
+    said = []
+    assert voice.retire_old_model(said.append) is True
+    assert not old.exists() and (tmp_path / "auren/models/asr-en-70m").is_dir()
+    assert "deleted the old voice model" in said[0]
+    assert voice.retire_old_model(said.append) is False      # nothing left: nothing to say
+
+
+def test_the_old_model_folder_goes_when_it_was_all_there_was(monkeypatch, tmp_path):
+    from auren import voice
+    old = tmp_path / "models/supertonic-3"
+    old.mkdir(parents=True)
+    monkeypatch.setattr(voice, "old_model", lambda: old)
+    assert voice.retire_old_model(lambda line: None) and not (tmp_path / "models").exists()
+
+
+def test_a_download_deletes_the_old_model_only_when_it_worked(monkeypatch, tmp_path):
+    from auren import voice
+    old = tmp_path / "models/supertonic-3"
+    old.mkdir(parents=True)
+    monkeypatch.setattr(voice, "old_model", lambda: old)
+
+    def broken(offline):
+        raise OSError("offline")
+
+    monkeypatch.setattr(voice, "_load", broken)
+    with pytest.raises(voice.VoiceModelMissing):
+        voice.download_model(lambda line: None)
+    assert old.is_dir()
+    monkeypatch.setattr(voice, "_load", lambda offline: object())
+    monkeypatch.setattr(voice, "_register", lambda tts, name: True)
+    voice.download_model(lambda line: None)
+    assert not old.exists()
