@@ -310,6 +310,7 @@ class _Daemon:
         if self.busy or self.taken_meanwhile:
             return "busy"
         self.asked.append((turn.id, text, source))
+        self.open.add((turn.device, turn.id))           # running until it replies or ends
         return "ok"
 
     async def phone_talk(self, turn, audio, hands_free=False, fresh=False):
@@ -818,6 +819,25 @@ def test_replies_go_to_their_phone_and_wait_for_it_to_come_back():
     assert [m["type"] for m in got] == ["reply", "ended", "lost"] and got[2]["id"] == "r4"   # r3 is still coming
     hub.resume(_conn("phone-b"), ["r1"])                        # another phone's id is not its own
     assert hub.replies and _drain(b) == []
+
+
+def test_a_resend_after_a_lost_ack_brings_the_reply_with_it():
+    """The link dropped before the ACK and the reply came while it was down: the phone resends the ask (not
+    a resume), and the duplicate's ACK must not leave its line waiting for the reply."""
+    async def go():
+        d = _Daemon()
+        hub, conn = phone_server.Hub(d), _conn("dev")
+        await hub.request(conn, {"type": "ask", "id": "a1", "text": "hi"})
+        hub.reply(Turn("phone", "a1", "dev"), "It's noon.")
+        hub.closed(Turn("phone", "a1", "dev"))
+        await hub.request(conn, {"type": "ask", "id": "a2", "text": "and?"})   # still running: its reply comes later
+        back = _conn("dev")
+        acks = [await hub.request(back, {"type": "ask", "id": i, "text": "x"}) for i in ("a1", "a2")]
+        return d, acks, _drain(back)
+
+    d, acks, got = asyncio.run(go())
+    assert [a["duplicate"] for a in acks] == [True, True] and len(d.asked) == 2
+    assert [(m["type"], m["id"], m.get("text")) for m in got] == [("reply", "a1", "It's noon.")]
 
 
 def test_kept_replies_expire(monkeypatch):

@@ -130,8 +130,9 @@ Phone to PC:
 Every request gets `{"type":"ack", id, status}`. `id` is the phone's request id: an `ask`, `talk.start` or
 `answer` that phone already sent and the PC accepted (it remembers the last 500) isn't run again but acked with its first
 status and `"duplicate": true`, so a phone that reconnects can safely resend; one that arrives while the
-first is still running gets `in progress` with `"duplicate": true`. A `busy` request isn't remembered and
-also gets `{"type":"busy", id, owner}` first.
+first is still running gets `in progress` with `"duplicate": true`. A resent `ask` or `talk.start` is also
+treated as a `resume` of its id (the ack was lost, so the reply may have been too). A `busy` request isn't
+remembered and also gets `{"type":"busy", id, owner}` first.
 
 An `answer` names the question it was tapped on: `ask` is the `ask` field of the state that showed it (a
 digest of the open confirmations). Any other value, or none, gets `that question is no longer open` and
@@ -139,14 +140,16 @@ approves nothing, so a Yes kept from before a reconnect can't approve a differen
 queues or resends an answer; after a reconnect the question shows again.
 
 **Replies after a reconnect.** The PC keeps each phone's replies for 10 minutes (the newest 200). On
-hello the app sends `resume` with the requests still waiting; each gets its reply, or `lost` when the PC
-has neither the reply nor the turn any more, so the phone never waits forever.
+hello the app sends `resume` with the requests still waiting (share-sheet asks included: their id is a
+waiting line too); each gets its reply, or `lost` when the PC has neither the reply nor the turn any more,
+so the phone never waits forever. An approval has nothing to resume: its effect shows in the state the
+hello carries, and the turn's reply comes back under the ask's own id.
 
 PC to phone: `state` (the [state.json](ipc.md#statejson) fields `state, detail, since, brain, safety, voice,
 awaiting, question, until, ask, transcript, reply, silent, tool, remind, fresh`, plus `origin`: `desk`,
 `phone` or absent), `reply` (`{id, device, text, at}`, a phone turn's answer, sent only to that phone;
 empty text when there was nothing to say), `ended` (`{id}`, the turn ended without a reply: nothing was
-heard, or it was stopped), `lost` (`{id}`, after `resume`), `inbox` (`{item}`), `busy`, `revoked` (then
+heard, or it was stopped), `lost` (`{id}`, after `resume` or a resend), `inbox` (`{item}`), `busy`, `revoked` (then
 close code 4401), `error`. When the server stops or moves, open connections are closed (1012).
 
 ## Files

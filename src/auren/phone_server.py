@@ -226,6 +226,10 @@ class Hub:
         key = self._key(dev, rid)
         if kind in ("ask", "talk.start", "answer"):
             if (before := self._again(key)) is not None:
+                # A resend means the phone missed the ack, so it may have missed the reply too: send that
+                # (or "lost") now rather than leave it waiting for the next reconnect.
+                if kind != "answer":
+                    self.resume(conn, [rid])
                 return {"type": "ack", "id": rid, "status": before, "duplicate": True}
             if key:
                 self.inflight.add(key)          # taken now, before anything awaits: a retry can't run it again
