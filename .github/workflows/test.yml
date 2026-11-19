@@ -79,3 +79,22 @@ jobs:
             ! grep -q "Auren" ~/.config/hypr/bindings.lua
           '
           pacman -R --noconfirm auren
+
+  # The phone app: it builds, and its unit tests pass. Without Phonon's library (android/native/build-phonon.sh,
+  # built for releases only) the app reads replies with Android's own voice, which is fine here.
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@v4     # gradle-wrapper.jar is Gradle's own
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - run: ./gradlew --no-daemon assembleDebug testDebugUnitTest
