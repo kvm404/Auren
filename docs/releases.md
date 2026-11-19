@@ -90,6 +90,12 @@ The package belongs to the AUR account that first pushed it. To set it up:
 3. Publish a release (or run the `aur` workflow for an existing tag): the first push creates the
    `auren` package.
 
+An AUR key works for every package of its account, not just `auren`. If the account maintains other
+packages, the `AUR_SSH_KEY` secret can push to them too. Moving the package to an account of its own
+fixes that: add the new account as a co-maintainer on the package's AUR page (or have the old one
+disown it to the new one), put a new key on the new account, replace the secret, and take the old
+key off the old account.
+
 The PKGBUILD in this repository has `sha256sums=('SKIP')`; only the copy on the AUR carries the
 checksum, filled in by the workflow from the published tarball.
 
