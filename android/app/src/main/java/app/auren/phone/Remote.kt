@@ -192,6 +192,7 @@ object Remote {
             var outcome = Link(LinkKind.UNREACHABLE)
             var greeted = false
             for (h in order) {                  // Wi-Fi first when the PC is on it, then Tailscale
+                if (g != gen) break             // paired again while looking: never open a socket to the old PC
                 val (o, hello) = connectOnce(pc, h, g)
                 if (o.kind != LinkKind.UNREACHABLE || outcome.kind == LinkKind.UNREACHABLE) outcome = o
                 greeted = hello
