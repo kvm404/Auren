@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
 ### Added
 
@@ -24,6 +24,9 @@
 - Updating a package install from the bar opens a terminal that runs `yay -S --needed auren` between
   stopping Auren and starting it again. An `install.sh` install still updates itself, and says once
   afterwards that the package exists.
+- Installed with `./install.sh` before? Nothing changes until you switch: run `yay -S auren`, then
+  `/usr/bin/auren setup` once. It replaces the old copy and keeps your settings, keys, voice model
+  and history. On a Mac, Auren keeps installing and updating with `install-macos.sh`.
 
 ### Changed
 
