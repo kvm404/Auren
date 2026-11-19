@@ -292,7 +292,7 @@ def test_ask_level_asks_every_time(rt, shell_log):
     assert shell_log == [] and not rt.acted("daemon")
 
 
-def test_free_level_is_full_access_but_sending_and_the_floor_ask(rt, shell_log, monkeypatch):
+def test_free_level_runs_windows_and_files_but_sending_and_the_floor_ask(rt, shell_log, monkeypatch):
     rt.set_level("free")
     locked = []
     monkeypatch.setattr(desktop, "lock_screen", lambda: locked.append(1) or "locked")

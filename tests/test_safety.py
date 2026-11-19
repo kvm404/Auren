@@ -97,7 +97,7 @@ def test_every_risky_click_label_has_a_kind():
 @pytest.mark.parametrize("level, kinds, granted, ask", [
     ("ask", {"window"}, set(), True), ("ask", {"files"}, {"files"}, True),
     ("task", {"files"}, set(), True), ("task", {"files"}, {"files"}, False), ("task", {"files", "send"}, {"files"}, True),
-    ("free", {"window"}, set(), False), ("free", {"files"}, set(), False),   # full access
+    ("free", {"window"}, set(), False), ("free", {"files"}, set(), False),   # Auto (free)
     ("free", {"files", "send"}, set(), True), ("free", {"files", "system"}, set(), True), ("free", {"files", "secrets"}, set(), True), ("free", {"money"}, set(), True),
     ("free", {"files", "wipe"}, set(), True), ("free", {"auren"}, set(), True),
     ("task", {"system"}, {"system"}, True), ("task", {"wipe"}, {"wipe"}, True),   # the floor can't be granted
@@ -212,7 +212,7 @@ def test_a_grant_from_an_ended_task_is_dropped():
     ("auren ask 'send hi to Bob'", {"auren"}), ("python -m auren.ctl safety free", {"auren"}),
     ("python -c 'from auren.ctl import send; send(1)'", {"auren"}),
     ("rm -rf ~/Projects/old", {"files"}), ("rm -rf /tmp/x", {"files"}),
-    # what the review found running unasked at full access
+    # what the review found running unasked at Auto
     ("sudo pacman -Rns linux", {"system"}), ("sudo rm -rf /usr", {"system", "files", "wipe"}),
     ("rm -rf /etc", {"files", "wipe"}), ("cd ~ && rm -rf *", {"files", "wipe"}), ("cd && rm -rf .", {"files", "wipe"}),
     ("rm -rf ~/.ssh", {"files", "wipe"}), ("rm -rf ~/.config", {"files", "wipe"}), ("rm -rf ~/Projects", {"files", "wipe"}),

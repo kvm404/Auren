@@ -14,7 +14,7 @@ something that shouldn't be repeated has run in this turn (then a backup brain m
 
 Every tool returns plain text (or JSON text). Errors come back as text starting with "error:" so the
 brain can tell the user what went wrong. Risky tools go through auren.safety: by the approval level
-(`Runtime.level`) they run, or return a question and a token. At full access a chat message the user's
+(`Runtime.level`) they run, or return a question and a token. At Auto a chat message the user's
 own words already asked to send goes without the question (the judge, auren.brain.judge, decides from
 those words alone). A yes runs the questions waiting: the
 daemon's, for a plain answer it read itself (`Runtime.answer`), or the brain's `confirm_action` in a later
@@ -88,7 +88,7 @@ class Session:
     said: list[tuple[str, str]] = field(default_factory=list)   # the last few lines, ("user" | "auren", text), for the judge
     spoke: int = 0          # the turn the user last said something in (an answer's follow-up isn't theirs)
     allowed: int = 0        # the turn the judge last let a message through: at most one per thing the user says
-    typed: Typed | None = None      # the message the brain last typed (full access), which a Send click sends
+    typed: Typed | None = None      # the message the brain last typed (Auto), which a Send click sends
     keyed: dict[str, Keyed] = field(default_factory=dict)     # by window: what the brain typed there and hasn't sent
     waiting: dict[str, int] = field(default_factory=dict)     # by window: the turn the user was asked about it in
 
@@ -393,7 +393,7 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
     now, or asks the user first: `run` then happens only after a yes in their next message, and only if
     `check` (the target is still what the question was about) passes then. say: given the result, what to
     say if nothing is left for the brain to do (None: the brain should see the result). message: this sends
-    a chat message, described for the judge (its whole text, where, the page): at full access the judge may
+    a chat message, described for the judge (its whole text, where, the page): at Auto the judge may
     find that the user's words already asked for it. image: a screenshot for the judge (a message on the
     screen). same: checked too before a message the judge let through goes (the same chat still shows).
     searched: called after it ran, if the judge found the text was a search, not a message."""
@@ -432,7 +432,7 @@ def _gate(kinds: set[str], question: str, run: Callable, check: Callable[[], Non
 
 
 def _warm_judge() -> None:
-    """The brain typed something a send may follow: at full access, have the judge ready for it."""
+    """The brain typed something a send may follow: at Auto, have the judge ready for it."""
     rt = _call.get().runtime
     if rt.level == "free":
         getattr(rt.judge, "warm", lambda: None)()
@@ -440,7 +440,7 @@ def _warm_judge() -> None:
 
 def _judged(rt: Runtime, s: Session, kinds: set[str], message: str,
             image: Callable[[], bytes] | None = None) -> str:
-    """Does the judge let this message through ("chat", "search"; "" if not)? Only at full access, only a
+    """Does the judge let this message through ("chat", "search"; "" if not)? Only at Auto, only a
     message (nothing of the floor rides along), only right after the user said something, and once per
     thing they say."""
     with rt._lock:                  # one per thing the user says, even with a browser and a screen send at once
@@ -730,7 +730,7 @@ def _message(text: str, box: str, page: dict, how: str) -> str:
 
 
 def _remember_typed(target: str, text: str) -> None:
-    """At full access, the message the brain just typed, so a Send click after it can tell the judge what
+    """At Auto, the message the brain just typed, so a Send click after it can tell the judge what
     it sends. Anything else typed (or a search box) forgets it."""
     c = _call.get()
     s = c.runtime._session(c.session)
@@ -754,7 +754,7 @@ def _same_chat(before: dict) -> Callable[[], None]:
 
 
 def _sent_by(label: str, here: dict, button: str | None) -> tuple[str, Callable[[], None] | None]:
-    """A Send click at full access: the message the brain typed on this page for what the user just said,
+    """A Send click at Auto: the message the brain typed on this page for what the user just said,
     described for the judge, and a check that the box still holds it. ("", None) when that isn't known, or
     the button may send another box: then it asks the user."""
     c = _call.get()

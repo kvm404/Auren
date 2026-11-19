@@ -1,4 +1,4 @@
-"""The judge: at full access, a chat message the user's own words asked to send goes without the question;
+"""The judge: at Auto, a chat message the user's own words asked to send goes without the question;
 a fresh process per verdict, anything odd means ask, and nothing else ever reaches it."""
 
 import json
@@ -450,7 +450,7 @@ def test_enter_in_a_terminal_runs_what_was_typed_as_a_command(desk):
     rt.call("daemon", "type_text", {"text": "ls -la"})
     assert "pressed" in rt.call("daemon", "press_keys", {"keys": "Enter"})[0]
     rt.call("daemon", "type_text", {"text": "sudo rm -rf /usr"})
-    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])            # the floor, at full access
+    assert _asks(rt.call("daemon", "press_keys", {"keys": "Enter"})[0])            # the floor, at Auto
     _later(rt)
     assert _asks(rt.call("daemon", "type_text", {"text": "\nrm -rf ~\n"})[0])     # a typed new line runs it
     assert d.ran == ["ls -la"] and spy.calls == []

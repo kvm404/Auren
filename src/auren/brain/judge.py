@@ -4,7 +4,7 @@
     judge.allows([("user", "tell Priya I'm running late")],
                  "Send the message “I'm running late” in “Message @Priya” on the page “Priya | Discord” at …")  # True
 
-Only at full access, and only for a message whose text is known (tools.py decides that): one typed
+Only at Auto, and only for a message whose text is known (tools.py decides that): one typed
 into a chat in the browser, or typed on the screen and sent with Enter or a Send click. Everything else
 still asks the user. It's a separate Claude Code process that sees the last few lines of the conversation
 (the user's own words, and what Auren said back, so it knows what a "yes" answers) and a description of

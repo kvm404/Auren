@@ -6,8 +6,8 @@ permission modes):
 
 - ask:  every risky action asks first.
 - task: the first risky action asks; a yes also covers the rest of that task for the same kinds.
-- free: full access. Windows and files just run; sending still asks, and so does the floor.
-- never: nothing asks, the floor included. For a machine whose owner accepts that a page or screen the
+- free (shown as Auto): windows and files just run; sending still asks, and so does the floor.
+- never (shown as Full access): nothing asks, the floor included. For a machine whose owner accepts that a page or screen the
   brain reads could talk it into anything.
 
 The floor (publish, system, secrets, money, wipe, auren) asks at every level but never, every time: publishing,

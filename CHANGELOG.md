@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- **Full access now means full access.** A new level, `never`, shown as Full access, asks about
+  nothing: sending, publishing, root, packages, secrets, buying and wiping just run. The old Full
+  access (`free`: windows and files run, sending and the floor still ask) is now called Auto.
+  `auren-ctl safety never` or the panel's Brain page sets it; existing configs keep what they had.
+
 ### Fixed
 
 - "Start Claude Code with Opus 5.5 on high effort" starts it with that model and effort. `start_agent`

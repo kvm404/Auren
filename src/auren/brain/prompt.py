@@ -85,7 +85,7 @@ APPROVALS = {
     "task": "The user lets you ask once per task: risky tools still ask the first time, and after the user's yes the "
             "rest of that task runs without asking again. Publishing, root, power, packages, secrets, buying and wiping "
             "always ask.",
-    "free": "The user has given you full access: windows and files just run. Don't ask permission in words first; act, "
+    "free": "The user lets windows and files just run. Don't ask permission in words first; act, "
             "and say what you did. Sending, publishing, root, power, packages, secrets, buying and wiping still ask "
             "(needs_confirmation).",
     "never": "The user has given you full access with no confirmations at all: every tool just runs, including sending, "
