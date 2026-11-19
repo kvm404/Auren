@@ -787,13 +787,14 @@ class Daemon:
         """Answer a request. Its turn (admitted by the caller) stays open until the answer ends."""
         turn = turn or Turn("desk")
         try:
-            if FORGET.match(text):
+            if source != "phone-share" and FORGET.match(text):
                 await self.forget(turn=turn)
                 return
             async with self.busy:                          # one request at a time; later ones wait
                 # A plain yes or no to what it just asked is read here, not by the brain: the user's own words
-                # are the proof, and nothing waits for a model to turn them into a tool call.
-                if self.tools.answerable(SESSION) and (answer := parse_answer(text)):
+                # are the proof, and nothing waits for a model to turn them into a tool call. Something shared
+                # from the phone isn't their words: it never answers a question, whatever it says.
+                if source != "phone-share" and self.tools.answerable(SESSION) and (answer := parse_answer(text)):
                     await self._answer(answer == "yes", source, text, heard_s, turn=turn)
                 else:
                     await self._think(text, source, heard_s, turn=turn)

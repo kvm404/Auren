@@ -175,6 +175,17 @@ def test_a_yes_to_something_else_is_not_an_answer(tmp_path):
     assert d.ran == [] and d.brain.asked == ["yes"]   # the brain, who knows the context, decides
 
 
+def test_something_shared_from_the_phone_never_answers_a_question(tmp_path):
+    """A "yes" in a shared message (from another app) isn't the user's yes, nor a "start fresh" their own."""
+    async def scenario(d):
+        d.ask("Delete the report?", {"file"})
+        await d.respond("yes", source="phone-share")
+        await d.respond("start fresh", source="phone-share")
+
+    d = _run(tmp_path, scenario)
+    assert d.ran == [] and d.brain.asked == ["yes", "start fresh"] and d.brain.forgot == 0
+
+
 def test_more_than_a_plain_yes_goes_to_the_brain(tmp_path):
     async def scenario(d):
         d.ask("Close Calc?", {"window"})

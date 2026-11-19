@@ -562,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     opened = time.time()
     code, expires = start_pairing()
     st = _serving(opened)
-    if not st.get("on"):
+    if not (st.get("on") and listening(st) and _alive(st.get("pid"))):     # a dead daemon's status doesn't count
         PAIRING.unlink(missing_ok=True)
         why = st.get("why") if _alive(st.get("pid")) and not st.get("idle") else \
             "the Auren daemon isn't running (systemctl --user start auren)"

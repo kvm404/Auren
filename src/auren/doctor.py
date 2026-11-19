@@ -338,15 +338,33 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
         rules = UFW_RULES.read_text()
     except OSError:
         return None
-    if re.search(rf"--dport {port}\b.*-j ACCEPT", rules):
+    # Each path separately: a rule only for tailscale0 doesn't open the LAN, nor one for another subnet.
+    lan_ok, ts_ok = not lan_ips, not tailscale
+    for line in rules.splitlines():
+        if not re.search(rf"--dport {port}\b.*-j ACCEPT", line):
+            continue
+        dev = re.search(r"-i (\S+)", line)
+        src = re.search(r"-s (\S+)", line)
+        try:
+            net = ipaddress.ip_network(src[1], strict=False) if src else None
+        except ValueError:
+            continue
+        if dev and dev[1] == "tailscale0":
+            ts_ok = True
+        elif not dev:
+            ts_ok = ts_ok or net is None
+            lan_ok = lan_ok or net is None or any(ipaddress.ip_address(ip) in net for ip in lan_ips)
+    if lan_ok and ts_ok:
         return Check("Phone", "firewall", OK, f"ufw allows port {port}")
     fix = []
-    if lan_ips:
+    if lan_ips and not lan_ok:
         nets = sorted({str(ipaddress.ip_network(f"{ip}/16", strict=False)) for ip in lan_ips})
         fix += [f"sudo ufw allow from {n} to any port {port} proto tcp comment 'auren phone'" for n in nets]
-    if tailscale:
+    if tailscale and not ts_ok:
         fix.append(f"sudo ufw allow in on tailscale0 to any port {port} proto tcp comment 'auren phone'")
-    return Check("Phone", "firewall", WARN, f"ufw blocks port {port}: the phone can't reach this PC", "; ".join(fix))
+    blocked = "Wi-Fi/LAN" if ts_ok else "Tailscale" if lan_ok else ""
+    why = f"ufw blocks port {port} over {blocked}" if blocked else f"ufw blocks port {port}"
+    return Check("Phone", "firewall", WARN, f"{why}: the phone can't reach this PC that way", "; ".join(fix))
 
 
 SYMBOL = {OK: "\033[32m✓\033[0m", WARN: "\033[33m!\033[0m", FAIL: "\033[31m✗\033[0m"}

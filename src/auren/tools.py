@@ -616,7 +616,7 @@ def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "")
         it = phone.add(kind, title, content, path, secret_ok=secret_ok)
         return f"sent to the phone's inbox (item {it['id']})"
 
-    if kind in ("image", "file", "text") and any(safety.mentions_secrets(n) for n in names):
+    if any(safety.mentions_secrets(n) for n in names):       # a link can carry a token too (?token=...)
         return _gate({safety.SECRETS}, f"Send {title or what[:60]!r} to your phone? It may hold a secret.",
                      lambda: send(secret_ok=True),
                      say=lambda result: "Sent it to your phone." if not result.startswith("error:") else None)

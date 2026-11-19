@@ -81,10 +81,11 @@ def test_the_cli_lists_and_revokes(capsys):
     assert phone.main(["revoke", dev["id"]]) == 0 and phone.devices() == []
 
 
-def test_pair_needs_the_daemons_server(capsys):
+def test_pair_needs_the_daemons_server(capsys, monkeypatch):
+    monkeypatch.setattr(phone, "SERVE_WAIT", 0.1)
     assert phone.main(["pair", "--no-wait"]) == 1
     assert "phone server is off" in capsys.readouterr().err
-    phone.STATUS.write_text(json.dumps({"on": True, "port": 8735, "fp": "ab" * 32, "addrs": [
+    phone.STATUS.write_text(json.dumps({"on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": [
         {"ip": "100.100.1.2", "via": "tailscale", "ok": True}, {"ip": "192.168.1.20", "via": "lan", "ok": True},
         {"ip": "10.0.0.5", "via": "lan", "ok": False, "why": "taken"}]}))
     assert phone.main(["pair", "--no-wait", "--no-qr"]) == 0
@@ -467,7 +468,8 @@ def test_shared_text_can_be_asked(server):
     r = client.post("/v1/share", headers=_auth(token),
                     json={"id": "s1", "kind": "link", "action": "ask", "text": "https://a.b/c", "note": "summarize"})
     assert r.json() == {"status": "ok"}
-    assert d.asked == [("s1", "summarize\nhttps://a.b/c", "phone-share")]
+    assert d.asked == [("s1", phone_server.shared_ask("link", "https://a.b/c", "summarize"), "phone-share")]
+    assert d.asked[0][1].endswith("</shared>)\nsummarize") and "<shared>\nhttps://a.b/c\n</shared>" in d.asked[0][1]
     r = client.post("/v1/share", headers=_auth(token), json={"id": "s2", "kind": "link", "action": "ask", "text": "ftp://x"})
     assert r.json()["status"].startswith("error")
 
@@ -1355,3 +1357,105 @@ def test_the_daemon_serves_no_phone_on_a_mac(monkeypatch):
     d.settings = {"phone.enabled": "auto"}
     asyncio.run(daemon.Daemon._serve_phone(d))
     assert called == []
+
+
+
+# --- review fixes ----------------------------------------------------------------------------------
+
+def test_shared_text_is_content_not_the_users_words(server):
+    """A shared "yes" (a message from another app, say) is quoted content: it can't be read as the user's own
+    yes to a question that is waiting (the daemon also skips its yes/no shortcut for phone-share)."""
+    client, d, _ = server
+    _, token = _paired()
+    client.post("/v1/share", headers=_auth(token), json={"id": "s1", "kind": "text", "action": "ask", "text": "yes"})
+    (_, ask, source), = d.asked
+    assert source == "phone-share" and ask != "yes" and "<shared>\nyes\n</shared>" in ask
+    assert "not their instructions" in ask
+
+
+def test_a_clipboard_share_keeps_the_text_exactly(server, monkeypatch):
+    client, d, _ = server
+    _, token = _paired()
+    copied = []
+    monkeypatch.setattr(phone_server.subprocess, "run", lambda cmd, input=None, **k: copied.append((cmd, input)))
+    code = "    def f():\n        return 1\n" + "x" * 5000 + "\n"
+    r = client.post("/v1/share", headers=_auth(token), json={"id": "c1", "kind": "text", "action": "clipboard", "text": code})
+    assert r.json() == {"status": "ok"} and copied == [(["wl-copy"], code.encode())]
+
+
+def test_pairing_a_phone_doesnt_hide_a_revoke_from_the_sweeper(server):
+    """Phone A is revoked, then B pairs before the sweeper looks: A's socket is still closed."""
+    client, d, hub = server
+    a, _ = _paired("A")
+    conn = _conn(a["id"])
+    hub.conns.add(conn)
+    phone.revoke(a["id"])
+    code, _ = phone.start_pairing()
+    assert client.post("/v1/pair", json={"code": code, "name": "B"}).status_code == 200
+    hub.check()
+    assert {"type": "revoked"} in _drain(conn)
+
+
+def test_an_old_stop_doesnt_detach_a_newer_listen():
+    class D(_Daemon):
+        async def phone_talk_stop(self, device):
+            await asyncio.sleep(0.05)              # waiting for the transcript
+            return "stopped"
+
+    async def go():
+        hub = phone_server.Hub(D())
+        conn = _conn("dev")
+        conn.audio = first = asyncio.Queue()
+        stop = asyncio.create_task(hub.request(conn, {"type": "talk.stop", "id": "t1"}))
+        await asyncio.sleep(0.01)
+        conn.audio = second = asyncio.Queue()       # a new listen started meanwhile
+        await stop
+        return conn.audio, first, second
+
+    now, first, second = asyncio.run(go())
+    assert now is second and now is not first
+
+
+def test_a_phone_far_behind_gets_every_kept_inbox_item():
+    """The inbox keeps up to 2 * KEEP items: a sync sends all of them after the cursor, not the first 200."""
+    for i in range(phone.KEEP + 50):
+        phone.add("text", content=f"note {i}")
+    hub = phone_server.Hub(_Daemon())
+    conn = _conn("dev")
+    asyncio.run(hub.request(conn, {"type": "sync", "after": 0}))
+    assert len([m for m in _drain(conn) if m["type"] == "inbox"]) == phone.KEEP + 50
+
+
+def test_send_to_phone_asks_before_sending_a_link_with_a_token(rt):
+    _paired()
+    rt.set_level("free")
+    asked = json.loads(rt.call(SESSION, "send_to_phone",
+                               {"kind": "link", "content": "https://example.com/reset?token=private-reset-token"})[0])
+    assert asked["status"] == "needs_confirmation" and phone.items() == []
+
+
+def test_doctor_checks_each_path_through_the_firewall(monkeypatch, tmp_path):
+    from auren import doctor
+    rules = tmp_path / "user.rules"
+    monkeypatch.setattr(doctor, "UFW_RULES", rules)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
+    rules.write_text("-A ufw-user-input -i tailscale0 -p tcp --dport 8735 -j ACCEPT\n")
+    lan = doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True)
+    assert lan.status == doctor.WARN and "Wi-Fi/LAN" in lan.detail
+    assert "from 192.168.0.0/16" in lan.fix and "tailscale0" not in lan.fix
+    rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 10.0.0.0/8 -j ACCEPT\n")     # another subnet
+    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=False).status == doctor.WARN
+    rules.write_text("-A ufw-user-input -p tcp --dport 8735 -j ACCEPT\n")                    # from anywhere
+    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True).status == doctor.OK
+
+
+def test_phone_pair_refuses_a_dead_daemons_status(monkeypatch, capsys):
+    """A daemon that died left on: true behind: no QR code for a server that isn't there."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("auren.settings.current", lambda: {"phone.enabled": "auto"})
+    monkeypatch.setattr(phone, "SERVE_WAIT", 0.1)
+    monkeypatch.setattr(phone, "status", lambda: {"on": True, "port": 8735, "fp": "ab" * 32, "pid": 2**22 + 7,
+                                                  "addrs": [{"ip": "192.168.1.5", "via": "lan", "ok": True}]})
+    assert phone.main(["pair", "--no-wait", "--no-qr"]) == 1
+    out = capsys.readouterr()
+    assert "auren://" not in out.out and "daemon isn't running" in out.err and not phone.pairing_open()
