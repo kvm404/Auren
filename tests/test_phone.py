@@ -220,6 +220,35 @@ def test_send_to_phone_follows_a_link_before_deciding_it_holds_no_secret(rt, tmp
     assert asked["status"] == "needs_confirmation" and phone.items() == []
 
 
+def test_send_to_phone_never_sends_aurens_own_files_and_asks_for_key_files(rt, tmp_path):
+    _paired()
+    phone.cert()                                              # phone/key.pem: the server's TLS private key
+    rt.set_level("free")
+    out = rt.call(SESSION, "send_to_phone", {"kind": "file", "path": str(phone.KEY)})[0]
+    assert "Auren's own files" in out and phone.items() == []
+    (tmp_path / "id_ed25519").write_text("k")
+    (tmp_path / "server.key").write_text("k")
+    for name in ("id_ed25519", "server.key"):
+        asked = json.loads(rt.call(SESSION, "send_to_phone", {"kind": "file", "path": str(tmp_path / name)})[0])
+        assert asked["status"] == "needs_confirmation"
+    assert phone.items() == []
+
+
+def test_the_inbox_judges_the_file_it_actually_opens(tmp_path):
+    (tmp_path / ".env").write_text("KEY=1")
+    (tmp_path / "notes.txt").write_text("hello")
+    link = tmp_path / "link.txt"
+    link.symlink_to(tmp_path / ".env")                        # swapped to a secret after the tool checked it
+    with pytest.raises(ValueError, match="may hold a secret"):
+        phone.add("file", path=str(link))
+    with pytest.raises(ValueError, match="changed after it was confirmed"):
+        phone.add("file", path=str(link), secret_ok=True)     # the user confirmed link.txt, not .env
+    with pytest.raises(ValueError, match="Auren's own files"):
+        phone.add("file", path=str(phone.KEY if phone.cert() else ""), secret_ok=True)
+    assert phone.add("file", path=str(tmp_path / ".env"), secret_ok=True)["file"]["name"] == ".env"
+    assert phone.add("file", path=str(tmp_path / "notes.txt"))["file"]["name"] == "notes.txt"
+
+
 def test_send_to_phone_is_offered_only_with_a_paired_phone(monkeypatch):
     monkeypatch.setattr(integrations, "_installed", lambda name: REAL_INSTALLED(name) if name == "phone" else (True, ""))
     integrations._cache.clear()

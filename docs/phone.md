@@ -65,7 +65,10 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
 which lives on the PC (`~/.local/state/auren/phone/inbox.jsonl` and `files/`, the newest 200 kept). Item ids
 only grow: a phone that was away asks for everything after the last id it has (the cursor), and a
 connected phone gets new items as they come. Files are copied when sent (at most 50 MB). Sending a file
-or text that looks like a secret (`.env`, keys, tokens) asks first, at every level but `never`.
+or text that looks like a secret (`.env`, `~/.ssh`, private key files such as `*.pem`, `*.key` or
+`id_ed25519`, tokens) asks first, at every level but `never`. Auren's own files (under
+`~/.config/auren` and `~/.local/state/auren`, including the server's TLS key) are never sent. The check
+runs again on the file actually opened, so a link swapped after the question sends nothing.
 
 ## Share sheet
 

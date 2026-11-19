@@ -28,12 +28,13 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from .config import RUNTIME_DIR, STATE_DIR
+from .config import CONFIG_DIR, RUNTIME_DIR, STATE_DIR
 
 API = 1                             # the protocol version, in every path (/v1/...)
 PHONE_DIR = STATE_DIR / "phone"
@@ -222,12 +223,27 @@ def file_of(it: dict) -> Path | None:
     return path if path and path.is_file() else None
 
 
-def add(kind: str, title: str = "", content: str = "", path: str = "") -> dict:
-    """Put something in the phone's inbox: text, a link, or a copy of an image or file."""
+def private(path: str | Path) -> bool:
+    """Auren's own files (its config and secrets, the phones' tokens, this server's TLS key): never sent."""
+    p = Path(path).resolve()
+    return any(p.is_relative_to(Path(d).resolve()) for d in (CONFIG_DIR, STATE_DIR, PHONE_DIR))
+
+
+def add(kind: str, title: str = "", content: str = "", path: str = "", secret_ok: bool = False) -> dict:
+    """Put something in the phone's inbox: text, a link, or a copy of an image or file. A file is judged by
+    the file it opens (a link swapped meanwhile is caught): Auren's own files are refused, and one that looks
+    like a secret is sent only when secret_ok (the user confirmed that very path)."""
     if kind not in KINDS:
         raise ValueError("kind is text, link, image or file")
+    with contextlib.ExitStack() as stack:
+        return _add(stack, kind, title, content, path, secret_ok)
+
+
+def _add(stack: contextlib.ExitStack, kind: str, title: str, content: str, path: str, secret_ok: bool) -> dict:
+    from .safety import mentions_secrets
+
     entry: dict = {"kind": kind, "title": str(title or "")[:200], "at": time.time()}
-    src = None
+    src = f = None
     if kind == "text":
         if not content.strip():
             raise ValueError("nothing to send: content is empty")
@@ -238,10 +254,22 @@ def add(kind: str, title: str = "", content: str = "", path: str = "") -> dict:
             raise ValueError("a link is an http(s) URL in content")
         entry["url"] = url
     else:
-        src = Path(os.path.expanduser(path or content)).resolve()
-        if not src.is_file():
+        given = os.path.expanduser(path or content)
+        try:
+            f = stack.enter_context(open(given, "rb"))
+        except OSError:
+            raise ValueError(f"no such file: {path or content}") from None
+        src = Path(os.readlink(f"/proc/self/fd/{f.fileno()}"))      # the file actually opened
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
             raise ValueError(f"no such file: {path or content}")
-        size = src.stat().st_size
+        if private(src):
+            raise ValueError("that is one of Auren's own files (its settings, keys or tokens): it isn't sent")
+        if mentions_secrets(str(src)) and not secret_ok:
+            raise ValueError(f"{src.name} may hold a secret: it is sent only when the user confirms it")
+        if secret_ok and src != Path(given):
+            raise ValueError("the file changed after it was confirmed: ask again")
+        size = st.st_size
         if size > MAX_FILE:
             raise ValueError(f"the file is too big for the phone ({size // 2**20} MB, at most {MAX_FILE // 2**20} MB)")
         mime = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
@@ -254,7 +282,8 @@ def add(kind: str, title: str = "", content: str = "", path: str = "") -> dict:
             stored = f"{entry['id']}-{re.sub(r'[^\w.-]', '_', src.name)[-80:]}"
             _dir(FILES)
             tmp = FILES / f".{stored}.tmp"
-            shutil.copyfile(src, tmp)
+            with open(tmp, "wb") as out:
+                shutil.copyfileobj(f, out)
             os.chmod(tmp, 0o600)
             os.replace(tmp, FILES / stored)
             entry["file"]["stored"] = stored

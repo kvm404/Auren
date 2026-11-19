@@ -520,9 +520,19 @@ def _is_top(path: str) -> bool:
     return path in ("/", "/home", os.path.expanduser("~")) or os.path.dirname(path) == "/home"
 
 
+# Files that hold private keys or credentials by what they are, whatever the folder (a .pub key is public).
+_KEY_FILES = re.compile(r"""
+    \.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)$
+  | (^|/)id_(rsa|dsa|ecdsa|ed25519)(_sk)?$
+  | (^|/)\.(gnupg|password-store|aws|kube)/|(^|/)\.(netrc|pgpass)$|(^|/)\.docker/config\.json$
+""", re.X | re.I)
+
+
 def mentions_secrets(text: str) -> bool:
-    """Does this (a path, a note) look like keys, passwords or tokens (.env, ~/.ssh, "api key")?"""
-    return bool(_COMMAND_KINDS[SECRETS].search(text or ""))
+    """Does this (a path, a note) look like keys, passwords or tokens (.env, ~/.ssh, "api key", a private key
+    file such as key.pem or id_ed25519)?"""
+    text = text or ""
+    return bool(_COMMAND_KINDS[SECRETS].search(text) or _KEY_FILES.search(text.strip()))
 
 
 def command_risk(command: str) -> str | None:

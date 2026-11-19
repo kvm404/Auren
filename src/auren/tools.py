@@ -606,15 +606,18 @@ def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "")
         real = os.path.realpath(os.path.expanduser(what))
         names.append(real)
         path, content = real, ""                   # what was checked is what is sent, even if the link changes
+        if phone.private(real):
+            return "error: that is one of Auren's own files (its settings, keys or tokens): it isn't sent"
 
-    def send() -> str:
+    def send(secret_ok: bool = False) -> str:
         if not phone.devices():
             raise ValueError("no phone is paired: the user can pair one with auren phone pair")
-        it = phone.add(kind, title, content, path)
+        it = phone.add(kind, title, content, path, secret_ok=secret_ok)
         return f"sent to the phone's inbox (item {it['id']})"
 
     if kind in ("image", "file", "text") and any(safety.mentions_secrets(n) for n in names):
-        return _gate({safety.SECRETS}, f"Send {title or what[:60]!r} to your phone? It may hold a secret.", send,
+        return _gate({safety.SECRETS}, f"Send {title or what[:60]!r} to your phone? It may hold a secret.",
+                     lambda: send(secret_ok=True),
                      say=lambda result: "Sent it to your phone." if not result.startswith("error:") else None)
     return _run(send)
 
