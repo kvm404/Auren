@@ -238,12 +238,15 @@ Item {
     onFlagsChanged: if (visible) Qt.callLater(() => auren.pin(bubbleWin))   // new flags reset the window's level
 
     readonly property real mascotCenter: win.x + root.mascot.implicitWidth / 2
-    readonly property bool above: win.y + root.mascot.bubbleAnchorY - height > root.desk.y
+    // From the card, not the window's height: macOS writes the window's geometry back while it's placed,
+    // and a binding on height then loops
+    readonly property real tall: card.height + tail.height
+    readonly property bool above: win.y + root.mascot.bubbleAnchorY - tall > root.desk.y
     readonly property QtObject margins: QtObject { readonly property real left: bubbleWin.x }
     x: Math.max(root.desk.x + 6, Math.min(root.desk.x + root.desk.width - width - 6, mascotCenter - width / 2))
-    y: above ? win.y + root.mascot.bubbleAnchorY - height : win.y + root.mascot.implicitHeight - root.mascot.u
+    y: above ? win.y + root.mascot.bubbleAnchorY - tall : win.y + root.mascot.implicitHeight - root.mascot.u
     width: card.width
-    height: card.height + tail.height
+    height: tall
 
     Rectangle {
       id: card

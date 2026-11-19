@@ -441,3 +441,18 @@ def test_selftest_writes_a_report_with_every_result_and_the_logs(monkeypatch, tm
     assert "FAIL mascot window: off every screen" in text
     assert "17:22 ready in 3.0s" in text and "brain = 'auto'" in text
     assert out.stat().st_mode & 0o077 == 0
+
+
+def test_selftest_waits_for_the_words_asked_for_and_notes_the_states(monkeypatch, tmp_path):
+    from auren.mac import selftest
+    hist = tmp_path / "history.jsonl"
+    hist.write_text('{"source": "voice", "transcript": "पर ऑप्शन क्या था?", "reply": "Which option?"}\n')
+    monkeypatch.setattr(selftest, "HISTORY", hist)
+    monkeypatch.setattr("auren.ctl.send", lambda line, timeout=0: '{"state": "listening"}')
+    states: list[str] = []
+    # Someone else's words first: they're kept only if the asked-for ones never come
+    assert selftest._wait_history(0, "voice", 0.3, wanted="time", states=states)["reply"] == "Which option?"
+    assert states == ["listening"]
+    with hist.open("a") as f:
+        f.write('{"source": "voice", "transcript": "What time is it?", "reply": "Twelve."}\n')
+    assert selftest._wait_history(0, "voice", 5, wanted="time")["reply"] == "Twelve."

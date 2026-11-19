@@ -312,6 +312,46 @@ def _browser() -> dict:
     return result("browser tools", status, " | ".join(line.strip() for line in text.splitlines()))
 
 
+def _browser_details() -> list[str]:
+    """What the browser check looked at, for when it's wrong: each profile's extension folder and
+    preferences entry, and each live connection with the processes above it."""
+    from ..hands import browsers, obu
+    from .obu import _ps
+    lines = []
+    for kind in browsers.KINDS:
+        if not browsers.installed(kind):
+            continue
+        base = browsers.config_dir(kind)
+        lines.append(f"{kind.name}: {base}" + ("" if base and base.is_dir() else " (missing)"))
+        for p in obu.profiles(kind):
+            ext = p.path / "Extensions" / obu.EXTENSION_ID
+            entry = {}
+            for prefs in ("Secure Preferences", "Preferences"):
+                with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+                    entry = json.loads((p.path / prefs).read_text())["extensions"]["settings"][obu.EXTENSION_ID]
+                    entry = {k: entry.get(k) for k in ("state", "disable_reasons", "from_webstore", "location", "path")
+                             if k in entry} | {"in": prefs}
+                    break
+            storage = p.path / "Local Extension Settings" / obu.EXTENSION_ID
+            lines.append(f"  {p.label()}: extension folder {'yes' if ext.is_dir() else 'no'}"
+                         + (f" ({', '.join(sorted(x.name for x in ext.iterdir()))})" if ext.is_dir() else "")
+                         + f", storage {'yes' if storage.is_dir() else 'no'}, prefs {entry or 'no entry'}")
+    for sock in obu._sockets():
+        pid = obu._listener_pid(sock)
+        chain, q = [], pid
+        for _ in range(6):
+            q = obu._parent(q) if q else None
+            if not q or q <= 1:
+                break
+            chain.append(f"{q} {os.path.basename(_ps(q, 'comm'))}")
+        binary = obu.cli()
+        lines.append(f"socket {sock}: host pid {pid}, instance {obu._instance(binary, sock) if binary else '?'}, "
+                     f"above: {' < '.join(chain) or 'none'}")
+    for c in obu.connections(fresh=True):
+        lines.append(f"connection: {c.kind.name}, profile {c.profile.label() if c.profile else 'unknown'}, {c.socket}")
+    return lines or ["no Chromium browser installed"]
+
+
 def _settings() -> list[str]:
     from .. import settings
     s = settings.current()
@@ -341,20 +381,40 @@ def _history_len() -> int:
         return 0
 
 
-def _wait_history(before: int, source: str, timeout: float) -> dict | None:
+def _wait_history(before: int, source: str, timeout: float, wanted: str = "",
+                  states: list[str] | None = None) -> dict | None:
+    """The first new answer from this source (with `wanted` in what was heard, if given; else, at the end,
+    any). states, if given, collects the daemon's states meanwhile (listening, thinking, …)."""
     end = time.monotonic() + timeout
+    seen: list[dict] = []
     while time.monotonic() < end:
         try:
             lines = HISTORY.read_text().splitlines()[before:]
         except OSError:
             lines = []
+        seen = []
         for line in lines:
             with contextlib.suppress(ValueError):
                 rec = json.loads(line)
                 if rec.get("source") == source:
-                    return rec
-        time.sleep(0.5)
-    return None
+                    seen.append(rec)
+        hit = next((r for r in seen if wanted.lower() in r.get("transcript", "").lower()), None)
+        if hit is not None:
+            return hit
+        if states is not None:
+            _note_state(states)
+        time.sleep(0.25 if states is not None else 0.5)
+    return seen[0] if seen else None
+
+
+def _note_state(states: list[str]) -> None:
+    from ..ctl import send
+    try:
+        now = json.loads(send("status", timeout=2)).get("state", "?")
+    except (OSError, TimeoutError, ValueError):
+        now = "not answering"
+    if not states or states[-1] != now:
+        states.append(now)
 
 
 def _turn(rec: dict | None, name: str, wanted_tool: str = "") -> dict:
@@ -381,17 +441,26 @@ def _by_hand(daemon_state: dict | None, keys: str) -> list[dict]:
     a = _ask("Can you see the robot on the screen?")
     out.append(result("you see the mascot", {"y": OK, "n": FAIL}.get(a, SKIP), {"y": "yes", "n": "no"}.get(a, "")))
 
+    # The windows and the time are in every request's context, so this asks for something only a tool gives
     before = _history_len()
-    send("ask Which apps have windows open right now? Answer in one short sentence.", timeout=10)
-    print("  Asking Auren which apps are open (it answers out loud)…")
-    out.append(_turn(_wait_history(before, "typed", 120), "a typed request with a tool", "system_state"))
+    send("ask Look at my screen and tell me in one short sentence what's on it.", timeout=10)
+    print("  Asking Auren to look at the screen (it answers out loud)…")
+    out.append(_turn(_wait_history(before, "typed", 120), "a typed request with a tool", "look_at_screen"))
     time.sleep(1)
 
     print(f"\n  Now the talk key: press {keys}, say \033[1m\"what time is it\"\033[0m, then press {keys} again.")
     print("  Waiting up to 60 s…")
     before = _history_len()
-    rec = _wait_history(before, "voice", 60)
-    out.append(_turn(rec, "talk key, microphone and speech to text"))
+    states: list[str] = []
+    rec = _wait_history(before, "voice", 60, wanted="time", states=states)
+    row = _turn(rec, "talk key, microphone and speech to text")
+    row["detail"] += f" (Auren went {' → '.join(states) or 'nowhere'})"
+    if rec is None and "listening" not in states:
+        row["detail"] = f"no key press reached Auren: it never started listening ({' → '.join(states)})"
+    elif rec is not None and "time" not in rec.get("transcript", "").lower():
+        row["status"] = WARN if row["status"] == OK else row["status"]
+        row["detail"] = "not the words asked for: " + row["detail"]
+    out.append(row)
     if rec is not None:
         time.sleep(3)
         a = _ask("Did you hear the answer?")
@@ -445,6 +514,11 @@ def main(argv: list[str]) -> int:
         lines.append(f"== {title}")
         lines += [f"{PLAIN[r['status']]} {r['name']}" + (f": {r['detail']}" if r["detail"] else "") for r in rows]
         lines.append("")
+    try:
+        details = _browser_details()
+    except Exception as e:  # noqa: BLE001 - details for debugging: never lose the report over them
+        details = [f"(couldn't look: {type(e).__name__}: {e})"]
+    lines += ["== browser details", *details, ""]
     lines += ["== settings (config.toml; keys aren't in it)", *_settings(), ""]
     for name in ("daemon", "mascot"):
         lines += [f"== {name} log (last {LOG_LINES} lines)", *_tail(STATE_DIR / f"{name}.out.log"), ""]
