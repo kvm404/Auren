@@ -379,7 +379,7 @@ object Remote {
 
     // --- what the phone asks ------------------------------------------------------------------------
 
-    private fun newId() = UUID.randomUUID().toString().substring(0, 12)
+    fun newId() = UUID.randomUUID().toString().substring(0, 12)
 
     private fun send(text: String): Boolean = connected && ws?.send(text) == true
 
@@ -573,11 +573,26 @@ object Remote {
     /** The addresses to try for a request: the live connection's first, then the usual order. */
     private fun routes(pc: Pc): List<String> = (listOfNotNull(host) + tryOrder(pc.hosts, wifi(), pc.last)).distinct()
 
-    /** POST /v1/share. Returns the PC's status ("ok", "busy", "error: ...") or why it couldn't send. */
-    suspend fun share(kind: String, action: String, text: String, note: String, data: String? = null, mime: String? = null): String =
+    /**
+     * POST /v1/share. Returns the PC's status ("ok", "in progress", "busy", "error: ...") or why it couldn't
+     * send. [id] stays the same when the user tries again, so a share that ran but whose answer got lost
+     * doesn't run twice. An ask is a waiting line from the start, so a reconnect resumes its reply.
+     */
+    suspend fun share(id: String, kind: String, action: String, text: String, note: String, data: String? = null,
+                      mime: String? = null): String = withContext(Dispatchers.Main) {
+        val asking = action == "ask" && _lines.value.none { it.id == id }
+        if (asking) addLine(Line(id, Who.YOU, listOf(note, if (kind == "image") "(an image)" else text)
+            .filter { it.isNotBlank() }.joinToString("\n"), waiting = true))
+        val status = post(id, kind, action, text, note, data, mime)
+        if (asking && status != "ok" && status != "in progress") _lines.value = _lines.value.filterNot { it.id == id }
+        status
+    }
+
+    private suspend fun post(id: String, kind: String, action: String, text: String, note: String, data: String?,
+                             mime: String?): String =
         withContext(Dispatchers.IO) {
             val pc = store.pc ?: return@withContext "error: not paired"
-            val body = Outgoing.share(newId(), kind, action, text, note, data, mime)
+            val body = Outgoing.share(id, kind, action, text, note, data, mime)
             var last = ""
             for (h in routes(pc)) {             // the same id on every try: the PC runs it at most once
                 val req = Request.Builder().url("${pc.base(h)}/v1/share").header("Authorization", "Bearer ${pc.token}")

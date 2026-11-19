@@ -99,6 +99,7 @@ private fun Sheet(shared: Shared?, onDone: () -> Unit, openApp: () -> Unit) {
     var working by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val paired = Remote.store.pc != null
+    val ids = remember { mutableMapOf<String, String>() }     // one id per action: trying again can't run it twice
 
     fun go(action: String) {
         if (shared == null || working != null) return
@@ -126,10 +127,10 @@ private fun Sheet(shared: Shared?, onDone: () -> Unit, openApp: () -> Unit) {
                 error = "Couldn't read that image, or it's over 14 MB"
                 return@launch
             }
-            val status = Remote.share(shared.kind, action, shared.text, note, data, shared.mime)
+            val status = Remote.share(ids.getOrPut(action, Remote::newId), shared.kind, action, shared.text, note, data, shared.mime)
             working = null
             when {
-                status == "ok" -> {
+                status == "ok" || status == "in progress" -> {
                     Toast.makeText(ctx, when (action) {
                         "ask" -> "Asked Auren"
                         "clipboard" -> "On the PC's clipboard"
