@@ -617,3 +617,12 @@ def test_a_mistyped_service_name_does_nothing(monkeypatch, capsys):
     monkeypatch.setattr(service, "uninstall", lambda n: pytest.fail("uninstalled " + n))
     assert cli._service(["uninstall", "masoct"]) == 2
     assert "no service called masoct" in capsys.readouterr().err
+
+
+def test_the_menu_bar_offers_every_safety_level():
+    """main's #50 added "never" (Full access) and renamed "free" to Auto: the Mac menu offers them too."""
+    from auren import safety
+    src = (Path(__file__).resolve().parent.parent / "src/auren/mac/mascot.py").read_text()
+    menu = re.search(r'choices\("Safety", (\[.*?\]), "safety"\)', src, re.S).group(1)
+    assert [v for v, _ in eval(menu)] == list(safety.LEVELS)
+    assert ("free", "Auto") in eval(menu) and ("never", "Full access") in eval(menu)

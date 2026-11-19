@@ -432,7 +432,8 @@ def main() -> int:
 
     voices = choices("Voice", [(v, v) for v in VOICES], "voice-name")
     brains = choices("Brain", [("auto", "Auto (Claude, then Codex)"), ("claude", "Claude Code"), ("codex", "Codex")], "brain")
-    levels = choices("Safety", [("ask", "Ask every time"), ("task", "Ask once per task"), ("free", "Full access")], "safety")
+    levels = choices("Safety", [("ask", "Ask every time"), ("task", "Ask once per task"), ("free", "Auto"),
+                                ("never", "Full access")], "safety")
 
     mascot_menu = menu.addMenu("Mascot")
     mascot_group = QActionGroup(mascot_menu)
