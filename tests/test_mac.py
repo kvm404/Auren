@@ -456,3 +456,14 @@ def test_selftest_waits_for_the_words_asked_for_and_notes_the_states(monkeypatch
     with hist.open("a") as f:
         f.write('{"source": "voice", "transcript": "What time is it?", "reply": "Twelve."}\n')
     assert selftest._wait_history(0, "voice", 5, wanted="time")["reply"] == "Twelve."
+
+
+def test_selftest_waits_past_a_cancelled_try(monkeypatch, tmp_path):
+    from auren.mac import selftest
+    hist = tmp_path / "history.jsonl"
+    hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n'
+                    '{"source": "voice", "transcript": "What time is this?", "reply": "Half past three."}\n')
+    monkeypatch.setattr(selftest, "HISTORY", hist)
+    assert selftest._wait_history(0, "voice", 1, wanted="time")["reply"] == "Half past three."
+    hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n')
+    assert selftest._wait_history(0, "voice", 0.3, wanted="time")["reply"] == "(cancelled)"

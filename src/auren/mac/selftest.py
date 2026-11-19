@@ -322,7 +322,12 @@ def _browser_details() -> list[str]:
         if not browsers.installed(kind):
             continue
         base = browsers.config_dir(kind)
-        lines.append(f"{kind.name}: {base}" + ("" if base and base.is_dir() else " (missing)"))
+        try:
+            inside = sorted(os.listdir(base)) if base else []
+            seen = f"{len(inside)} entries: {', '.join(inside)[:300]}"
+        except OSError as e:               # macOS can keep another app's folder from Terminal
+            seen = f"can't list it: {e}"
+        lines.append(f"{kind.name}: {base} ({seen})")
         for p in obu.profiles(kind):
             ext = p.path / "Extensions" / obu.EXTENSION_ID
             entry = {}
@@ -398,13 +403,15 @@ def _wait_history(before: int, source: str, timeout: float, wanted: str = "",
                 rec = json.loads(line)
                 if rec.get("source") == source:
                     seen.append(rec)
-        hit = next((r for r in seen if wanted.lower() in r.get("transcript", "").lower()), None)
+        hits = [r for r in seen if wanted.lower() in r.get("transcript", "").lower()]
+        hit = next((r for r in hits if r.get("reply") != "(cancelled)"), None)    # a cancelled try: wait for another
         if hit is not None:
             return hit
         if states is not None:
             _note_state(states)
         time.sleep(0.25 if states is not None else 0.5)
-    return seen[0] if seen else None
+    hits = [r for r in seen if wanted.lower() in r.get("transcript", "").lower()]
+    return (hits or seen or [None])[0]
 
 
 def _note_state(states: list[str]) -> None:
