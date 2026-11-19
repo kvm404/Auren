@@ -373,14 +373,19 @@ class Daemon:
 
     # --- the phone (phone_server.Hub calls these) --------------------------------------------------
 
+    def _second_start(self, turn: Turn) -> bool:
+        """The phone asks or starts again while its own turn is open: a second start is busy (it doesn't
+        queue behind the first, as the desk's own does)."""
+        return any(t.origin == "phone" and t.device == turn.device for t in self._live())
+
     def phone_ask(self, turn: Turn, text: str, source: str = "phone") -> str:
-        if not self.admit(turn):
+        if self._second_start(turn) or not self.admit(turn):
             return "busy"
         asyncio.create_task(self.respond(text, source=source, turn=turn))
         return "ok"
 
     async def phone_talk(self, turn: Turn, audio: asyncio.Queue, hands_free: bool = False, fresh: bool = False) -> str:
-        if self.listening or self.state in ("thinking", "working") or not self.admit(turn):
+        if self.listening or self.state in ("thinking", "working") or self._second_start(turn) or not self.admit(turn):
             return "busy"
         out = await self.press(fresh, hands_free, turn=turn, audio=audio)
         return "ok" if out == "listening" else out

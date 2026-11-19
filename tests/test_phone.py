@@ -690,6 +690,22 @@ def test_one_phone_at_a_time_and_only_it_stops_its_listen(tmp_path, monkeypatch)
     assert d.phone.replies[0] == ("a1", "It's noon.")
 
 
+def test_a_second_start_from_the_same_phone_is_busy(tmp_path, monkeypatch):
+    async def scenario(d):
+        d.brain.go.clear()
+        assert d.phone_ask(Turn("phone", "p1", "dev"), "hello") == "ok"
+        assert d.phone_ask(Turn("phone", "p2", "dev"), "and this") == "busy"
+        assert await d.phone_talk(Turn("phone", "p3", "dev"), asyncio.Queue()) == "busy"
+        d.brain.go.set()
+        await _until(lambda: d.phone.replies)
+        await _until(lambda: not d._live())
+        assert d.phone_ask(Turn("phone", "p4", "dev"), "now") == "ok"
+        await _until(lambda: len(d.phone.replies) == 2)
+
+    d = _turns(tmp_path, monkeypatch, scenario)
+    assert [r for r, _ in d.phone.replies] == ["p1", "p4"]
+
+
 def test_a_desk_ask_doesnt_hide_an_open_desk_listen(tmp_path, monkeypatch):
     async def scenario(d):
         assert await d.command("talk") == "listening"

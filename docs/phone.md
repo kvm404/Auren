@@ -45,7 +45,7 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
 
 - **One turn at a time, across the desk and the phone.** A turn is owned from the moment listening starts
   (or a typed request comes in) until the answer ends. While the desk owns it, the phone's requests get
-  `busy`; while the phone owns it, Super+A, `auren-ctl talk/start/ask` say "Auren is busy with your
+  `busy`, and so does a second ask or talk from the phone that owns it; while the phone owns it, Super+A, `auren-ctl talk/start/ask` say "Auren is busy with your
   phone". **Stop works from either side**: the phone's Stop, or at the desk Super+A while it thinks or works, the
   panel's Stop or `auren-ctl cancel`.
 - **The desk's safety level applies.** Approvals show on the phone (Yes / No) and on the desk (bubble,
