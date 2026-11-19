@@ -408,7 +408,7 @@ def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
     def broken(*a):
         raise RuntimeError("no Quartz here")
 
-    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard"):
+    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard", "_browser_folders"):
         monkeypatch.setattr(selftest, name, broken)
 
     async def fine(*a):
@@ -417,8 +417,8 @@ def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
     for name in ("_microphone", "_speech_service", "_voice"):
         monkeypatch.setattr(selftest, name, fine)
     rows = asyncio.run(selftest.inside(object()))
-    assert len(rows) == 9
-    assert [r["status"] for r in rows].count("fail") == 6
+    assert len(rows) == 10
+    assert [r["status"] for r in rows].count("fail") == 7
     assert all("no Quartz here" in r["detail"] for r in rows if r["status"] == "fail")
 
 

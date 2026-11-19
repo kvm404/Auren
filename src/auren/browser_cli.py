@@ -44,7 +44,12 @@ def status() -> int:
         else:
             parts.append("host registered")
             ext = obu.with_extension(kind)
-            parts.append("extension in " + ", ".join(p.name for p in ext) if ext else "extension not installed")
+            if ext:
+                parts.append("extension in " + ", ".join(p.name for p in ext))
+            elif not obu.readable(kind):
+                parts.append("its folder can't be read (macOS: Full Disk Access), so the extension can't be seen")
+            else:
+                parts.append("extension not installed")
             live = [c for c in conns if c.kind == kind]
             if live:
                 parts.append("connected: " + ", ".join(c.profile.name if c.profile else "a profile" for c in live))

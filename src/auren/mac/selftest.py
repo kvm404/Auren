@@ -66,6 +66,20 @@ async def inside(daemon) -> list[dict]:
     await run("screen capture", in_thread(_screen))
     await run("windows", in_thread(_windows))
     await run("clipboard", in_thread(_clipboard))
+    await run("browser folders", in_thread(_browser_folders))
+    return out
+
+
+def _browser_folders() -> list[dict]:
+    """Whether Auren may read the browsers' folders (profiles, the extension, bookmarks, downloads)."""
+    from ..hands import browsers, obu
+    out = []
+    for kind in browsers.KINDS:
+        if browsers.installed(kind):
+            ok = obu.readable(kind)
+            out.append(result(f"{kind.name} folder", OK if ok else WARN, "readable" if ok else
+                              "macOS doesn't let Auren read it (Full Disk Access): the profiles, bookmarks and "
+                              "downloads can't be seen"))
     return out
 
 

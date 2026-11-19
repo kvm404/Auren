@@ -121,6 +121,9 @@ doesn't have the AssemblyAI key.
 - Keyboard shortcuts are sent as US-layout key codes, so on other layouts some typed shortcuts may hit
   a different key. Text is pasted or typed as Unicode, so it isn't affected.
 - Windows can't be moved to another Space; `move_window` only raises them.
+- macOS (from 15 or so) keeps other apps' folders from Auren and Terminal ("Operation not permitted").
+  The browser tools still work once the extension connects, but browser profiles, bookmarks and
+  downloads can't be read. To let Auren read them, allow it under Privacy & Security → Full Disk Access.
 - Brightness keys need a built-in display (or `brew install brightness`).
 - The mascot's bubble is a copy of the one in `mascot/shell.qml`: change both.
 - Auren.app is signed ad hoc, not by a registered developer, so it can't be passed to another Mac as

@@ -291,7 +291,7 @@ Item {
             readonly property real lineHeightPx: lineCount > 0 ? contentHeight / lineCount : 16
             text: root.bubbleBody
             color: card.textColor
-            font.family: "monospace"
+            font.family: "Menlo"
             font.pixelSize: 13
             font.italic: root.bubbleMuted
             wrapMode: Text.Wrap
@@ -361,7 +361,7 @@ Item {
                   anchors.centerIn: parent
                   text: parent.modelData.label
                   color: parent.modelData.yes ? root.bg : root.fg
-                  font.family: "monospace"
+                  font.family: "Menlo"
                   font.pixelSize: 12
                   font.bold: true
                 }

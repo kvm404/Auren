@@ -412,3 +412,27 @@ def test_browser_setup_asks_then_sets_up_and_turns_the_tools_on(tmp_path, machin
     [outcome] = rt.answer("daemon", True)
     assert done == [BRAVE] and outcome.ok and "next fresh conversation" in outcome.result
     assert settings.current()["integrations.browser"] == "auto"
+
+
+def test_a_browser_macos_hides_is_set_up_when_its_host_is_connected(machine, monkeypatch):
+    # macOS without Full Disk Access: the folder can't be listed, so no profile and no extension show
+    monkeypatch.setattr(hosts, "with_extension", lambda kind: [])
+    monkeypatch.setattr(hosts, "readable", lambda kind: kind != HELIUM)
+    monkeypatch.setattr(hosts, "connections", lambda fresh=False: [])
+    assert not hosts.set_up_somewhere()
+    monkeypatch.setattr(hosts, "connections", lambda fresh=False: [hosts.Conn("s", HELIUM, None, "iid", 0)])
+    assert hosts.set_up_somewhere()
+    monkeypatch.setattr(hosts, "readable", lambda kind: True)       # readable and empty: really not set up
+    assert not hosts.set_up_somewhere()
+
+
+def test_readable_tells_a_folder_kept_from_this_process(machine, monkeypatch):
+    real = os.listdir
+
+    def listdir(path):
+        if "helium" in str(path):
+            raise PermissionError(1, "Operation not permitted")
+        return real(path)
+    monkeypatch.setattr(os, "listdir", listdir)
+    assert not hosts.readable(HELIUM)
+    assert hosts.readable(browsers.BY_KEY["brave"])
