@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -29,3 +32,50 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
       - run: python3 tests/test_mascot_bubble.py
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - run: bash -n install-macos.sh
+      - run: uv run pytest -q tests/test_mac.py
+      - run: uv run python tests/mac_smoke.py
+
+  # The Arch package, built from this commit the way the AUR builds a release, installed in a clean Arch,
+  # then set up and removed for a user (no systemd user session or Omarchy here: setup says so and goes on).
+  arch-package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - run: pacman -Syu --noconfirm --needed git uv python namcap hyprland quickshell pipewire pipewire-audio wireplumber grim wtype wl-clipboard libnotify gum
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "git config --global --add safe.directory '$GITHUB_WORKSPACE' && cd '$GITHUB_WORKSPACE' && packaging/arch/build-local.sh /tmp/pkg"
+      - name: Install
+        run: |
+          namcap /tmp/pkg/auren-*.pkg.tar.zst || true
+          pacman -U --noconfirm /tmp/pkg/auren-*.pkg.tar.zst
+      - name: Set up and remove for a user
+        run: |
+          su builder -c '
+            set -e
+            auren --help >/dev/null
+            mkdir -p ~/.config/hypr ~/.local/share/auren/models
+            echo "-- keys" > ~/.config/hypr/bindings.lua
+            AUREN_SKIP_VOICE_MODEL=1 auren setup --yes --keys=super --no-browser </dev/null
+            test "$(readlink ~/.local/share/auren/bin/auren-ctl)" = /usr/bin/auren-ctl
+            test "$(readlink ~/.local/share/auren/mascot)" = /usr/share/auren/mascot
+            grep -q "Auren: talk" ~/.config/hypr/bindings.lua
+            auren setup --remove --yes </dev/null
+            ! grep -q "Auren" ~/.config/hypr/bindings.lua
+          '
+          pacman -R --noconfirm auren

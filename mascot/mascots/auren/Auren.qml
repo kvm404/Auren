@@ -429,7 +429,7 @@ MascotBase {
       opacity: c.wAsk
       text: "?"
       color: c.gold
-      font.family: "monospace"
+      font.family: Qt.platform.os === "osx" ? "Menlo" : "monospace"
       font.bold: true
       font.pixelSize: c.u * 4
       x: 13.6 * c.u

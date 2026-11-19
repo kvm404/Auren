@@ -34,6 +34,14 @@ def _no_notices(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _both_brains(monkeypatch):
+    """Brain tests don't depend on which of claude and codex are installed here (a Mac with only Codex
+    would otherwise answer everything with Codex)."""
+    from auren import brain
+    monkeypatch.setattr(brain, "_installed", lambda command: True)
+
+
+@pytest.fixture(autouse=True)
 def _no_judge(monkeypatch):
     """No real Claude Code judge starts in tests: with none, every message asks (test_judge covers it)."""
     from auren.brain import judge

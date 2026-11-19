@@ -102,7 +102,13 @@ def render_live(l: dict) -> str:
         status.append(f"RAM free {mem['ram_free_gb']} of {mem['ram_total_gb']} GB")
     if status:
         parts.append("Status: " + ", ".join(status) + ".")
-    parts += ["Windows (Hyprland):", *_windows(l.get("hyprland", {}))]
+    if "desktop" in l:                       # macOS: one list, front to back
+        d = l["desktop"]
+        parts += ["Windows (front to back):", *([_err(d)] if _err(d) else
+                  [f"- {w['app']}" + (f" “{w['title']}”" if w["title"] and w["title"].lower() != w["app"].lower() else "")
+                   + (" (focused)" if w["focused"] else "") for w in d["windows"]] or ["- none"])]
+    else:
+        parts += ["Windows (Hyprland):", *_windows(l.get("hyprland", {}))]
     if "herdr" in l:
         parts += ["herdr (terminal workspaces with coding agents):", *_herdr(l["herdr"])]
     return "\n".join(parts)
@@ -112,7 +118,10 @@ def render_static(s: dict) -> str:
     """What rarely changes: goes into the brain's instructions once."""
     m, d = s.get("machine", {}), s.get("defaults", {})
     parts = ["# This laptop", ""]
-    if not _err(m):
+    if not _err(m) and m.get("macos"):
+        parts.append(f"Machine: a Mac, macOS {m.get('macos')}, user {m.get('user')}, home {m.get('home')}, {m.get('cpu')}, "
+                     f"{m.get('threads')} threads, {m.get('ram_gb')} GB RAM, shell {short(m.get('shell'))}.")
+    elif not _err(m):
         parts.append(f"Machine: Omarchy {m.get('omarchy')} (Arch Linux, Hyprland on Wayland), user {m.get('user')}, "
                      f"home {m.get('home')}, {m.get('cpu')}, {m.get('threads')} threads, {m.get('ram_gb')} GB RAM, shell {short(m.get('shell'))}.")
     if not _err(d):
@@ -144,6 +153,14 @@ def render_static(s: dict) -> str:
     shell = s.get("shell", {})
     n_alias = len(shell.get("aliases", [])) if not _err(shell) else 0
     n_cmds = len(s.get("omarchy_commands", [])) if not _err(s.get("omarchy_commands", [])) else 0
+    if m.get("macos"):
+        parts += ["", "## How things work here",
+                  "- macOS: apps open with launch_app (`open -a`), files and URLs with open_path and open_url.",
+                  "- Shortcuts use Cmd (cmd+c, cmd+v, cmd+t, cmd+w), not Ctrl. Ctrl+C in a terminal still interrupts.",
+                  "- There are no workspaces: windows can't be moved between desktops (Spaces). Homebrew (`brew`) installs software.",
+                  f"- The user's shell has {n_alias} aliases and some functions; look them up before guessing.",
+                  "", "More detail on request (lookup): " + ", ".join(["aliases", "functions", "apps", "packages", "projects"]) + "."]
+        return "\n".join(parts)
     parts += ["", "## How things work here",
               f"- Omarchy has one CLI, `omarchy <group> <action>` ({n_cmds} commands: launch, capture, audio, "
               "toggle, reminder, webapp, system, ...). Prefer it over raw tools; look up exact commands first.",

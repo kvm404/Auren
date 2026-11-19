@@ -178,6 +178,30 @@ KEYS = [
     Key("agents.default", "agents.default", "auto", _name,
         "Coding agent for big jobs: auto (Omarchy's default agent, else the first installed), or codex, claude, opencode, ..."),
 ]
+
+
+def _combo(v: Any) -> str:
+    parts = [p.strip().lower() for p in str(v).split("+") if p.strip()]
+    mods = {"ctrl", "control", "alt", "option", "opt", "shift", "cmd", "command"}
+    if len(parts) < 2 or not all(p in mods for p in parts[:-1]) or parts[-1] in mods:
+        raise ValueError("a shortcut like ctrl+alt+a: modifiers (ctrl, alt/option, shift, cmd) and one key")
+    from .mac.hotkey import parse  # the key itself must be one the talk keys can listen for
+    try:
+        parse("+".join(parts))
+    except ValueError:
+        raise ValueError(f"no key called {parts[-1]!r}: a letter, digit, f1-f12, space, return, tab or the like") from None
+    return "+".join(parts)
+
+
+if sys.platform == "darwin":        # macOS only: on Omarchy the talk keys are Hyprland bindings, the terminal Omarchy's
+    KEYS += [
+        Key("keys.talk", "keys.talk", "ctrl+alt+a", _combo,
+            "The talk key: start talking, press again to send (modifiers and one key, like ctrl+alt+a)"),
+        Key("keys.talk_fresh", "keys.talk_fresh", "ctrl+alt+shift+a", _combo,
+            "Start talking in a fresh conversation"),
+        Key("desktop.terminal", "desktop.terminal", "auto", _name,
+            "Terminal for herdr and agents: auto (Ghostty, else iTerm, else Terminal), or an app name"),
+    ]
 BY_PATH = {k.path: k for k in KEYS}
 BY_FLAT = {k.flat: k for k in KEYS}
 
@@ -412,6 +436,25 @@ def current() -> dict:
     if _current is None or _current[0] != key:
         _current = (key, read(CONFIG_FILE.read_text())[0])
     return _current[1]
+
+
+GLYPHS = {"cmd": "⌘", "shift": "⇧", "alt": "⌥", "ctrl": "⌃"}
+
+
+def key_label(combo: str) -> str:
+    """'ctrl+alt+a' -> '⌃⌥A', in the order macOS menus write modifiers."""
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    names = {"control": "ctrl", "option": "alt", "opt": "alt", "command": "cmd"}
+    mods = {names.get(p, p) for p in parts[:-1]}
+    return "".join(GLYPHS[m] for m in ("ctrl", "alt", "shift", "cmd") if m in mods) + (parts[-1].upper() if parts else "")
+
+
+def fresh_key() -> str:
+    """The keys for a fresh conversation, as the user knows them: Super+Shift+A (bound in Hyprland), or
+    keys.talk_fresh on a Mac."""
+    if sys.platform == "darwin":
+        return key_label(str(current().get("keys.talk_fresh") or "ctrl+alt+shift+a"))
+    return "Super+Shift+A"
 
 
 def save(values: dict) -> bool:

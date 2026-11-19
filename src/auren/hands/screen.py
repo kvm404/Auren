@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -47,6 +48,7 @@ from .. import notice
 from . import clipboard
 
 IMAGE_WIDTH = 1024
+MOD = "ctrl"          # the shortcut modifier (Ctrl+C, Ctrl+V); Cmd on macOS
 
 _lock = threading.Lock()
 _mouse = None
@@ -496,3 +498,7 @@ def press_keys(combo: str) -> str:
         cmd += ["-m", m]
     _sh(cmd)
     return f"pressed {combo}"
+
+
+if sys.platform == "darwin":
+    from ..mac.screen import *  # noqa: E402, F403 - the macOS versions of the functions above

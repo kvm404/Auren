@@ -8,7 +8,9 @@ together with the code.
 
 Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. All paths come from
 `src/auren/config.py` and follow `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and
-`XDG_DATA_HOME`; the UIs compute the same paths.
+`XDG_DATA_HOME`; the UIs compute the same paths. On macOS the runtime folder is
+`~/Library/Application Support/auren-runtime/auren/` (not `$TMPDIR`, which macOS empties of files unused
+for 3 days), unless `XDG_RUNTIME_DIR` is set, and `brain/` is `$TMPDIR/auren-brain/`.
 
 | File | Writer | Content |
 |---|---|---|
@@ -17,6 +19,8 @@ Without `XDG_RUNTIME_DIR`, a private `/tmp/auren-runtime-<uid>/auren/` is used. 
 | `level` | daemon | Loudness 0..1 of the mic or the voice, ~20 times a second |
 | `tools.sock` | daemon | The tool runtime, for the brains' MCP adapter: one JSON line in (`session`, `tool`, `args`), one out (`content`). `auren chat` serves its own `tools-<pid>.sock` |
 | `phone.json` | daemon | The phone server: `on`, `port`, `addrs` (each `ip`, `via`, `ok`, `why`), `fp`, `why` ([phone.md](phone.md)) |
+| `mascot.pid` | mascot (macOS) | The mascot host's pid, so screen tools leave its windows out |
+| `setup.request` | `auren open` (macOS) | Opening Auren.app asks the mascot's process to show the setup window; it removes the file, and ignores one over a minute old |
 | `daemon.lock` | daemon | Held (flock) while a daemon runs, so a second one exits; holds its pid |
 | `brain/` | brain | The brain's working folder (outside `$HOME` on purpose) |
 
@@ -80,6 +84,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `yes` / `no` | Answer the question(s) it is waiting on (the bubble's and the panel's buttons send these; bind them to keys if you like). The reply says how many were approved or dropped, or that nothing is waiting |
 | `status` | JSON: state, brain, mode, effort, voice, safety |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
+| `permissions` / `permissions microphone\|accessibility\|screen` / `permissions status` | macOS only: ask for all the permissions, or one, or just report them, as JSON with `program` (Auren.app, or the Python macOS asks about without it) and `talk_keys` (the key listener is running). The setup window and `auren permissions` send it |
 | `quit` | Stop the daemon |
 
 ## Files
@@ -100,8 +105,11 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
 | `~/.cache/huggingface/hub/` (`models--gradium--phonon-*`) | `auren voice-model` | The voice model (Phonon 31m) and its voices, at the revisions `ptts` pins |
-| `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
-| `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode, dirty, committed, installed_at |
+| `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program (for the package, `auren setup` links `bin/`, `mascot/` and `bar-plugin/` to `/usr`) |
+| `~/.local/share/auren/install.json` | `install.sh`, `auren setup` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode (`install`, `dev`, or `package`), dirty, committed, installed_at |
+| `~/.local/share/auren/setup.json` | `auren setup` | That setup finished: mode (`install` or `package`), version, at |
+| `~/.config/systemd/user/auren{,-mascot}.service.d/auren-xdg.conf` | `auren setup` | Custom XDG folders, for the package's services |
+| `~/.local/state/auren/package-suggested` | `auren update` | That the Arch package was suggested once, after an `install.sh` install updated itself |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |
 | `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (current, available, updating, done, failed, error, unknown), `channel` (`releases`), `installed`, `step`, `message`, `latest` (commit, short, date, subject, release tag, name, url), `commits`, `count`, `checked_at`, `started_at`, `finished_at`, `note`, `log` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |

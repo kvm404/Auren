@@ -39,12 +39,18 @@ def status() -> int:
         parts = []
         if browsers.flatpak(kind):
             parts.append("a Flatpak: not supported")
-        elif not obu.registered(kind):
-            parts.append("not set up")
+        elif not obu.registered(kind) and not any(c.kind == kind for c in conns):
+            parts.append("not set up" if obu.readable(kind) else
+                         "its folder can't be read (macOS: Full Disk Access), so its setup can't be seen")
         else:
-            parts.append("host registered")
+            parts.append("host registered" if obu.registered(kind) else "host connected")
             ext = obu.with_extension(kind)
-            parts.append("extension in " + ", ".join(p.name for p in ext) if ext else "extension not installed")
+            if ext:
+                parts.append("extension in " + ", ".join(p.name for p in ext))
+            elif not obu.readable(kind):
+                parts.append("its folder can't be read (macOS: Full Disk Access), so the extension can't be seen")
+            else:
+                parts.append("extension not installed")
             live = [c for c in conns if c.kind == kind]
             if live:
                 parts.append("connected: " + ", ".join(c.profile.name if c.profile else "a profile" for c in live))
@@ -115,7 +121,7 @@ def setup(name: str | None, yes: bool, open_store: bool, wait: float) -> int:
     print(result.summary())
     if result.connected:
         print(_bold("Done: ") + f"Auren's browser tools work in {result.connected.label()}. "
-              "A running Auren offers them from its next fresh conversation (Super+Shift+A).")
+              f"A running Auren offers them from its next fresh conversation ({settings.fresh_key()}).")
         return 0
     if not obu.with_extension(kind):
         if not open_store:

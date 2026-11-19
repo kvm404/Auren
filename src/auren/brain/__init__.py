@@ -21,13 +21,15 @@ import json
 import logging
 import os
 import re
+import secrets
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Iterator
 
-from ..config import BRAIN_DIR
+from ..config import brain_dir
 from ..profile import Profile
 from . import prompt
 
@@ -43,6 +45,10 @@ def speakable(text: str) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*|__([^_]+)__", lambda m: m.group(1) or m.group(2), text)
     text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.M)
     return text.replace("~/", "home folder ").strip()
+
+
+def _installed(command: str) -> bool:
+    return shutil.which(command) is not None
 
 
 class BrainError(RuntimeError):
@@ -91,11 +97,15 @@ class ClaudeBrain:
         self.stop()
         # Outside $HOME on purpose: Claude Code loads `.claude/CLAUDE.md` from every parent folder, and
         # ~/.claude/CLAUDE.md is the user's personal file, which must not reach the brain.
-        workdir = BRAIN_DIR
-        workdir.mkdir(parents=True, exist_ok=True)
+        workdir = brain_dir()
         env = {**os.environ, "MCP_TOOL_TIMEOUT": "900000", "MCP_TIMEOUT": "30000"}
-        self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True, bufsize=1, cwd=workdir, env=env)
+        try:
+            self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True, bufsize=1, cwd=workdir, env=env)
+        except FileNotFoundError as e:
+            raise BrainError("Claude Code isn't installed (no claude command)") from e
+        except OSError as e:
+            raise BrainError(f"Claude Code can't start: {e}") from e
         self._stderr = []
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         self.context_tokens = 0
@@ -274,9 +284,9 @@ class CodexBrain:
 
     def ask(self, transcript: str) -> Iterator[tuple]:
         self._interrupted = False
-        workdir = BRAIN_DIR
-        workdir.mkdir(parents=True, exist_ok=True)
-        last = workdir / "codex-last.txt"
+        workdir = brain_dir()
+        # Its own file: another Codex turn (auren ask, a second daemon) may run at the same time
+        last = workdir / f"codex-last-{os.getpid()}-{secrets.token_hex(4)}.txt"
         recent = "\n".join(f"User: {u}\nAuren: {a}" for u, a in self.history[-4:])
         message = "\n\n".join(x for x in (
             prompt.system_prompt(self.profile.static_context()),
@@ -291,37 +301,45 @@ class CodexBrain:
                "-c", 'mcp_servers.auren.default_tools_approval_mode="approve"',
                "-c", "mcp_servers.auren.env=" + _env_toml(_mcp_env(self.runtime, self.session)),
                "--json", "--output-last-message", str(last), "-"]
-        sent = time.perf_counter()
-        self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                            text=True, cwd=workdir)
-        if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
-            proc.kill()
-            proc.wait()
-            raise Interrupted("cancelled")
-        proc.stdin.write(message)
-        proc.stdin.close()
-        for line in proc.stdout:
+        try:
+            sent = time.perf_counter()
             try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            item = ev.get("item") or {}
-            if item.get("type") == "mcp_tool_call":
-                if ev.get("type") == "item.started":
-                    yield ("tool", item.get("tool"), item.get("arguments", {}))
-                elif ev.get("type") == "item.completed":
-                    res = item.get("result") or {}
-                    text = " ".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict)) \
-                        if isinstance(res, dict) else str(res)
-                    yield ("result", item.get("tool"), text or str(item.get("error") or ""))
-            if ev.get("type") in ("error", "turn.failed"):
-                err = json.dumps(ev)[:300]
-                if any(w in err.lower() for w in LIMIT_WORDS):
-                    raise UsageLimit(err)
-        proc.wait()
-        if self._interrupted:
-            raise Interrupted("cancelled")
-        text = last.read_text().strip() if last.exists() else ""
+                self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE, text=True, cwd=workdir)
+            except FileNotFoundError as e:
+                raise BrainError("Codex isn't installed (no codex command)") from e
+            except OSError as e:
+                raise BrainError(f"Codex can't start: {e}") from e
+            if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
+                proc.kill()
+                proc.wait()
+                raise Interrupted("cancelled")
+            proc.stdin.write(message)
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                item = ev.get("item") or {}
+                if item.get("type") == "mcp_tool_call":
+                    if ev.get("type") == "item.started":
+                        yield ("tool", item.get("tool"), item.get("arguments", {}))
+                    elif ev.get("type") == "item.completed":
+                        res = item.get("result") or {}
+                        text = " ".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict)) \
+                            if isinstance(res, dict) else str(res)
+                        yield ("result", item.get("tool"), text or str(item.get("error") or ""))
+                if ev.get("type") in ("error", "turn.failed"):
+                    err = json.dumps(ev)[:300]
+                    if any(w in err.lower() for w in LIMIT_WORDS):
+                        raise UsageLimit(err)
+            proc.wait()
+            if self._interrupted:
+                raise Interrupted("cancelled")
+            text = last.read_text().strip() if last.exists() else ""
+        finally:
+            last.unlink(missing_ok=True)
         if proc.returncode != 0 or not text:
             raise BrainError("codex failed: " + proc.stderr.read()[-300:])
         text = speakable(text)
@@ -334,6 +352,7 @@ class CodexBrain:
 class Brain:
     """Which brain answers, by mode:
     - auto: Claude first; on a usage limit switch to Codex, and retry Claude after RETRY_AFTER seconds.
+      Codex alone when only Codex is installed.
     - claude: only Claude (a usage limit is reported, no switch).
     - codex: only Codex (saves the Claude allowance)."""
 
@@ -354,15 +373,24 @@ class Brain:
         self.mode = mode if mode in self.MODES else "auto"
 
     @property
+    def only_codex(self) -> bool:
+        """Auto mode on a machine with Codex and no Claude Code: Codex answers everything."""
+        return self.mode == "auto" and not _installed("claude") and _installed("codex")
+
+    @property
     def using_backup(self) -> bool:
         if self.mode != "auto":
             return self.mode == "codex"
+        if self.only_codex:
+            return True
         return self.limited_since is not None and time.time() - self.limited_since < self.RETRY_AFTER
 
     @property
     def backup_until(self) -> float | None:
         """When Codex stops answering for Claude (auto mode after a usage limit), else None."""
-        return self.limited_since + self.RETRY_AFTER if self.mode == "auto" and self.using_backup else None
+        if self.mode != "auto" or self.limited_since is None or self.only_codex or not self.using_backup:
+            return None
+        return self.limited_since + self.RETRY_AFTER
 
     def ask(self, transcript: str) -> Iterator[tuple]:
         if self.mode == "claude":
@@ -392,7 +420,7 @@ class Brain:
     def warm(self) -> None:
         """Match the Claude process to the mode: start it now if it will answer (so the first answer isn't
         slow), stop it in codex mode (it would only hold memory). Call it between answers."""
-        if self.mode == "codex":
+        if self.mode == "codex" or self.only_codex:
             self.primary.stop()
         elif self.primary.proc is None or self.primary.proc.poll() is not None:
             self.primary.start()
@@ -424,6 +452,6 @@ class Brain:
     def forget(self) -> None:
         """Start a fresh conversation: a new Claude process (warmed up now unless the mode is codex)
         and no Codex history."""
+        self.backup.history.clear()        # first: warm() raises if Claude can't start
         self.primary.stop()
         self.warm()
-        self.backup.history.clear()

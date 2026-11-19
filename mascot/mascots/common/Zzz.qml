@@ -16,7 +16,7 @@ Item {
       visible: zz.m.wSleep > 0.5
       text: "z"
       color: zz.color
-      font.family: "monospace"
+      font.family: Qt.platform.os === "osx" ? "Menlo" : "monospace"
       font.bold: true
       font.pixelSize: zz.m.u * (index ? 2.6 : 2)
       property int step: index * 6

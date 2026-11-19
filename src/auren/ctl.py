@@ -32,7 +32,8 @@ def main() -> int:
     try:
         print(send(line))
     except (FileNotFoundError, ConnectionRefusedError):
-        print("auren daemon isn't running (systemctl --user start auren)", file=sys.stderr)
+        start = "auren service start" if sys.platform == "darwin" else "systemctl --user start auren"
+        print(f"auren daemon isn't running ({start})", file=sys.stderr)
         return 1
     except TimeoutError:
         print("auren daemon didn't answer", file=sys.stderr)

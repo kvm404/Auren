@@ -4,15 +4,53 @@
 
 ### Added
 
-- A phone remote: an Android app (`android/`) that talks to Auren on your PC over the same Wi-Fi or Tailscale. Hold to talk,
-  hands-free or typed requests; see what Auren is doing and its replies (read aloud on the phone if you
-  like); answer its questions and stop it; get the links, text, images and files it sends with the new
-  `send_to_phone` tool; share from any app to Auren, the PC's clipboard or the PC's browser; a Quick
-  Settings tile. Pair with `auren phone pair` (a QR code), list with `auren phone devices`, unpair with
-  `auren phone revoke`. One turn at a time across the desk and the phone; phone replies aren't spoken on
-  the PC. Replies are spoken on the phone itself with the same Phonon voices. The server listens only on
-  the Tailscale address and private LAN addresses, over TLS pinned to the PC's own certificate; `[phone]`
-  in `config.toml` turns it off, and `auren doctor` checks it, the firewall included. See [docs/phone.md](docs/phone.md).
+- A phone remote: an Android app (`android/`) that talks to Auren on your PC over the same Wi-Fi or
+  Tailscale. Hold to talk, hands-free or typed requests; see what Auren is doing and its replies (read
+  aloud on the phone if you like); answer its questions and stop it; get the links, text, images and
+  files it sends with the new `send_to_phone` tool; share from any app to Auren, the PC's clipboard or
+  the PC's browser; a Quick Settings tile. Pair with `auren phone pair` (a QR code), list with
+  `auren phone devices`, unpair with `auren phone revoke`. One turn at a time across the desk and the
+  phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same
+  Phonon voices. The server listens only on the Tailscale address and private LAN addresses, over TLS
+  pinned to the PC's own certificate; `[phone]` in `config.toml` turns it off, and `auren doctor`
+  checks it, the firewall included. Omarchy only for now. See [docs/phone.md](docs/phone.md).
+
+### Changed
+
+- The voice is now Gradium's Phonon 31m (through `ptts`) instead of Supertonic 3: four voices, Everly
+  (the default), Juniper, Hugh and Trevor, picked from the bar panel, `auren-ctl voice-name` or the
+  phone (`voice.set`). Speech streams in chunks, so the first words play sooner. Speed now runs 0.8–1.25
+  (default 1.0) and the quality setting is gone. A Supertonic voice in `config.toml` becomes Everly once
+  (logged), `voice.steps` is dropped and an out-of-range speed is clamped. Auren now speaks with Trevor
+  and Veyra with Juniper when the voice follows the mascot.
+
+## 0.1.6
+
+### Added
+
+- Auren runs on Apple Silicon Macs with macOS 14 or newer, as a preview. `./install-macos.sh` installs
+  it with two launch agents (the daemon and the mascot), Control+Option+A as the talk key
+  (`keys.talk`), the robot in a floating window and its controls in the menu bar. Screen control,
+  windows, apps, the clipboard, Spotify, the browser tools and coding agents (in herdr, or a new
+  terminal window without it) use macOS's own interfaces. See [docs/macos.md](docs/macos.md).
+- On the Mac, Auren is an app: the installer builds Auren.app in `~/Applications`, with the robot as
+  its icon, and Auren runs through it. Settings lists the permissions under Auren, not a Python in a
+  hidden folder. Opening the app (or **Set up Auren…** in the menu bar) shows a setup window that
+  asks for the microphone, Accessibility and Screen Recording, takes the AssemblyAI key and checks
+  for Claude Code or Codex, one button each.
+- Auren is an Arch package: `yay -S auren`, then `auren`. The package installs the program in `/usr`
+  (with its own Python environment) and the services for every user; the first `auren` runs
+  `auren setup`, which does the per-user part: talk keys, bar plugin, AssemblyAI key, voice model,
+  browser tools, starting Auren. Its questions use gum, like Omarchy's own scripts, and come first.
+- `auren setup` runs again safely, takes flags for every question (`--keys`, `--browser`, `--brain`,
+  `--yes`), and moves an `install.sh` install to the package, keeping settings, keys and the voice
+  model. `auren setup --remove` undoes it (`--purge` also deletes settings and history).
+- Updating a package install from the bar opens a terminal that runs `yay -S --needed auren` between
+  stopping Auren and starting it again. An `install.sh` install still updates itself, and says once
+  afterwards that the package exists.
+- Installed with `./install.sh` before? Nothing changes until you switch: run `yay -S auren`, then
+  `/usr/bin/auren setup` once. It replaces the old copy and keeps your settings, keys, voice model
+  and history. On a Mac, Auren keeps installing and updating with `install-macos.sh`.
 
 ### Changed
 
@@ -20,13 +58,11 @@
   nothing: sending, publishing, root, packages, secrets, buying and wiping just run. The old Full
   access (`free`: windows and files run, sending and the floor still ask) is now called Auto.
   `auren-ctl safety never` or the panel's Brain page sets it; existing configs keep what they had.
-- The voice is now Gradium's Phonon 31m (through `ptts`) instead of Supertonic 3: four voices, Everly
-  (the default), Juniper, Hugh and Trevor, picked from the bar panel, `auren-ctl voice-name` or the
-  phone (`voice.set`). Speech streams in chunks, so the first words play sooner. Speed now runs 0.8–1.25
-  (default 1.0) and the quality setting is gone. A Supertonic voice in `config.toml` becomes Everly once
-  (logged), `voice.steps` is dropped and an out-of-range speed is clamped. Run `auren voice-model` to
-  fetch the new model (about 100 MB); the old one in `~/.local/share/auren/models/` can be deleted. Auren
-  now speaks with Trevor and Veyra with Juniper when the voice follows the mascot.
+- `install.sh` is for working on Auren from a checkout. It installs the program, then runs
+  `auren setup`, so both ways share one setup (its flags are the same). The bar plugin runs
+  `~/.local/share/auren/bin/auren`, which both create.
+- Auren's services no longer skip starting when the session's display isn't there yet at login
+  (systemd never retries a skipped condition): they wait for it and restart once it's there.
 
 ### Fixed
 
@@ -37,6 +73,16 @@
 - A new agent no longer waits at the folder-trust question. Auren marks the folder trusted in Claude
   Code's or Codex's own config before starting it, and answers yes if the question shows anyway.
   Claude Code now highlights "No, exit" first, so Enter alone would have quit it.
+- With the brain on auto and only Codex installed, Codex answers. Before, Auren kept trying to start
+  Claude Code, and every request ended without a reply. A brain that isn't installed is now said out
+  loud as an error.
+- Two Codex turns at once (`auren ask` while the daemon answers) no longer swap replies: each run
+  writes its reply to a file of its own.
+- The brain's working folder must belong to you and be closed to others; one an older Auren left open
+  is closed up.
+- Risky shortcuts are recognized in any modifier order and under any modifier name (`shift+ctrl+q`
+  asks, like `ctrl+shift+q`). Shortcuts that delete for good or empty the Trash count as wiping, and
+  logging out as a system action, so they ask at every level but Full access.
 
 ## 0.1.5
 

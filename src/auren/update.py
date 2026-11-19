@@ -16,6 +16,12 @@ it. It waits until Auren is idle, stops Auren and its mascot, runs the new insta
 again as they were. If the install fails, the version that was there is installed back. If the bar
 plugin or the mascot's QML changed, the Omarchy shell is restarted to load it. Progress and the result go to
 $XDG_RUNTIME_DIR/auren/update.json (the bar panel shows it) and ~/.local/state/auren/update.log.
+
+The Arch package (yay -S auren) is pacman's to update: the check is the same, against the version
+installed, but updating opens a terminal that waits until Auren is idle, stops it, runs `yay -S
+--needed auren` (it asks for your password there), and starts Auren again as it was. Updating the
+whole system (yay) updates Auren too; then restart it: systemctl --user restart auren auren-mascot.
+An install.sh install still updates itself, and after updating says once that the package exists.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from . import notice
+from . import config, notice
 from .config import CACHE_DIR, DATA_HOME, RUNTIME_DIR, STATE_DIR, STATE_FILE
 
 CHANNEL = "releases"
@@ -47,7 +53,9 @@ STATUS = RUNTIME_DIR / "update.json"
 LOG = STATE_DIR / "update.log"
 NOTIFIED = STATE_DIR / "update-notified"           # the newest version a notification was sent for
 LOCK = RUNTIME_DIR / "update.lock"
+SUGGESTED = STATE_DIR / "package-suggested"      # the package was suggested once, after a self-update
 UNITS = ("auren", "auren-mascot")
+INSTALLER = "install-macos.sh" if sys.platform == "darwin" else "install.sh"
 # What the Omarchy shell loads: the bar plugin, and the mascot's QML, which the panel imports for its
 # live mascot. A change in either needs the shell restarted (it keeps what it already loaded).
 SHELL_PATHS = ("omarchy-plugin", "mascot")
@@ -127,6 +135,8 @@ def status() -> dict:
 def _write(**fields) -> dict:
     """Replace the status the panel shows (installed is always filled in)."""
     info = installed()
+    if config.PACKAGED:                          # pacman may have updated it since setup wrote install.json
+        info = {"mode": "package", "version": _version()}
     data = {"installed": {"commit": info.get("commit", ""), "short": info.get("commit", "")[:7],
                           "date": info.get("committed", 0), "branch": info.get("branch", ""),
                           "mode": info.get("mode", ""), "tag": info.get("tag", ""), "version": info.get("version") or _version()},
@@ -255,10 +265,15 @@ def check(notify: bool = False) -> dict:
     with _lock() as got:
         if not got or _updating():              # an update (or another check) is running: it reports, and
             return status()                     # a check would hide its progress
+        if config.PACKAGED:
+            result = _check_package()
+            if notify and result.get("state") == "available":
+                _notify_once(result)
+            return result
         info = installed()
         if not info.get("commit"):
             return _write(state="unknown", checked_at=time.time(),
-                          message="This install doesn't know its version: run install.sh from a git checkout once")
+                          message=f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
         try:
             repo, _, latest, release = _fetch(info)
             have = info["commit"]
@@ -283,6 +298,55 @@ def check(notify: bool = False) -> dict:
     return result
 
 
+def _numbers(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v.lstrip("v").split("-")[0].split("+")[0]))
+
+
+AUR_INFO = "https://aur.archlinux.org/rpc/v5/info?arg[]={}"
+
+
+def _aur_version() -> str:
+    """The version the AUR has now (what yay would install), like 0.1.6-1; '' if it can't be read."""
+    request = Request(AUR_INFO.format(config.PACKAGE_NAME), headers={"User-Agent": "auren-updater"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            results = json.load(response).get("results") or []
+    except (OSError, URLError, ValueError, AttributeError):
+        return ""
+    version = results[0].get("Version", "") if results and isinstance(results[0], dict) else ""
+    return version if isinstance(version, str) else ""
+
+
+def _newer(a: str, b: str) -> bool:
+    """Whether package version a is newer than b, the way pacman compares them."""
+    try:
+        out = subprocess.run(["vercmp", a, b], capture_output=True, text=True, timeout=5).stdout.strip()
+        return int(out) > 0
+    except (OSError, subprocess.TimeoutExpired, ValueError):          # no pacman: the version, then pkgrel
+        def key(v: str):
+            ver, _, rel = v.rpartition("-") if "-" in v else (v, "", "0")
+            return _numbers(ver), _numbers(rel)
+        return key(a) > key(b)
+
+
+def _check_package() -> dict:
+    """The installed package against the AUR's (what an update would install), with the GitHub release for
+    its notes. A release on GitHub that hasn't reached the AUR yet isn't offered."""
+    have, aur = _package_version() or _version(), _aur_version()
+    try:
+        release = _latest_release(DEFAULT_REMOTE)
+    except UpdateError as e:
+        if not aur:
+            return _write(state="error", message=str(e), checked_at=time.time())
+        release = {"tag": "v" + aur.split("-")[0], "name": f"Auren {aur}", "url": "", "notes": ""}
+    latest = {**release, "commit": release["tag"], "short": release["tag"], "subject": release["name"], "date": 0}
+    available = _newer(aur, have) if aur and have else not have or _numbers(release["tag"]) > _numbers(have)
+    if not available:
+        return _write(state="current", latest=latest, commits=[], count=0, checked_at=time.time())
+    return _write(state="available", latest=latest, commits=[], count=0, checked_at=time.time(),
+                  note=f"Installed with pacman: updating runs yay -S {config.PACKAGE_NAME} in a terminal.")
+
+
 def _notify_once(result: dict) -> None:
     latest = result.get("latest", {}).get("commit", "")
     try:
@@ -302,10 +366,15 @@ def _notify_once(result: dict) -> None:
 
 def start() -> dict:
     """Start the update in its own transient systemd unit and return at once."""
+    if config.PACKAGED:
+        return _start_terminal()
     with _lock() as got:
         if not got or _updating():              # a check is running (try again in a moment), or an update
             return status()
         data = _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
+        if sys.platform == "darwin":               # no systemd: a process of its own, outside Auren's launch agent
+            from .mac.update import spawn
+            return spawn(data, _write, _kept)
         env = [f"--setenv={k}" for k in PASS_ENV if k in os.environ]    # a name alone: the value from here
         cmd = ["systemd-run", "--user", "--collect", "--quiet", f"--unit=auren-update-{os.getpid()}-{int(time.time())}",
                "--description=Auren update", *env, sys.executable, "-m", "auren.cli", "update", "run"]
@@ -315,6 +384,117 @@ def start() -> dict:
             err = getattr(e, "stderr", "") or str(e)
             return _write(state="failed", message="Couldn't start the update: " + err.strip()[-300:], **_kept())
     return data                                 # the unit waits for the lock this held
+
+
+def _start_terminal() -> dict:
+    """The package: pacman needs a password, so the update runs in a terminal (auren update pacman)."""
+    if _updating():
+        return status()
+    command = f"{config.PACKAGE_BIN / 'auren'} update pacman"
+    launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
+    cmd = [launcher, command] if launcher else ["xdg-terminal-exec", "-e", "sh", "-c", command]
+    try:
+        subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError as e:
+        return _write(state="failed", message=f"Couldn't open a terminal ({e}): run auren update in one", **_kept())
+    return {**status(), "terminal": True, "message": "Updating in a terminal: it asks for your password there"}
+
+
+def _share_files() -> dict[str, tuple[int, int]]:
+    """The package's QML (the bar plugin and the mascot), to tell whether the shell needs a restart."""
+    out = {}
+    for path in sorted(config.PACKAGE_SHARE.rglob("*")):
+        if path.is_file():
+            st = path.stat()
+            out[str(path)] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def _package_version() -> str:
+    try:
+        out = subprocess.run(["pacman", "-Q", config.PACKAGE_NAME], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.split()[1] if len(out.split()) == 2 else ""
+
+
+def run_package() -> int:
+    """The package's update, in a terminal: wait until idle, stop Auren, yay, start it again as it was."""
+    helper = shutil.which("yay") or shutil.which("paru")
+    if not helper:
+        print(f"Updating the package needs yay or paru (or: sudo pacman -U a built {config.PACKAGE_NAME} package)")
+        return 1
+    with _lock(wait=LOCK_WAIT) as got:
+        if not got:
+            print("A check for updates is running: try again in a moment")
+            return 1
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        LOG.write_text("")
+        _write(state="updating", step="Starting…", started_at=time.time(), **_kept())
+
+        def step(text: str) -> None:
+            with contextlib.suppress(OSError):    # the terminal may be gone: carry on regardless
+                print(text, flush=True)
+            _step(text)
+
+        before, shell_before = _package_version(), _share_files()
+        try:
+            step("Waiting for Auren to finish…")
+            _wait_idle()
+        except UpdateError as e:
+            _write(state="failed", message=str(e), finished_at=time.time(), **_kept())
+            print(e)
+            return 1
+        running = {u: _systemctl("is-active", "--quiet", u) == 0 for u in UNITS}
+        # Closing the terminal mustn't leave Auren stopped: from here on a hangup is ignored (the helper
+        # gets its own, and fails), and Auren is started again whatever happens.
+        hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        code, stopped = 1, False
+        try:
+            step("Stopping Auren…")
+            stopped = _systemctl("stop", *UNITS) == 0
+            if stopped:
+                step(f"Updating with {Path(helper).name}…")
+                try:
+                    code = subprocess.run([helper, "-S", "--needed", config.PACKAGE_NAME]).returncode
+                except (OSError, KeyboardInterrupt):
+                    code = 1
+        finally:
+            step("Starting Auren…")
+            stuck = [u for u, was in running.items() if was and (_systemctl("restart", u) or not _started(u))]
+            signal.signal(signal.SIGHUP, hup)
+        trouble = f" {' and '.join(stuck)} didn't start: journalctl --user -u {stuck[0]}" if stuck else ""
+        if not stopped:
+            message = "Auren didn't stop, so nothing was updated: try again when it's idle." + trouble
+            _write(state="failed", message=message, finished_at=time.time(), **_kept())
+            print(message)
+            return 1
+        after = _package_version()
+        if code:
+            message = f"{Path(helper).name} didn't finish (exit {code}): Auren is as it was.{trouble}"
+            _write(state="failed", message=message, finished_at=time.time(), **_kept())
+            print(message)
+            return 1
+        message = (f"Updated to {after}" if after != before else f"Already up to date ({after})") + trouble
+        _write(state="done", message=message, finished_at=time.time())
+        print(message)
+    if _share_files() != shell_before:
+        print("Restarting the Omarchy shell for the new bar plugin")
+        _restart_shell()
+    return 0
+
+
+def _suggest_package() -> None:
+    """Once, after an install.sh install updated itself: there's a package now. Only on Omarchy (a Mac
+    keeps updating itself), and only once the AUR has the package, so yay can find it."""
+    if sys.platform == "darwin" or SUGGESTED.exists() or not _aur_version():
+        return
+    notice.notify("Auren is now an Arch package",
+                  f"Switch with yay -S {config.PACKAGE_NAME}, then run /usr/bin/auren setup: your settings, talk "
+                  "keys and voice model are kept.", "update", always=True)
+    SUGGESTED.parent.mkdir(parents=True, exist_ok=True)
+    SUGGESTED.write_text(str(int(time.time())))
 
 
 def _updating() -> bool:
@@ -340,6 +520,9 @@ def _step(text: str) -> None:
 
 
 def _systemctl(*args: str) -> int:
+    if sys.platform == "darwin":
+        from .mac.update import launchctl_like
+        return launchctl_like(*args)
     return subprocess.run(["systemctl", "--user", *args], capture_output=True).returncode
 
 
@@ -362,7 +545,8 @@ def _install(repo: Path, dev: bool) -> None:
     """Run install.sh, in its own process group so a timeout stops everything it started (uv, downloads)."""
     _log(f"install.sh{' --dev' if dev else ''} from {repo}")
     with LOG.open("a") as out:
-        p = subprocess.Popen(["bash", str(repo / "install.sh"), *(["--dev"] if dev else [])], cwd=repo,
+        script = INSTALLER if (repo / INSTALLER).exists() else "install.sh"
+        p = subprocess.Popen(["bash", str(repo / script), *(["--dev"] if dev else [])], cwd=repo,
                              env={**os.environ, "AUREN_UPDATE": "1"}, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         try:
@@ -416,6 +600,9 @@ def run() -> int:
             return 1
         _log(message)
         _write(state="done", message=message, finished_at=time.time())
+        if message.startswith("Updated") and installed().get("mode") == "install":   # it did update
+            with contextlib.suppress(OSError):
+                _suggest_package()
     if restart_shell:                          # last: the panel showing this goes with the old shell
         _log("restarting the Omarchy shell for the new bar plugin")
         _restart_shell()
@@ -423,6 +610,8 @@ def run() -> int:
 
 
 def _restart_shell() -> None:
+    if sys.platform == "darwin":
+        return                                 # the mascot (and its menu) restarted with the services
     try:
         subprocess.Popen(["omarchy", "restart", "shell"], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -434,7 +623,7 @@ def _update() -> tuple[str, bool]:
     info = installed()
     before = info.get("commit", "")
     if not before:                             # not knowing what's there, don't replace it
-        raise UpdateError("This install doesn't know its version: run install.sh from a git checkout once")
+        raise UpdateError(f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
     _step("Looking for the newest version…")
     repo, dev, target, release = _fetch(info)
     if _contains(repo, before, target):
@@ -443,7 +632,7 @@ def _update() -> tuple[str, bool]:
         _dev_ready(repo, target)
     elif not _has(repo, before):               # _fetch couldn't recover the installed commit for rollback
         raise UpdateError(f"If the install failed, Auren couldn't go back to {before[:7]} (it isn't on GitHub): "
-                          "update from your checkout instead (git pull && ./install.sh)")
+                          f"update from your checkout instead (git pull && ./{INSTALLER})")
     plugin_changed = subprocess.run(["git", "-C", str(repo), "diff", "--quiet", before, target, "--",
                                      *SHELL_PATHS]).returncode != 0
     _step("Waiting for Auren to finish…")
@@ -469,7 +658,7 @@ def _update() -> tuple[str, bool]:
                 _back(repo, dev, back_to)
                 _install(repo, dev)
             except UpdateError as again:
-                raise UpdateError(f"{e}. Going back failed too ({again}): run ./install.sh in "
+                raise UpdateError(f"{e}. Going back failed too ({again}): run ./{INSTALLER} in "
                                   f"{info.get('source') or 'your checkout'}") from e
             raise UpdateError(f"{e}. Auren is back on {back_to[:7]}.") from e
     except Exception as e:                     # whatever happened, Auren is started again below
@@ -481,7 +670,9 @@ def _update() -> tuple[str, bool]:
             _systemctl("disable", unit)
     stuck = [u for u, was in running.items()   # as they were; restart: their files changed
              if _systemctl("restart" if was else "stop", u) or (was and not _started(u))]
-    trouble = f" {' and '.join(stuck)} didn't start: see its log (journalctl --user -u {stuck[0]})." if stuck else ""
+    where = ("~/.local/state/auren/" + ("daemon" if stuck[0] == "auren" else "mascot") + ".out.log"
+             if sys.platform == "darwin" else f"journalctl --user -u {stuck[0]}") if stuck else ""
+    trouble = f" {' and '.join(stuck)} didn't start: see its log ({where})." if stuck else ""
     if failure:
         raise UpdateError(str(failure) + trouble) from failure
     new = _commits(repo, target, 1)[0]
@@ -515,9 +706,11 @@ def main(args: list[str]) -> int:
     if cmd == "apply":
         result = start()
         print(result.get("message") or "Updating in the background: see auren update status")
-        return 0 if result.get("state") == "updating" else 1
+        return 0 if result.get("state") == "updating" or result.get("terminal") else 1
     if cmd == "run":
         return run()
+    if cmd == "pacman":
+        return run_package()
     if cmd == "status":
         print(json.dumps(status(), indent=2))
         return 0
@@ -529,11 +722,14 @@ def main(args: list[str]) -> int:
     if result.get("state") != "available":
         return 0 if result.get("state") == "current" else 1
     try:
-        answer = input("Update now? Auren restarts, which takes about a minute. [y/N] ")
+        answer = input("Update now? Auren restarts, which takes about a minute"
+                       + (" (yay asks for your password)" if config.PACKAGED else "") + ". [y/N] ")
     except EOFError:
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
         return 0
+    if config.PACKAGED:                          # in this terminal: yay asks for the password here
+        return run_package()
     result = start()
     seen = ""
     while result.get("state") == "updating":
@@ -548,7 +744,10 @@ def main(args: list[str]) -> int:
 
 def _print(result: dict) -> None:
     have = result.get("installed", {})
-    print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
+    if have.get("mode") == "package" or config.PACKAGED:      # pacman knows the version, not a commit
+        print(f"Installed: {have.get('version', '')} (Arch package)")
+    else:
+        print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
     state = result.get("state")
     if state == "current":
         print("Up to date with published releases.")

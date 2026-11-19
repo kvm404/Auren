@@ -30,9 +30,11 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import numpy as np
 
+from .config import MAC
 from .live import envelope
 
 LATENCY = 0.12        # pw-cat's start-up and buffering, roughly
@@ -73,6 +75,24 @@ def sentences(text: str) -> list[str]:
 
 class VoiceModelMissing(RuntimeError):
     pass
+
+
+REPOS = ("gradium/phonon-31m-en", "gradium/phonon-voices")     # what download_model puts in the cache
+
+
+def hf_cache() -> Path:
+    """The Hugging Face cache ptts downloads into: HF_HUB_CACHE, else HF_HOME/hub, else
+    $XDG_CACHE_HOME/huggingface/hub."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return Path(os.environ["HF_HUB_CACHE"]).expanduser()
+    if os.environ.get("HF_HOME"):
+        return Path(os.environ["HF_HOME"]).expanduser() / "hub"
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache").expanduser() / "huggingface/hub"
+
+
+def cache_dirs() -> list[Path]:
+    """The voice model's folders in the cache (auren setup --remove --purge deletes them)."""
+    return [hf_cache() / f"models--{repo.replace('/', '--')}" for repo in REPOS]
 
 
 @contextlib.contextmanager
@@ -156,9 +176,13 @@ class Voice:
         """Blocking. Returns False if it was interrupted."""
         with self._lock:
             self._stop.clear()
-            self._player = subprocess.Popen(
-                ["pw-cat", "--playback", "--raw", "--format", "f32", "--channels", "1", "--rate", str(self.rate),
-                 "--media-role", "Assistant", "-"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            if MAC:
+                from .mac.audio import Player
+                self._player = Player(self.rate)
+            else:
+                self._player = subprocess.Popen(
+                    ["pw-cat", "--playback", "--raw", "--format", "f32", "--channels", "1", "--rate", str(self.rate),
+                     "--media-role", "Assistant", "-"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
             self._timeline = []
             clock = threading.Thread(target=self._follow, daemon=True)
             clock.start()

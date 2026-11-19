@@ -1,14 +1,15 @@
 [Unit]
 Description=Auren mascot (floating character that shows what Auren is doing)
-After=wayland-session-waitenv.service
+After=graphical-session.target wayland-session-waitenv.service
 PartOf=graphical-session.target
-ConditionEnvironment=WAYLAND_DISPLAY
+# Waits for the session's display the way auren.service does (see there).
 
 [Service]
 @ENV@
-ExecStart=@QS@ -n -p @SHARE@/mascot
+ExecStart=@AUREN@ with-display @QS@ -n -p @MASCOT@
 Restart=on-failure
 RestartSec=3
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=graphical-session.target

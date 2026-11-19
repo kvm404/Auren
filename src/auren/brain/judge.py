@@ -32,7 +32,7 @@ import subprocess
 import threading
 import time
 
-from ..config import BRAIN_DIR
+from ..config import brain_dir
 
 log = logging.getLogger("auren.judge")
 TIMEOUT = 20.0          # seconds for a verdict, waiting for others included; then ask the user
@@ -100,10 +100,10 @@ class Judge:
                 log.warning("judge: no `claude` command, so every message asks the user")
             self._missing = True
             return None
-        BRAIN_DIR.mkdir(parents=True, exist_ok=True)     # outside $HOME, like the brain: no personal CLAUDE.md
+        workdir = brain_dir()                             # outside $HOME, like the brain: no personal CLAUDE.md
         try:
             return subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True, cwd=BRAIN_DIR,
+                                    stderr=subprocess.DEVNULL, text=True, cwd=workdir,
                                     start_new_session=True)      # its own group: a timeout ends its children too
         except OSError as e:
             log.warning("judge can't start: %s", e)

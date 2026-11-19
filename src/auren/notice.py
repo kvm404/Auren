@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -117,3 +118,7 @@ def clear() -> None:
             time.sleep(0.05)     # let the compositor drop it before the capture
         except (OSError, subprocess.TimeoutExpired):
             pass
+
+
+if sys.platform == "darwin":
+    from .mac.notice import *  # noqa: E402, F403 - Notification Center, no OSD

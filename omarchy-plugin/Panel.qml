@@ -36,7 +36,7 @@ Panel {
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/auren"
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/auren"
   readonly property string ctl: dataDir + "/bin/auren-ctl"
-  readonly property string aurenBin: dataDir + "/venv/bin/auren"
+  readonly property string aurenBin: dataDir + "/bin/auren"   // install.sh's venv, or the package's /usr/bin/auren
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") + "/auren"
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -319,7 +319,7 @@ Panel {
     return Math.round(s / 86400) + " days ago"
   }
   function day(t) { return t ? new Date(t * 1000).toLocaleDateString(Qt.locale(), "d MMM yyyy") : "" }
-  // what's installed, as install.sh recorded it (known before any check)
+  // what's installed, as install.sh (or auren setup, for the package) recorded it (known before any check)
   property var installedInfo: ({})
   FileView {
     path: root.dataDir + "/install.json"
@@ -329,7 +329,10 @@ Panel {
     onLoaded: { try { root.installedInfo = JSON.parse(text()) } catch (e) {} }
     onLoadFailed: root.installedInfo = ({})
   }
-  readonly property string versionText: "Auren" + (installedInfo.version ? " " + installedInfo.version : "")
+  // the package: pacman can update it after setup wrote install.json, so the last check's version wins
+  readonly property bool packaged: installedInfo.mode === "package"
+  readonly property string installedVersion: (packaged && (upd.installed || {}).version) || installedInfo.version || ""
+  readonly property string versionText: "Auren" + (installedVersion ? " " + installedVersion : "")
                                          + (installedInfo.commit ? " · " + installedInfo.commit.slice(0, 7) : "")
   readonly property string updateHeadline: {
     if (root.updating) return upd.step || "Updating…"
@@ -352,7 +355,9 @@ Panel {
   }
   readonly property var updateActions: {
     if (root.confirmingUpdate) return [
-      { label: "Update and restart", icon: "󰚰", tip: "Waits until Auren is idle, installs, starts it again", run: root.startUpdate },
+      root.packaged
+        ? { label: "Update in a terminal", icon: "󰚰", tip: "Runs yay there, which asks for your password", run: root.startUpdate }
+        : { label: "Update and restart", icon: "󰚰", tip: "Waits until Auren is idle, installs, starts it again", run: root.startUpdate },
       { label: "Cancel", icon: "", run: function() { root.confirmingUpdate = false } }
     ]
     var list = []
@@ -1457,8 +1462,11 @@ Panel {
               width: parent.width
               visible: root.confirmingUpdate
               wrapMode: Text.WordWrap
-              text: "Auren waits until it's idle, stops, installs the new version and starts again (about a minute)."
-                    + " If the bar plugin changed, the bar restarts too. A failed install puts the current version back."
+              text: root.packaged
+                    ? "A terminal opens: Auren waits until it's idle, stops, and yay installs the new version (it asks"
+                      + " for your password there). Then Auren starts again, and the bar too if its plugin changed."
+                    : "Auren waits until it's idle, stops, installs the new version and starts again (about a minute)."
+                      + " If the bar plugin changed, the bar restarts too. A failed install puts the current version back."
               color: root.fg
               font.family: root.font
               font.pixelSize: Style.font.bodySmall

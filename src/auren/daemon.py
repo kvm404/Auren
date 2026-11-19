@@ -43,12 +43,13 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 
 from . import notice
 from .brain import Brain, BrainError, Interrupted
-from .config import LOCK, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
+from .config import LOCK, MAC, RUNTIME_DIR, SOCKET, STATE_DIR, STATE_FILE, TOOLS_SOCKET
 from .ears import Listening, vocabulary
 from .live import Level, describe, notice_kind
 from .profile import Profile
@@ -114,6 +115,7 @@ class Daemon:
         self.tools.level = s["safety"]
         self.brain = Brain(self.tools, SESSION, mode=s["brain"], effort=s["effort"], claude_model=s["brain.claude_model"],
                            codex_model=s["brain.codex_model"], codex_effort=s["brain.codex_effort"])
+        self._keys_lock = threading.Lock()            # macOS: one talk-key tap at a time (_listen_for_keys)
         self.voice = None
         self.speak_enabled = speak                    # False: started with --quiet, the voice isn't even loaded
         self.vocab = vocabulary(self.profile)
@@ -348,6 +350,14 @@ class Daemon:
                                "voice": self.voice_on, "safety": self.tools.level})
         if cmd == "reload":
             return self._reload()
+        if cmd == "permissions" and MAC:          # macOS asks this process, the one that needs them
+            from .mac import permissions
+            what = arg.strip()
+            ask = (permissions.status if what == "status" else
+                   (lambda: permissions.request_one(what)) if what in permissions.PANES else permissions.request)
+            now = await asyncio.get_running_loop().run_in_executor(None, ask)
+            return json.dumps({**now, "program": permissions.program(),
+                               "talk_keys": bool(getattr(self, "_hotkeys", None))})
         if cmd == "quit":
             asyncio.get_running_loop().call_later(0.1, self.loop.stop)
             return "bye"
@@ -426,6 +436,8 @@ class Daemon:
         if not changed:
             return "Auren picked up the new words" if vocab_changed else "no changes"
         old, self.settings = self.settings, new
+        if MAC and (new["keys.talk"], new["keys.talk_fresh"]) != (old["keys.talk"], old["keys.talk_fresh"]):
+            self._listen_for_keys()
         if new["safety"] != old["safety"]:
             self.tools.set_level(new["safety"])
         if self.voice:
@@ -591,10 +603,10 @@ class Daemon:
         async with self.busy:              # after the current answer, if there is one
             self.set_state("thinking", f"Switching to {what}…")
             self._fresh()
-            await asyncio.to_thread(self.brain.set_claude, effort, model)
+            await self._restart_brain(self.brain.set_claude, effort, model)
             log.info("claude: %s (fresh conversation)", what)
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"({what})",
-                           "tools": [], "brain": "claude"})
+                           "tools": [], "brain": self._brain_name()})
         self.idle()
 
     async def _warm(self) -> None:
@@ -605,6 +617,17 @@ class Daemon:
             except Exception as e:  # noqa: BLE001 - retried on the next request
                 log.error("brain didn't start: %s", e)
 
+    async def _restart_brain(self, fn, *args) -> None:
+        """A brain call that (re)starts Claude: one that can't start (not installed, say) is logged, and
+        the next request says why. It mustn't leave the state stuck on "Starting fresh…"."""
+        try:
+            await asyncio.to_thread(fn, *args)
+        except BrainError as e:
+            log.error("brain didn't start: %s", e)
+
+    def _brain_name(self) -> str:
+        return "codex" if self.brain.using_backup else "claude"
+
     def _fresh(self) -> None:
         """A new conversation: what was asked in the old one can't be answered, and its notes are gone."""
         self._earlier, self._request = (), ""
@@ -613,10 +636,10 @@ class Daemon:
     async def _forget_quietly(self) -> None:
         async with self.busy:
             self._fresh()
-            await asyncio.to_thread(self.brain.forget)
-            log.info("fresh conversation (Super+Shift+A)")
+            await self._restart_brain(self.brain.forget)
+            log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
-                           "tools": [], "brain": "claude"})
+                           "tools": [], "brain": self._brain_name()})
 
     async def release(self) -> str:
         session, self.listening = self.listening, None
@@ -679,10 +702,10 @@ class Daemon:
         async with self.busy:
             self.set_state("thinking", "Starting fresh…")
             self._fresh()
-            await asyncio.to_thread(self.brain.forget)
+            await self._restart_brain(self.brain.forget)
             log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
-                           "tools": [], "brain": "claude"})
+                           "tools": [], "brain": self._brain_name()})
         if say:
             await self._say("Okay, fresh start. I've forgotten our conversation.", turn)
         else:
@@ -878,6 +901,39 @@ class Daemon:
         with (STATE_DIR / "history.jsonl").open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def _listen_for_keys(self) -> None:
+        """macOS: the talk keys come from an event tap here (on Omarchy they are Hyprland bindings). A press
+        goes through the socket, like auren-ctl's."""
+        from .ctl import send
+        from .mac import hotkey
+        with self._keys_lock:              # the reload (loop thread) and _keys_once_allowed (a worker) both call this
+            if getattr(self, "_hotkeys", None):
+                self._hotkeys.stop()
+            self._hotkeys = hotkey.start({"talk": self.settings["keys.talk"],
+                                          "talk-fresh": self.settings["keys.talk_fresh"]},
+                                         lambda command: send(command, timeout=10))
+
+    async def _keys_once_allowed(self, every: float = 2.0) -> None:
+        """macOS: the talk keys couldn't start (Accessibility not allowed yet). Wait for the user to allow it,
+        then start them, so the setup window's Allow is enough and no restart is needed."""
+        from .mac import permissions
+        loop = asyncio.get_running_loop()
+        failed = 0
+        while not getattr(self, "_hotkeys", None):
+            await asyncio.sleep(every)
+            if getattr(self, "_hotkeys", None):          # a reload started them meanwhile
+                return
+            if await loop.run_in_executor(None, permissions.accessibility):
+                await loop.run_in_executor(None, self._listen_for_keys)
+                if self._hotkeys:
+                    log.info("Accessibility was allowed: the talk keys are on")
+                    return
+                failed += 1                   # allowed, yet the tap fails (or a key isn't a shortcut)
+                if failed >= 3:
+                    log.error("the talk keys still can't start: restart Auren (auren doctor)")
+                    return
+                every = max(every, 10.0)
+
     # --- server -------------------------------------------------------------------------------
 
     async def serve(self) -> None:
@@ -903,6 +959,10 @@ class Daemon:
         asyncio.create_task(self.warm_up())
         self._phone_task = asyncio.create_task(self._serve_phone())
         log.info("listening on %s", SOCKET)
+        if MAC:
+            self._listen_for_keys()
+            if not self._hotkeys:
+                asyncio.create_task(self._keys_once_allowed())
         async with server:
             await server.serve_forever()
 

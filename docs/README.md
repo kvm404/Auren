@@ -3,6 +3,7 @@
 ## Using Auren
 
 - [Install and troubleshoot](install.md): requirements, setup, optional integrations, and removal.
+- [Auren on macOS](macos.md): the Mac preview: install, permissions, and what differs from Omarchy.
 - [Talking to Auren](daemon.md): keys, interruptions, voice settings, and logs.
 - [Safety](safety.md): approval levels, bound confirmations, the send judge, and limitations.
 - [Privacy](privacy.md): what leaves the laptop and what stays on disk.

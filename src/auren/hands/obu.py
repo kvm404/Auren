@@ -36,6 +36,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -559,11 +560,32 @@ def choose(name: str | None = None, profile: str | None = None) -> Target:
     return Target(kind, prof)
 
 
+def readable(kind: browsers.Kind) -> bool:
+    """Whether this process may look in the browser's folder. macOS keeps another app's data from a process
+    without Full Disk Access ("Operation not permitted"), and then no profile or extension can be seen."""
+    base = browsers.config_dir(kind)
+    try:
+        if base is not None:
+            os.listdir(base)
+    except PermissionError:
+        return False
+    except OSError:
+        pass
+    return True
+
+
 def set_up_somewhere() -> bool:
     """Some installed browser has a host registered and the extension: from files alone, no sockets asked
-    (cheap enough for every tool call's integration check)."""
-    return cli() is not None and any(browsers.installed(k) and registered(k) and with_extension(k)
-                                     for k in browsers.KINDS)
+    (cheap enough for every tool call's integration check). A browser whose folder can't be read is set up
+    if its host is connected."""
+    if cli() is None:
+        return False
+    installed = [k for k in browsers.KINDS if browsers.installed(k)]
+    if any(registered(k) and with_extension(k) for k in installed):
+        return True
+    # Unreadable, its manifest can't be read either (it's in the same folder): the connection decides
+    hidden = {k.key for k in installed if not readable(k)}
+    return bool(hidden) and any(c.kind.key in hidden for c in connections())
 
 
 def not_set_up(kind: browsers.Kind, profile: Profile | None = None) -> str | None:
@@ -672,3 +694,7 @@ def version_of(binary: str) -> str:
         return "?"
     m = re.search(r"\d+\.\d+\.\d+", out)
     return m.group(0) if m else (out[:20] or "?")
+
+
+if sys.platform == "darwin":
+    from ..mac.obu import *  # noqa: E402, F403 - the darwin build, lsof and ps

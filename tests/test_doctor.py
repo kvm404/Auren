@@ -48,4 +48,21 @@ def test_other_free_key_is_fine_but_named():
 def test_no_binding():
     checks = talk_keys([SELECT_ALL])
     assert [(c.name, c.status) for c in checks] == [("talk key", WARN)]
-    assert "install.sh" in checks[0].fix
+    assert "auren setup" in checks[0].fix
+
+
+def test_the_package_s_services_are_found_and_an_old_one_is_named(tmp_path, monkeypatch):
+    from auren import config, doctor
+    pkg, own = tmp_path / "usr/lib/systemd/user", tmp_path / "config/systemd/user"
+    pkg.mkdir(parents=True)
+    own.mkdir(parents=True)
+    for unit in ("auren", "auren-mascot"):
+        (pkg / f"{unit}.service").write_text("[Service]\nExecStart=/bin/sh daemon\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setattr(config, "PACKAGE_UNITS", pkg)
+    monkeypatch.setattr(config, "PACKAGED", True)
+    monkeypatch.setattr(doctor, "_run", lambda cmd, timeout=5: (0, "active"))
+    assert [c.status for c in doctor.units()] == [OK, OK]
+    (own / "auren.service").write_text("[Service]\nExecStart=/old/venv/bin/auren daemon\n")
+    first = doctor.units()[0]
+    assert first.status == WARN and "install.sh" in first.detail and first.fix.startswith("auren setup")

@@ -4,5 +4,5 @@
 for ctl in "${XDG_DATA_HOME:-$HOME/.local/share}/auren/bin/auren-ctl" "$(dirname "$0")/../.venv/bin/auren-ctl"; do
   [ -x "$ctl" ] && exec "$ctl" "$@"
 done
-echo "auren-ctl isn't installed: run ./install.sh" >&2
+echo "auren-ctl isn't set up: run auren setup (or install Auren: yay -S auren)" >&2
 exit 1
