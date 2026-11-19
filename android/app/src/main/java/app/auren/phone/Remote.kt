@@ -20,6 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,15 +68,21 @@ object Remote {
         .readTimeout(30, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
-    private var pinned: Pair<String, OkHttpClient>? = null
+    private val clients = HashMap<Pair<String, Network?>, OkHttpClient>()
 
-    /** A client that trusts the one certificate [fp] names, and nothing else. */
+    /**
+     * A client that trusts the one certificate [fp] names, and nothing else. With [net] its sockets go out over
+     * that network (the Wi-Fi the PC's LAN address is on), not the default one, which may be mobile data when
+     * the Wi-Fi has no internet. Each network gets its own connection pool: OkHttp's pool doesn't tell them apart.
+     */
     @Synchronized
-    private fun client(fp: String): OkHttpClient {
-        pinned?.let { (f, c) -> if (f == fp) return c }
+    private fun client(fp: String, net: Network? = null): OkHttpClient {
+        clients[fp to net]?.let { return it }
+        if (clients.size >= 4) clients.clear()          // an old pairing or a Wi-Fi that is gone
         val trust = PinnedTrust(fp)
-        return plain.newBuilder().sslSocketFactory(trust.socketFactory(), trust).hostnameVerifier(PinnedTrust.ANY_HOST)
-            .build().also { pinned = fp to it }
+        val b = plain.newBuilder().sslSocketFactory(trust.socketFactory(), trust).hostnameVerifier(PinnedTrust.ANY_HOST)
+        if (net != null) b.socketFactory(net.socketFactory).connectionPool(ConnectionPool())
+        return b.build().also { clients[fp to net] = it }
     }
 
     private val _link = MutableStateFlow(Link(LinkKind.UNPAIRED))
@@ -190,12 +197,13 @@ object Remote {
             }
             if (_link.value.kind != LinkKind.CONNECTED) _link.value = Link(LinkKind.CONNECTING)
             val g = gen
-            val order = tryOrder(pc.hosts, withContext(Dispatchers.IO) { wifi() }, pc.last)
+            val lans = withContext(Dispatchers.IO) { wifi() }
+            val order = tryOrder(pc.hosts, lans.map { it.ip to it.prefix }, pc.last)
             var outcome = Link(LinkKind.UNREACHABLE)
             var greeted = false
             for (h in order) {                  // Wi-Fi first when the PC is on it, then Tailscale
                 if (g != gen) break             // paired again while looking: never open a socket to the old PC
-                val (o, hello) = connectOnce(pc, h, g)
+                val (o, hello) = connectOnce(pc, h, g, netOf(h, lans))
                 if (o.kind != LinkKind.UNREACHABLE || outcome.kind == LinkKind.UNREACHABLE) outcome = o
                 greeted = hello
                 if (hello || o.kind == LinkKind.REVOKED || g != gen) break     // it was up: start again from the top
@@ -219,10 +227,10 @@ object Remote {
     }
 
     /** One WebSocket, until it closes. Returns why it ended, and whether the PC said hello first. */
-    private suspend fun connectOnce(pc: Pc, to: String, g: Int): Pair<Link, Boolean> {
+    private suspend fun connectOnce(pc: Pc, to: String, g: Int, net: Network?): Pair<Link, Boolean> {
         val events = Channel<Event>(Channel.UNLIMITED)
         val req = Request.Builder().url("${pc.ws(to)}/v1/ws").header("Authorization", "Bearer ${pc.token}").build()
-        val socket = client(pc.fp).newWebSocket(req, object : WebSocketListener() {
+        val socket = client(pc.fp, net).newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) { events.trySend(Event.Text(text)) }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
@@ -295,7 +303,7 @@ object Remote {
         connected = true
         host = to
         _link.value = Link(LinkKind.CONNECTED, via = pathOf(to))
-        val hosts = if (m.addrs.isEmpty()) pc.hosts else (m.addrs + to).distinct()     // a new LAN IP, say
+        val hosts = mergeHosts(pc.hosts, m.addrs, to)     // a new LAN IP, say
         if (hosts != pc.hosts || pc.last != to) store.pc = pc.copy(hosts = hosts, last = to)
         setState(m.state)
         if (m.inboxLast < inboxLast) inboxLast = 0                // the PC's inbox was reset
@@ -515,10 +523,11 @@ object Remote {
         val body = JSONObject().put("code", p.code).put("name", deviceName()).toString()
         var refused = false
         var wrongPc: String? = null
-        for (h in tryOrder(p.hosts, wifi(), null)) {
+        val lans = wifi()
+        for (h in tryOrder(p.hosts, lans.map { it.ip to it.prefix }, null)) {
             val req = Request.Builder().url("https://$h:${p.port}/v1/pair").post(body.toRequestBody(JSON)).build()
             try {
-                client(p.fp).newCall(req).execute().use { r ->
+                client(p.fp, netOf(h, lans)).newCall(req).execute().use { r ->
                     val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
                     if (!r.isSuccessful) return@withContext o.optString("error").ifBlank { "The PC said ${r.code}" }
                     val dev = o.optJSONObject("device") ?: JSONObject()
@@ -577,8 +586,12 @@ object Remote {
         clearInbox()
     }
 
-    /** The addresses to try for a request: the live connection's first, then the usual order. */
-    private fun routes(pc: Pc): List<String> = (listOfNotNull(host) + tryOrder(pc.hosts, wifi(), pc.last)).distinct()
+    /** The addresses to try for a request, each with the network to use: the live connection's first, then the usual order. */
+    private fun routes(pc: Pc): List<Pair<String, Network?>> {
+        val lans = wifi()
+        return (listOfNotNull(host) + tryOrder(pc.hosts, lans.map { it.ip to it.prefix }, pc.last)).distinct()
+            .map { it to netOf(it, lans) }
+    }
 
     /**
      * POST /v1/share. Returns the PC's status ("ok", "in progress", "busy", "error: ...") or why it couldn't
@@ -601,11 +614,11 @@ object Remote {
             val pc = store.pc ?: return@withContext "error: not paired"
             val body = Outgoing.share(id, kind, action, text, note, data, mime)
             var last = ""
-            for (h in routes(pc)) {             // the same id on every try: the PC runs it at most once
+            for ((h, net) in routes(pc)) {      // the same id on every try: the PC runs it at most once
                 val req = Request.Builder().url("${pc.base(h)}/v1/share").header("Authorization", "Bearer ${pc.token}")
                     .post(body.toRequestBody(JSON)).build()
                 try {
-                    client(pc.fp).newCall(req).execute().use { r ->
+                    client(pc.fp, net).newCall(req).execute().use { r ->
                         if (r.code == 401) return@withContext "error: this phone isn't paired any more"
                         val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
                         return@withContext o.optString("status").ifBlank { o.optString("error", "error: ${r.code}") }
@@ -628,12 +641,12 @@ object Remote {
         val dir = File(app.cacheDir, "inbox/${pc.owner.replace(Regex("[^\\w.-]"), "_")}").apply { mkdirs() }
         val out = File(dir, "${item.id}-${f.name.replace(Regex("[^\\w.-]"), "_")}")
         if (out.exists() && out.length() == f.size) return@withContext out
-        for (h in routes(pc)) {
+        for ((h, net) in routes(pc)) {
             val req = Request.Builder().url("${pc.base(h)}/v1/inbox/${item.id}/file")
                 .header("Authorization", "Bearer ${pc.token}").build()
             val tmp = File.createTempFile(out.name, ".part", dir)
             try {
-                client(pc.fp).newCall(req).execute().use { r ->
+                client(pc.fp, net).newCall(req).execute().use { r ->
                     if (!r.isSuccessful) return@withContext null
                     r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } } ?: return@withContext null
                     if (g != gen) return@withContext null
@@ -650,8 +663,15 @@ object Remote {
 
     // --- the network --------------------------------------------------------------------------------
 
-    /** This phone's own Wi-Fi (or Ethernet) IPv4 addresses with their prefix lengths: which LAN it is on. */
-    private fun wifi(): List<Pair<String, Int>> = try {
+    /** One of this phone's Wi-Fi (or Ethernet) IPv4 addresses, its prefix length and the network it is on. */
+    private class Lan(val ip: String, val prefix: Int, val net: Network)
+
+    /** The network to reach [host] over: the Wi-Fi it is on, for a LAN address; the default one otherwise. */
+    private fun netOf(host: String, lans: List<Lan>): Network? =
+        if (isPrivateLan(host)) lans.firstOrNull { onSubnet(host, it.ip, it.prefix) }?.net else null
+
+    /** This phone's own Wi-Fi (or Ethernet) addresses: which LANs it is on. */
+    private fun wifi(): List<Lan> = try {
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         @Suppress("DEPRECATION")
         cm.allNetworks.flatMap { n ->
@@ -661,7 +681,7 @@ object Remote {
             if (!local) emptyList()
             else cm.getLinkProperties(n)?.linkAddresses.orEmpty()
                 .filter { it.address is Inet4Address }
-                .map { it.address.hostAddress.orEmpty() to it.prefixLength }
+                .map { Lan(it.address.hostAddress.orEmpty(), it.prefixLength, n) }
         }
     } catch (_: Exception) {
         emptyList()

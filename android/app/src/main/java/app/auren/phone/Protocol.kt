@@ -58,6 +58,17 @@ fun tryOrder(hosts: List<String>, wifi: List<Pair<String, Int>>, last: String?):
     return (lastFirst(local) + lastFirst(tail) + lastFirst(other)).distinct()
 }
 
+/**
+ * The PC's addresses after a hello on [to] that listed [said]: what the PC listens on now, plus the address that
+ * worked. A hello that lists no Tailscale address (the PC's Tailscale is down for a moment) keeps the saved one,
+ * so a LAN hello can't erase the only way back from away.
+ */
+fun mergeHosts(saved: List<String>, said: List<String>, to: String): List<String> {
+    if (said.isEmpty()) return saved
+    val tail = if (said.any(::isTailnet)) emptyList() else saved.filter(::isTailnet)
+    return (said + to + tail).filter(::isPcAddress).distinct()
+}
+
 private val FINGERPRINT = Regex("[0-9a-f]{64}")
 
 /**

@@ -61,6 +61,18 @@ class ProtocolTest {
     }
 
     @Test
+    fun `a hello updates the addresses but never drops the tailscale route it didn't mention`() {
+        val saved = listOf("100.92.209.55", "192.168.0.105")
+        // The PC moved on the LAN (DHCP): the new address replaces the old one.
+        assertEquals(listOf("100.92.209.55", "192.168.0.120"), mergeHosts(saved, listOf("100.92.209.55", "192.168.0.120"), "100.92.209.55"))
+        // A hello over Wi-Fi while the PC's Tailscale is down keeps the saved tailnet address.
+        assertEquals(listOf("192.168.0.105", "100.92.209.55"), mergeHosts(saved, listOf("192.168.0.105"), "192.168.0.105"))
+        // A new tailnet address replaces the old one; no list keeps what's saved.
+        assertEquals(listOf("100.64.1.2", "192.168.0.105"), mergeHosts(saved, listOf("100.64.1.2"), "192.168.0.105"))
+        assertEquals(saved, mergeHosts(saved, emptyList(), "192.168.0.105"))
+    }
+
+    @Test
     fun `hello carries the device, the inbox cursor and the state`() {
         val m = Incoming.parse(
             """{"type":"hello","api":1,"pc":"omarchy","device":{"id":"a1b2c3","name":"Pixel"},"inboxLast":7,

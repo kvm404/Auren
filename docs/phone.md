@@ -87,7 +87,8 @@ the PC makes a self-signed certificate (EC P-256, ten years) on first start, and
 certificate by its SHA-256 fingerprint (`fp`, of the DER bytes) and nothing else: no CA, no hostname
 check. So the same pin protects the LAN, where nothing else encrypts the link, and Tailscale. The app tries
 the PC's address on its current Wi-Fi subnet first, then Tailscale, then any other LAN address, the one
-that worked last first in each, and shows which path it is on.
+that worked last first in each, and shows which path it is on. A LAN address goes out over the Wi-Fi it is
+on, even when Android's default network is mobile data (a Wi-Fi without internet).
 
 Every call except `GET /v1/hello` (without a token) and `POST /v1/pair` needs
 `Authorization: Bearer <device token>`; a missing, wrong or revoked token gets 401 (on the WebSocket, the
@@ -112,7 +113,9 @@ An inbox item: `{id, kind, title, at, text?, url?, file?: {name, size, mime}}`.
 **WebSocket.** Text frames are JSON objects; binary frames are PCM audio (16 kHz, mono, s16le) for the
 listen this phone started (frames from any other phone are dropped). On connect the PC sends
 `{"type":"hello", api, pc, addrs, fp, device, inboxLast, state}`; the app takes its address list from
-`addrs`, so a PC whose LAN address changed is found again.
+`addrs`, so a PC whose LAN address changed is found again the next time it says hello (over Tailscale, if
+the old LAN address no longer answers; with Wi-Fi alone, pair again). A hello without a Tailscale address
+keeps the saved one, so a moment without Tailscale on the PC doesn't cost the phone its way back from away.
 
 Phone to PC:
 
