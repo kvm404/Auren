@@ -187,7 +187,7 @@ async def _microphone(daemon) -> list[dict]:
     if not nonzero:
         return [result("microphone", FAIL, f"{name}: only silence (all zeros): the Microphone permission, or a muted "
                        "device")]
-    return [result("microphone", OK, f"{name}: {total / 16000:.1f} s recorded, loudest {peak:.2f}")]
+    return [result("microphone", OK, f"{name}: {total / 16000:.1f} s recorded, loudest {peak:.3f}")]
 
 
 def _device_name(sd, kind: str) -> str:
@@ -436,13 +436,22 @@ def _history_len() -> int:
         return 0
 
 
+BUSY = ("listening", "thinking", "working", "speaking")
+
+
 def _wait_history(before: int, source: str, timeout: float, wanted: str = "",
-                  states: list[str] | None = None) -> dict | None:
+                  states: list[str] | None = None, more: float = 0) -> dict | None:
     """The first new answer from this source (with `wanted` in what was heard, if given; else, at the end,
-    any). states, if given, collects the daemon's states meanwhile (listening, thinking, …)."""
-    end = time.monotonic() + timeout
+    any). states, if given, collects the daemon's states meanwhile (listening, thinking, …); once Auren
+    has started listening, it gets up to `more` seconds past the timeout to finish what it's doing."""
+    start = time.monotonic()
     seen: list[dict] = []
-    while time.monotonic() < end:
+    while True:
+        waited = time.monotonic() - start
+        if waited >= timeout + more:
+            break
+        if waited >= timeout and not (states and "listening" in states and states[-1] in BUSY):
+            break
         try:
             lines = HISTORY.read_text().splitlines()[before:]
         except OSError:
@@ -487,6 +496,7 @@ def _turn(rec: dict | None, name: str, wanted_tool: str = "") -> dict:
 
 def _by_hand(daemon_state: dict | None, keys: str) -> list[dict]:
     from ..ctl import send
+    from ..settings import current
     out = []
     print("\n\033[1mA few checks need you\033[0m (answer y or n; Enter skips one)")
 
@@ -505,11 +515,15 @@ def _by_hand(daemon_state: dict | None, keys: str) -> list[dict]:
     out.append(_turn(_wait_history(before, "typed", 120), "a typed request with a tool", "look_at_screen"))
     time.sleep(1)
 
-    print(f"\n  Now the talk key: press {keys}, say \033[1m\"what time is it\"\033[0m, then press {keys} again.")
-    print("  Waiting up to 60 s…")
+    s = current()
+    after = (f" (or stop talking: it sends by itself {s.get('autosendAfter', 5):g} s later)"
+             if s.get("autosend") else "")
+    print(f"\n  Now the talk key: press {keys}, say \033[1m\"what time is it\"\033[0m, then press {keys} again"
+          f"{after}.")
+    print("  Waiting up to 90 s for you to start…")
     before = _history_len()
     states: list[str] = []
-    rec = _wait_history(before, "voice", 60, wanted="time", states=states)
+    rec = _wait_history(before, "voice", 90, wanted="time", states=states, more=120)
     row = _turn(rec, "talk key, microphone and speech to text")
     row["detail"] += f" (Auren went {' → '.join(states) or 'nowhere'})"
     if rec is None and "listening" not in states:

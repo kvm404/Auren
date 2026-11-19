@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -476,6 +477,47 @@ def test_selftest_waits_past_a_cancelled_try(monkeypatch, tmp_path):
     hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n')
     assert selftest._wait_history(0, "voice", 0.3, wanted="time")["reply"] == "(cancelled)"
 
+
+
+def test_selftest_keeps_waiting_while_auren_is_still_on_it(monkeypatch, tmp_path):
+    """The friend's 20:20 report: he started talking near the end of the wait, auto-send fired, and the
+    test gave up before the answer, though Auren was still listening."""
+    from auren.mac import selftest
+    hist = tmp_path / "history.jsonl"
+    hist.write_text("")
+    monkeypatch.setattr(selftest, "HISTORY", hist)
+    calls = {"n": 0}
+
+    def status(line, timeout=0):
+        calls["n"] += 1
+        if calls["n"] == 6:          # the answer lands well after the 0.3 s timeout
+            hist.write_text('{"source": "voice", "transcript": "What time is it?", "reply": "Eight twenty."}\n')
+        return '{"state": "%s"}' % ("idle" if calls["n"] < 2 else "listening" if calls["n"] < 4 else "thinking")
+    monkeypatch.setattr("auren.ctl.send", status)
+    states: list[str] = []
+    rec = selftest._wait_history(0, "voice", 0.3, wanted="time", states=states, more=10)
+    assert rec["reply"] == "Eight twenty." and states == ["idle", "listening", "thinking"]
+
+
+def test_selftest_stops_at_the_timeout_when_auren_never_listened(monkeypatch, tmp_path):
+    from auren.mac import selftest
+    hist = tmp_path / "history.jsonl"
+    hist.write_text("")
+    monkeypatch.setattr(selftest, "HISTORY", hist)
+    monkeypatch.setattr("auren.ctl.send", lambda line, timeout=0: '{"state": "speaking"}')
+    t = time.monotonic()
+    assert selftest._wait_history(0, "voice", 0.3, states=[], more=30) is None
+    assert time.monotonic() - t < 3
+
+
+def test_shared_mascots_use_a_font_macos_has():
+    """"monospace" doesn't exist on macOS: Qt then searches every font mid-layout (the mascot log's
+    binding loop). The shared mascots ask for Menlo there."""
+    root = Path(__file__).resolve().parent.parent / "mascot"
+    for f in [root / "mac.qml", *(root / "mascots").rglob("*.qml")]:
+        for line in f.read_text().splitlines():
+            if 'font.family: "monospace"' in line:
+                raise AssertionError(f"{f.name}: {line.strip()}")
 
 # --- fixes from the Codex review ---------------------------------------------------------------------
 

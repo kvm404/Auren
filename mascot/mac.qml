@@ -239,10 +239,19 @@ Item {
 
     readonly property real mascotCenter: win.x + root.mascot.implicitWidth / 2
     readonly property real tall: card.height + tail.height
-    // Delayed: on macOS placing the windows at start feeds back into this within the same pass (a binding
-    // loop in the mascot log); worked out after the pass, it settles
+    // Set after the layout pass, not bound: on macOS reading the bubble's height mid-layout fed back into
+    // itself (a binding loop in the mascot log, even with a delayed Binding)
     property bool above: false
-    Binding on above { delayed: true; value: win.y + root.mascot.bubbleAnchorY - bubbleWin.tall > root.desk.y }
+    function placeAbove() { above = win.y + root.mascot.bubbleAnchorY - tall > root.desk.y }
+    onTallChanged: Qt.callLater(placeAbove)
+    Connections { target: win; function onYChanged() { Qt.callLater(bubbleWin.placeAbove) } }
+    Connections { target: root.mascot; ignoreUnknownSignals: true; function onBubbleAnchorYChanged() { Qt.callLater(bubbleWin.placeAbove) } }
+    Connections {
+      target: root
+      function onDeskChanged() { Qt.callLater(bubbleWin.placeAbove) }
+      function onMascotChanged() { Qt.callLater(bubbleWin.placeAbove) }
+    }
+    Component.onCompleted: Qt.callLater(placeAbove)
     readonly property QtObject margins: QtObject { readonly property real left: bubbleWin.x }
     x: Math.max(root.desk.x + 6, Math.min(root.desk.x + root.desk.width - width - 6, mascotCenter - width / 2))
     y: above ? win.y + root.mascot.bubbleAnchorY - tall : win.y + root.mascot.implicitHeight - root.mascot.u
