@@ -7,8 +7,10 @@ are often only in the first).
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -283,11 +285,36 @@ def phone_checks() -> list[Check]:
     elif addrs:
         out.append(Check(g, "phone server", WARN, st.get("why") or "the Auren daemon isn't running",
                          "systemctl --user restart auren" if daemon_up else "systemctl --user start auren"))
+    if addrs and (fw := firewall_check(int(conf.get("phone.port") or 8735), lan_ips, bool(ts))):
+        out.append(fw)
     paired = phone.devices()
     out.append(Check(g, "paired phones", OK if paired else WARN,
                      ", ".join(f"{d['name']} ({d['id']})" for d in paired) or "none: send_to_phone is left out",
                      "" if paired else "auren phone pair"))
     return out
+
+
+UFW_RULES = Path("/etc/ufw/user.rules")
+
+
+def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | None:
+    """Omarchy turns ufw on, and ufw drops incoming connections, so a phone can't reach the server until the port
+    is allowed. ufw's own rule file is world-readable, so this needs no root. None when ufw isn't running."""
+    if _run(["systemctl", "is-active", "ufw"])[1] != "active":
+        return None
+    try:
+        rules = UFW_RULES.read_text()
+    except OSError:
+        return None
+    if re.search(rf"--dport {port}\b.*-j ACCEPT", rules):
+        return Check("Phone", "firewall", OK, f"ufw allows port {port}")
+    fix = []
+    if lan_ips:
+        nets = sorted({str(ipaddress.ip_network(f"{ip}/16", strict=False)) for ip in lan_ips})
+        fix += [f"sudo ufw allow from {n} to any port {port} proto tcp comment 'auren phone'" for n in nets]
+    if tailscale:
+        fix.append(f"sudo ufw allow in on tailscale0 to any port {port} proto tcp comment 'auren phone'")
+    return Check("Phone", "firewall", WARN, f"ufw blocks port {port}: the phone can't reach this PC", "; ".join(fix))
 
 
 SYMBOL = {OK: "\033[32m✓\033[0m", WARN: "\033[33m!\033[0m", FAIL: "\033[31m✗\033[0m"}

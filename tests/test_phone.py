@@ -176,6 +176,21 @@ def test_doctor_warns_but_doesnt_fail_with_one_path(monkeypatch):
     assert any(c.status == doctor.FAIL for c in doctor.phone_checks())          # phone.enabled = true, nowhere to listen
 
 
+def test_doctor_says_how_to_open_the_port_when_ufw_blocks_it(monkeypatch, tmp_path):
+    from auren import doctor
+    rules = tmp_path / "user.rules"
+    rules.write_text("-A ufw-user-input -p tcp --dport 53317 -j ACCEPT\n")
+    monkeypatch.setattr(doctor, "UFW_RULES", rules)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
+    blocked = doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True)
+    assert blocked.status == doctor.WARN
+    assert "from 192.168.0.0/16 to any port 8735" in blocked.fix and "in on tailscale0" in blocked.fix
+    rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT\n")
+    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=False).status == doctor.OK
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (3, "inactive"))
+    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True) is None       # no ufw: nothing to say
+
+
 # --- the inbox -----------------------------------------------------------------------------------
 
 def test_the_inbox_cursor_returns_only_what_came_after(tmp_path):

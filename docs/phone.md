@@ -11,15 +11,24 @@ the phone is a microphone, a screen and a few buttons. The plan behind it is [ph
    private LAN addresses (10/8, 172.16/12, 192.168/16, on interfaces with a network card behind them, or a
    bridge over one), never on `0.0.0.0`, a public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
    home and Tailscale away.
-2. Build and install the app: `cd android && ./gradlew installDebug` (or copy
+2. Let the phone in through the firewall. Omarchy turns on `ufw`, which drops incoming connections, so the
+   app says it can't reach the PC until port 8735 is allowed, from your LAN and over Tailscale only:
+
+   ```sh
+   sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
+   sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
+   ```
+
+   `auren doctor` checks this and prints the commands for your own addresses.
+3. Build and install the app: `cd android && ./gradlew installDebug` (or copy
    `android/app/build/outputs/apk/debug/app-debug.apk` to the phone).
-3. On the PC, run `auren phone pair`. It prints a QR code, the same thing as text (`auren://pair?...`), and
+4. On the PC, run `auren phone pair`. It prints a QR code, the same thing as text (`auren://pair?...`), and
    waits. Scan the QR with the app, or paste the text. The code works once, for 5 minutes, and 5 wrong
    codes cancel it. The QR also carries every address the server listens on and the fingerprint of the
    PC's certificate, which is what the app trusts from then on.
-4. `auren doctor` has a **Phone** section: Tailscale and Wi-Fi/LAN (each a warning when missing, never a
-   failure while the other works), every address the server listens on or why it can't, and the
-   certificate.
+5. `auren doctor` has a **Phone** section: Tailscale and Wi-Fi/LAN (each a warning when missing, never a
+   failure while the other works), every address the server listens on or why it can't, the firewall, and
+   the certificate.
 
 | Command | Does |
 |---|---|
