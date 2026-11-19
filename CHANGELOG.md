@@ -23,6 +23,10 @@
   (default 1.0) and the quality setting is gone. A Supertonic voice in `config.toml` becomes Everly once
   (logged), `voice.steps` is dropped and an out-of-range speed is clamped. Auren now speaks with Trevor
   and Veyra with Juniper when the voice follows the mascot.
+- Updating downloads the new voice (about 100 MB) by itself: `auren update` and `auren setup` fetch it,
+  and after a package update (`yay`) Auren fetches it the first time it starts, showing replies as text
+  until it's ready. The old Supertonic model in `~/.local/share/auren/models/` (about 380 MB) isn't used
+  any more and can be deleted.
 
 ## 0.1.6
 

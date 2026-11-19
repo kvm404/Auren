@@ -485,3 +485,110 @@ def test_reload_picks_up_new_vocabulary(tmp_path, monkeypatch):
         return d
 
     assert asyncio.run(run()).vocab == ["Zorblax", "herdr"]
+
+
+# --- an update to a new voice model --------------------------------------------------------------------
+
+class _Starting:
+    """What warm_up uses of the daemon."""
+    speak_enabled = True
+    settings = {"voiceName": "Hugh", "speed": 1.0, "volume": 1.0, "pause": 0.0}
+    voice = None
+    vocab: list = []
+
+    def __init__(self):
+        import types
+        self.level = types.SimpleNamespace(set=lambda v: None)
+        self.brain = types.SimpleNamespace(warm=lambda: None)
+        self.notes, self.states = [], []
+        self.state, self.detail = "starting", ""
+
+    def _caption(self, text):
+        pass
+
+    def set_state(self, state, detail=""):
+        self.state, self.detail = state, detail
+        self.states.append((state, detail))
+
+    def _notify(self, *args, **kwargs):
+        self.notes.append(args[1])
+
+
+def _starting():
+    from auren.daemon import Daemon
+    for name in ("warm_up", "_load_voice", "_fetch_voice"):
+        setattr(_Starting, name, getattr(Daemon, name))
+    return _Starting()
+
+
+def test_after_an_update_the_daemon_downloads_the_new_voice_itself(monkeypatch):
+    """A package update (yay) runs no setup: the daemon starts text-only, fetches Phonon in the background,
+    then speaks with the voice the user picked."""
+    import asyncio
+
+    from auren import voice
+    fetched = []
+
+    class FakeVoice:
+        def __init__(self, **kwargs):
+            if not fetched:
+                raise voice.VoiceModelMissing("not downloaded")
+            self.name = "Everly"
+
+        def tune(self, values):
+            pass
+
+        def set_voice(self, name):
+            self.name = name
+
+    monkeypatch.setattr(voice, "Voice", FakeVoice)
+    monkeypatch.setattr(voice, "download_model", lambda log=print: fetched.append(1) or "ok")
+
+    async def go():
+        d = _starting()
+        await d.warm_up()
+        ready = (d.state, d.detail, d.voice)
+        await d._voice_task
+        return d, ready
+
+    d, (state, detail, before) = asyncio.run(go())
+    assert state == "idle" and "downloading the voice" in detail and before is None
+    assert fetched == [1] and d.voice.name == "Hugh"
+    assert d.state == "idle" and d.detail == ""
+    assert "Downloading Auren's new voice" in d.notes[0]
+
+
+def test_a_failed_voice_download_leaves_replies_text_only(monkeypatch):
+    import asyncio
+
+    from auren import voice
+
+    def missing(**kwargs):
+        raise voice.VoiceModelMissing("not downloaded")
+
+    def offline(log=print):
+        raise voice.VoiceModelMissing("couldn't download the voice model: offline")
+
+    monkeypatch.setattr(voice, "Voice", missing)
+    monkeypatch.setattr(voice, "download_model", offline)
+
+    async def go():
+        d = _starting()
+        await d.warm_up()
+        await d._voice_task
+        return d
+
+    d = asyncio.run(go())
+    assert d.voice is None and "auren voice-model" in d.notes[-1]
+
+
+def test_the_voice_cache_follows_hugging_face_s_variables(monkeypatch, tmp_path):
+    from auren import voice
+    for var in ("HF_HUB_CACHE", "HF_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "c"))
+    assert voice.hf_cache() == tmp_path / "c/huggingface/hub"
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    assert voice.hf_cache() == tmp_path / "hf/hub"
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    assert [p.name for p in voice.cache_dirs()] == ["models--gradium--phonon-31m-en", "models--gradium--phonon-voices"]

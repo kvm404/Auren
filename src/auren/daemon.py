@@ -232,14 +232,15 @@ class Daemon:
         t = time.perf_counter()
         problems = []
         if self.speak_enabled:
+            from .voice import VoiceModelMissing
             try:
-                from .voice import Voice
-                self.voice = await asyncio.to_thread(Voice, on_level=self.level.set, on_sentence=self._caption)
-                self.voice.tune(self.settings)
-                try:
-                    self.voice.set_voice(self.settings["voiceName"])
-                except ValueError as e:
-                    log.warning("%s", e)
+                await self._load_voice()
+            except VoiceModelMissing:
+                # An update that changed the voice model (Supertonic to Phonon in 0.1.7): a package update (yay)
+                # runs no setup, so the daemon fetches the new model itself, in the background. Replies show as
+                # text until it's ready.
+                self._voice_task = asyncio.create_task(self._fetch_voice())
+                problems.append("downloading the voice: replies are text until it's ready")
             except Exception as e:  # noqa: BLE001 - run text-only rather than not at all
                 log.error("voice didn't load, replies are text only: %s", e)
                 problems.append(f"voice off ({str(e)[:80]})")
@@ -250,6 +251,34 @@ class Daemon:
             problems.append(f"brain didn't start ({str(e)[:80]})")
         log.info("ready in %.1fs (vocabulary %d terms)", time.perf_counter() - t, len(self.vocab))
         self.set_state("idle", "; ".join(problems))
+
+    async def _load_voice(self) -> None:
+        from .voice import Voice
+        voice = await asyncio.to_thread(Voice, on_level=self.level.set, on_sentence=self._caption)
+        voice.tune(self.settings)
+        try:
+            voice.set_voice(self.settings["voiceName"])
+        except ValueError as e:
+            log.warning("%s", e)
+        self.voice = voice
+
+    async def _fetch_voice(self) -> None:
+        """Download the voice model and its voices, then speak with them (replies were text until then)."""
+        from .voice import download_model
+        log.info("the voice model isn't downloaded: downloading it now (about 100 MB)")
+        self._notify("Auren", "Downloading Auren's new voice (about 100 MB). Replies show as text until it's ready.",
+                     always=True)
+        try:
+            await asyncio.to_thread(download_model, log.info)
+            await self._load_voice()
+        except Exception as e:  # noqa: BLE001 - offline, the Hub down: text only, as before
+            log.error("couldn't download the voice, replies are text only: %s", e)
+            self._notify("Auren", "Couldn't download Auren's voice: replies stay text only. Retry: auren voice-model",
+                         always=True)
+            return
+        log.info("voice downloaded and loaded")
+        if self.state == "idle" and "downloading the voice" in self.detail:
+            self.set_state("idle", "; ".join(p for p in self.detail.split("; ") if not p.startswith("downloading the voice")))
 
     # --- commands -----------------------------------------------------------------------
 
