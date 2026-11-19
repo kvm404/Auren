@@ -27,7 +27,6 @@
   fetch the new model (about 100 MB); the old one in `~/.local/share/auren/models/` can be deleted. Auren
   now speaks with Trevor and Veyra with Juniper when the voice follows the mascot.
 
-
 ### Fixed
 
 - "Start Claude Code with Opus 5.5 on high effort" starts it with that model and effort. `start_agent`
