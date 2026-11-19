@@ -6,7 +6,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
-import android.speech.tts.TextToSpeech
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,6 +102,10 @@ object Remote {
     val notices: SharedFlow<String> = _notices
     private val _readAloud = MutableStateFlow(false)
     val readAloud: StateFlow<Boolean> = _readAloud
+    /** A voice picked here that the PC hasn't confirmed yet (its state still names the old one). */
+    private val _pendingVoice = MutableStateFlow<String?>(null)
+    val pendingVoice: StateFlow<String?> = _pendingVoice
+    private var voiceSetId: String? = null
 
     private var ws: WebSocket? = null
     private var connected = false
@@ -117,8 +120,9 @@ object Remote {
     private val pending = LinkedHashMap<String, Pair<String, Long>>()     // id -> (message, when queued)
     private var mic: Mic? = null
     private var voiceTurn: String? = null          // the last listen's id, until its words come back
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    /** Reads replies aloud on this phone: Phonon once downloaded, Android's own voice until then. */
+    lateinit var speaker: Speaker
+        private set
     /** Start a hands-free turn once connected (the Quick Settings tile). */
     var talkWhenConnected = false
 
@@ -127,6 +131,8 @@ object Remote {
         app = application
         store = Store(application)
         _readAloud.value = store.readAloud
+        speaker = Speaker(application)
+        if (store.readAloud) speaker.prepare()
         val saved = store.inbox.load(store.pc?.owner.orEmpty())
         inboxLast = saved.last
         _inbox.value = saved.items.sortedByDescending { it.id }
@@ -305,6 +311,8 @@ object Remote {
         _link.value = Link(LinkKind.CONNECTED, via = pathOf(to))
         val hosts = mergeHosts(pc.hosts, m.addrs, to)     // a new LAN IP, say
         if (hosts != pc.hosts || pc.last != to) store.pc = pc.copy(hosts = hosts, last = to)
+        _pendingVoice.value = null          // a pick sent on the old link: the PC's state says what took
+        voiceSetId = null
         setState(m.state)
         if (m.inboxLast < inboxLast) inboxLast = 0                // the PC's inbox was reset
         send(Outgoing.sync(inboxLast))
@@ -345,11 +353,19 @@ object Remote {
                 done(m.id)
                 val text = m.text.ifBlank { "Done." }
                 addLine(Line("r-${m.id}-${m.at}", Who.AUREN, text))
-                if (_readAloud.value) speak(text)
+                if (_readAloud.value) speaker.speak(text, Voices.forState(_state.value.voiceName).name)
             }
             is Incoming.Inbox -> addInbox(m.item)
             is Incoming.Ack -> {
                 pending.remove(m.id)
+                if (m.id == voiceSetId) {
+                    voiceSetId = null
+                    if (!m.ok) {
+                        _pendingVoice.value = null
+                        _notices.tryEmit("Couldn't change the voice: " + m.status.removePrefix("error: "))
+                    }
+                    return
+                }
                 val talk = _talk.value
                 when {
                     m.busy -> {                     // the Busy message before it said who has the turn
@@ -373,6 +389,7 @@ object Remote {
     private fun setState(s: AurenState) {
         val before = _state.value
         _state.value = s
+        if (Voices.byName(s.voiceName) == Voices.byName(_pendingVoice.value)) _pendingVoice.value = null
         // The words the PC heard become this turn's line, once it starts thinking about them.
         val voice = voiceTurn
         if (voice != null && s.origin == "phone" && s.transcript.isNotBlank() && before.state == "listening" &&
@@ -399,6 +416,7 @@ object Remote {
         if (t.isEmpty()) return
         val id = newId()
         val msg = Outgoing.ask(id, t)
+        speaker.stop()
         pending[id] = msg to System.currentTimeMillis()
         addLine(Line(id, Who.YOU, t, waiting = true))
         if (!send(msg)) _notices.tryEmit("Sends when the PC is back")
@@ -415,6 +433,7 @@ object Remote {
 
     fun cancel() {
         stopMic()
+        speaker.stop()
         if (!send(Outgoing.cancel())) _notices.tryEmit("Not connected to the PC")
     }
 
@@ -425,6 +444,7 @@ object Remote {
             _notices.tryEmit("Not connected to the PC")
             return false
         }
+        speaker.stop()                          // don't talk over the user, or into the microphone
         val id = newId()
         val socket = ws ?: return false
         val m = Mic(
@@ -497,23 +517,20 @@ object Remote {
     fun setReadAloud(on: Boolean) {
         store.readAloud = on
         _readAloud.value = on
-        if (!on) tts?.stop()
+        if (on) speaker.prepare() else speaker.stop()
     }
 
-    private fun speak(text: String) {
-        val t = tts
-        if (t == null) {
-            tts = TextToSpeech(app) { status ->
-                ttsReady = status == TextToSpeech.SUCCESS
-                if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "auren")
-            }
-        } else if (ttsReady) {
-            t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "auren")
+    /** The voice Auren speaks in, here and on the PC: one setting, kept on the PC. */
+    fun setVoice(name: String) {
+        val v = Voices.byName(name) ?: return
+        if (v == Voices.byName(_state.value.voiceName) && _pendingVoice.value == null) return
+        val id = newId()
+        if (!send(Outgoing.voiceSet(id, v.name))) {
+            _notices.tryEmit("Not connected to the PC")
+            return
         }
-    }
-
-    fun shutUp() {
-        tts?.stop()
+        voiceSetId = id
+        _pendingVoice.value = v.name
     }
 
     // --- pairing, sharing and files (HTTPS, pinned) -----------------------------------------------------
@@ -576,6 +593,9 @@ object Remote {
         host = null
         connected = false
         stopMic()
+        speaker.stop()
+        _pendingVoice.value = null
+        voiceSetId = null
         pending.clear()
         voiceTurn = null
         talkWhenConnected = false

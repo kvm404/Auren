@@ -272,6 +272,7 @@ private fun Dock(connected: Boolean, st: AurenState, talk: app.auren.phone.Talk?
     var text by rememberSaveable { mutableStateOf("") }
     val busy = connected && st.active && st.origin == "desk"
     val stoppable = connected && (talk != null || (st.active && st.origin != "desk") || st.state in setOf("thinking", "working"))
+    val speaking by Remote.speaker.speaking.collectAsStateWithLifecycle()     // a reply being read on this phone
     Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -295,7 +296,9 @@ private fun Dock(connected: Boolean, st: AurenState, talk: app.auren.phone.Talk?
                 askMic { Remote.talkStart(handsFree = true) }
             }
             TalkPad(enabled = connected && !busy && (talk != null || !st.active), talk = talk, level = level, askMic = askMic)
-            SideButton("Stop", enabled = stoppable, danger = true) { Remote.cancel() }
+            SideButton("Stop", enabled = stoppable || speaking, danger = true) {
+                if (stoppable) Remote.cancel() else Remote.speaker.stop()
+            }
         }
     }
 }

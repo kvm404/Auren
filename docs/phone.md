@@ -51,13 +51,52 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
 - **The desk's safety level applies.** Approvals show on the phone (Yes / No) and on the desk (bubble,
   panel, `auren-ctl yes|no`); either answer counts, the same way as [the buttons](safety.md#who-reads-the-answer),
   and what follows (the action, the brain carrying on) is a turn of the side that answered.
-- **Replies go to the phone that asked, as text**, and the phone may read them aloud (Android TTS, a setting). The PC
+- **Replies go to the phone that asked, as text**, and the phone may read them aloud in Auren's voice
+  ([below](#the-phones-voice), a setting). The PC
   doesn't speak a phone turn's reply and doesn't pop up notices for it; the mascot still shows the state.
 - **Voice:** the phone records 16 kHz mono 16-bit PCM and streams it over the WebSocket into the same
   speech pipeline as the PC's microphone (AssemblyAI). Hold to talk, or hands-free: it sends when you stop
   talking, like auto-send.
 - The brain is told the request came from the phone, so it keeps replies short and uses `send_to_phone`
   for links, files and images.
+
+## The phone's voice
+
+With "Read replies aloud" on, the phone reads replies itself with Gradium's Phonon 31m (CPU, through
+[xn-ptts](https://github.com/gradium-ai/xn-ptts) v0.7.1's C library), in the same voice as the PC: one of
+Everly (the default), Juniper, Hugh and Trevor. The app's Settings has the picker; it sends `voice.set`, and
+the phone reads in the `voiceName` of the PC's state (Everly while the PC names none of the four).
+
+- **The model isn't in the APK.** The first time it's needed (reading aloud turned on, or the first reply),
+  the app downloads it once from Hugging Face, 65.8 MB: `gradium/phonon-31m-en` (config, tokenizer,
+  `model.q8.gguf`) and the four voices' files from `gradium/phonon-voices`, each at a pinned commit and
+  checked against a pinned size and SHA-256 before it counts. It lives in the app's files (`files/phonon/`);
+  a cut download resumes. Until it's ready, or on a phone that can't run it, Android's own TTS reads replies.
+  Settings shows the progress, and Retry after a failure. A download runs while the app is on screen:
+  Android cuts a backgrounded app's network, and the next try resumes.
+- **The four voices are one list**, `Voices.ALL` in `android/.../Voices.kt` (name, catalog id, SHA-256),
+  matching `VOICES` in `src/auren/voice.py`. Swapping a voice is a line in each; the phone fetches the new
+  file and drops the old one.
+- **Playback** streams: the reply is synthesized on one background thread into a 24 kHz float AudioTrack,
+  which starts on the first chunk. Stop, a new ask or talk, and turning reading off cut it at once.
+- **The library** is built from source, not committed: `android/native/build-phonon.sh` builds
+  `libptts_ffi.so` (arm64-v8a, 7.6 MB, ARMv8.2 dotprod and fp16) from the pinned tag into `jniLibs/`, which is
+  ignored. Without it the app builds and uses Android's TTS. The app checks the CPU has those instructions
+  before loading it (one without them would crash in it). It adds 8.9 MB to the APK, with JNA.
+- **Measured** on a Motorola Edge 60 Fusion (MediaTek MT6878), 2 threads: loads in about 0.2 s, the first
+  audio comes 70-90 ms after a reply in the current voice (about 170 ms after switching voice), and it
+  synthesizes at 0.28× real time. 4 threads gained under 10%, so it uses 2.
+
+To measure on a phone (a debug build; nothing to tap):
+
+```
+adb shell am broadcast -n app.auren.phone/.debug.Bench --es text "A sentence to time."
+adb logcat -s AurenBench AurenVoice
+```
+
+It downloads and loads the model if needed (keep the app on screen), then logs each voice's time to first
+audio and real-time factor, without playing. `--es say "Hello." --es voice Hugh` reads one aloud quietly,
+and `--ez stop true` stops it.
 
 ## The inbox
 
@@ -183,4 +222,4 @@ time per phone, request ids and in-progress retries, answers bound to their ques
 resume, the inbox cursor, `send_to_phone`, the certificate, the addresses it binds, pinned TLS with a
 wrong pin refused, reload stopping and moving the server, listening from a PCM queue against a stand-in
 AssemblyAI) and the app's unit tests (`android/app/src/test`: the protocol, the address order, the pin
-with a real TLS handshake, the inbox file, the screen lifecycle).
+with a real TLS handshake, the inbox file, the screen lifecycle, the voice list and the model download's checks and resume).

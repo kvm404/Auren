@@ -28,6 +28,12 @@ android {
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 
+// The phone's own voice needs Phonon's library, built by native/build-phonon.sh and not committed. Without it
+// the app still builds and reads replies with Android's own voice.
+if (!file("src/main/jniLibs/arm64-v8a/libptts_ffi.so").exists()) {
+    logger.warn("auren: no libptts_ffi.so; run android/native/build-phonon.sh for the phone's own voice")
+}
+
 dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -43,6 +49,8 @@ dependencies {
     implementation(libs.mlkit.barcode)
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
+    // Phonon's library is a plain C API (libptts_ffi.so); JNA calls it without a JNI shim.
+    implementation(libs.jna) { artifact { type = "aar" } }
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

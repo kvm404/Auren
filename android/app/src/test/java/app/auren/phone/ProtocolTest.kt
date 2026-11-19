@@ -149,4 +149,14 @@ class ProtocolTest {
         assertEquals("image/jpeg", share.getString("mime"))
         assertFalse(JSONObject(Outgoing.share("s2", "link", "open", "https://x.org", "")).has("data"))
     }
+
+    @Test
+    fun `the voice is in the state, and voice set names the new one`() {
+        assertEquals("Hugh", AurenState.from(JSONObject("""{"state":"idle","voiceName":"Hugh"}""")).voiceName)
+        assertEquals("", AurenState.from(JSONObject("""{"state":"idle"}""")).voiceName)     // an older PC
+        val set = JSONObject(Outgoing.voiceSet("v1", "Trevor"))
+        assertEquals("voice.set", set.getString("type"))
+        assertEquals("v1", set.getString("id"))
+        assertEquals("Trevor", set.getString("name"))
+    }
 }

@@ -6,5 +6,7 @@ local.properties
 .idea/
 .kotlin/
 captures/
+# Phonon's library: native/build-phonon.sh builds it from a pinned release.
+app/src/main/jniLibs/
 *.jks
 *.keystore

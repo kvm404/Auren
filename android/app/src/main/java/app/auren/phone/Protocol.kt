@@ -115,6 +115,7 @@ data class AurenState(
     val reply: String = "",
     val tool: String = "",
     val remind: Boolean = false,
+    val voiceName: String = "",          // the voice Auren speaks in, on the PC and on this phone (Voices.ALL)
 ) {
     val active get() = state in ACTIVE
     val busyAtDesk get() = origin == "desk"
@@ -138,6 +139,7 @@ data class AurenState(
             reply = o.optString("reply"),
             tool = o.optString("tool"),
             remind = o.optBoolean("remind"),
+            voiceName = o.optString("voiceName"),
         )
     }
 }
@@ -243,6 +245,8 @@ object Outgoing {
     fun resume(ids: List<String>) = obj("resume").put("ids", org.json.JSONArray(ids)).toString()
     fun sync(after: Long) = obj("sync").put("after", after).toString()
     fun ping(id: String) = obj("ping").put("id", id).toString()
+    /** Speak in [name] from now on, on the PC and on this phone. Acked; the next state carries it. */
+    fun voiceSet(id: String, name: String) = obj("voice.set").put("id", id).put("name", name).toString()
 
     /** POST /v1/share. `data` is base64, for an image. */
     fun share(id: String, kind: String, action: String, text: String, note: String, data: String? = null, mime: String? = null) =

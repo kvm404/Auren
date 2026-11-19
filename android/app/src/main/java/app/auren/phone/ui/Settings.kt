@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -30,6 +35,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.auren.phone.LinkKind
 import app.auren.phone.pathOf
 import app.auren.phone.Remote
+import app.auren.phone.VoiceStatus
+import app.auren.phone.Voices
+import androidx.compose.ui.semantics.Role
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
@@ -81,6 +89,9 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
             }
         }
 
+        Section("Voice")
+        VoiceCard(readAloud)
+
         Section("Quick settings")
         Card {
             Text("Add the Auren tile", color = Au.Text, fontSize = 15.sp)
@@ -108,6 +119,71 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
         }
         Text("Auren remote $version", color = Au.Faint, fontSize = 11.sp,
             modifier = Modifier.padding(vertical = 24.dp))
+    }
+}
+
+/** The four voices, one setting shared with the PC, and how the phone's copy of the voice is doing. */
+@Composable
+private fun VoiceCard(readAloud: Boolean) {
+    val st by Remote.state.collectAsStateWithLifecycle()
+    val pending by Remote.pendingVoice.collectAsStateWithLifecycle()
+    val status by Remote.speaker.status.collectAsStateWithLifecycle()
+    val chosen = Voices.shown(st.voiceName, pending)
+    Card {
+        Text("Auren speaks in this voice at the desk and on this phone.", color = Au.Dim, fontSize = 13.sp,
+            lineHeight = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
+        Column(Modifier.selectableGroup()) {
+            Voices.ALL.forEach { v ->
+                val on = v == chosen
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (on) Au.Raised else Au.Glass)
+                        .selectable(selected = on, role = Role.RadioButton) { Remote.setVoice(v.name) }
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(if (on) Au.Gold else Au.Edge))
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(v.name, color = if (on) Au.Text else Au.Dim, fontSize = 15.sp)
+                        Text(v.blurb, color = Au.Faint, fontSize = 12.sp)
+                    }
+                    if (on && pending != null) Caps("Switching", Au.Faint, size = 10)
+                }
+            }
+        }
+        VoiceStatusLine(status, readAloud)
+    }
+}
+
+@Composable
+private fun VoiceStatusLine(status: VoiceStatus, readAloud: Boolean) {
+    val small = Modifier.padding(top = 10.dp)
+    fun mb(n: Long) = "%.0f".format(n / 1e6)
+    when (status) {
+        is VoiceStatus.Ready -> Text("Ready on this phone.", color = Au.Faint, fontSize = 12.sp, modifier = small)
+        is VoiceStatus.Loading -> Text("Loading the voice…", color = Au.Faint, fontSize = 12.sp, modifier = small)
+        is VoiceStatus.Downloading -> Column(small) {
+            LinearProgressIndicator(
+                progress = { if (status.total > 0) status.done.toFloat() / status.total else 0f },
+                modifier = Modifier.fillMaxWidth(), color = Au.Gold, trackColor = Au.Raised, drawStopIndicator = {},
+            )
+            Text("Downloading the voice, ${mb(status.done)} of ${mb(status.total)} MB. Until then, replies use the phone's own voice.",
+                color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+        is VoiceStatus.Missing -> Row(small, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (readAloud) "Getting the voice ready…"
+                else "To read replies in it, this phone downloads the voice once (${mb(Voices.FILES.sumOf { it.size })} MB).",
+                color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f),
+            )
+            if (!readAloud) QuietButton("Download", Modifier.padding(start = 8.dp)) { Remote.speaker.prepare() }
+        }
+        is VoiceStatus.Failed -> Row(small, verticalAlignment = Alignment.CenterVertically) {
+            Text("Couldn't get the voice (${status.why}). Until then, replies use the phone's own voice.",
+                color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+            QuietButton("Retry", Modifier.padding(start = 8.dp)) { Remote.speaker.prepare() }
+        }
+        is VoiceStatus.Unsupported -> Text("On this phone, replies use the phone's own voice: ${status.why}.",
+            color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = small)
     }
 }
 
