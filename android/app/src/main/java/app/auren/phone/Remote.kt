@@ -145,8 +145,12 @@ object Remote {
         users.release()
     }
 
-    /** The last screen closed: the microphone stops now, and the PC stops listening. */
+    /**
+     * The last screen closed: the microphone stops now, and the PC stops listening. A tile tap still waiting
+     * for the link is dropped too, so a later hello can't start recording nobody asked for then.
+     */
     private fun leftScreen() {
+        talkWhenConnected = false
         if (_talk.value == null) return
         stopMic()
         send(Outgoing.cancel())
