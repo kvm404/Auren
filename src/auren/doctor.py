@@ -155,10 +155,12 @@ def checks() -> list[Check]:
                Check(g, "speech-to-text key", FAIL, "no AssemblyAI key",
                      f"add ASSEMBLYAI_API_KEY=… to {CONFIG_DIR / 'secrets.env'}"))
     try:
-        from .voice import model_dir
-        folder = model_dir()
-        out.append(Check(g, "voice model", OK, str(folder)) if folder else
-                   Check(g, "voice model", WARN, "not downloaded: replies will be text only", "auren voice-model"))
+        from .voice import VOICES, missing
+        lost = missing()
+        out.append(Check(g, "voice model", OK, f"Phonon 31m, {', '.join(VOICES)}") if not lost else
+                   Check(g, "voice model", WARN, "not downloaded: replies will be text only", "auren voice-model")
+                   if "model" in lost else
+                   Check(g, "voice model", WARN, f"voices not downloaded yet: {', '.join(lost)}", "auren voice-model"))
     except ImportError as e:
         out.append(Check(g, "voice model", WARN, f"voice library missing ({e})", "./install.sh"))
 

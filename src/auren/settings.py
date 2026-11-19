@@ -36,6 +36,7 @@ import tomlkit
 from .config import CONFIG_FILE
 from .config import SETTINGS as LEGACY
 from .safety import LEVELS as SAFETY_LEVELS
+from .voice import DEFAULT_VOICE, TUNING, VOICES
 
 log = logging.getLogger("auren.settings")
 
@@ -113,9 +114,12 @@ def _paths_by_name(v: Any) -> dict[str, str]:
 
 
 def _voice_name(v: Any) -> str:
-    if not re.fullmatch(r"[FM]\d", str(v)):
-        raise ValueError("a voice like F2 or M3")
-    return str(v)
+    """One of voice.VOICES, in any case (everly is Everly)."""
+    found = next((name for name in VOICES if name.lower() == str(v).strip().lower()), None)
+    if found is None:
+        *rest, last = VOICES
+        raise ValueError(", ".join(rest) + " or " + last)
+    return found
 
 
 @dataclass(frozen=True)
@@ -127,14 +131,15 @@ class Key:
     help: str
 
 
-# Ranges match voice.TUNING (decision 0001's defaults); a test keeps them in step.
+# Ranges and defaults come from voice.TUNING (decision 0001).
+_SPEED, _VOLUME, _PAUSE = TUNING["speed"], TUNING["volume"], TUNING["pause"]
 KEYS = [
     Key("voice.enabled", "voice", True, _boolean, "Speak replies (false: they only show in the mascot's bubble)"),
-    Key("voice.name", "voiceName", "F2", _voice_name, "Supertonic voice: F1..F5 or M1..M5"),
-    Key("voice.speed", "speed", 1.05, _number(0.7, 1.6), "How fast it speaks: 0.7 to 1.6"),
-    Key("voice.steps", "steps", 5, _number(2, 12, whole=True), "Quality: 2 to 12 (higher costs more CPU)"),
-    Key("voice.volume", "volume", 1.0, _number(0.1, 1.0), "Volume relative to the system's: 0.1 to 1"),
-    Key("voice.pause", "pause", 0.0, _number(0.0, 1.0), "Silence between sentences in seconds: 0 to 1"),
+    Key("voice.name", "voiceName", DEFAULT_VOICE, _voice_name,
+        "Phonon voice: " + ", ".join(f"{name} ({accent})" for name, accent in VOICES.items())),
+    Key("voice.speed", "speed", _SPEED[0], _number(*_SPEED[1:]), f"How fast it speaks: {_SPEED[1]} to {_SPEED[2]}"),
+    Key("voice.volume", "volume", _VOLUME[0], _number(*_VOLUME[1:]), "Volume relative to the system's: 0.1 to 1"),
+    Key("voice.pause", "pause", _PAUSE[0], _number(*_PAUSE[1:]), "Silence between sentences in seconds: 0 to 1"),
     Key("listen.autosend", "autosend", False, _boolean,
         "Send by itself when you stop talking (false: after 3 s of quiet it reminds you to press Super+A, after 12 s it sends)"),
     Key("listen.autosend_after", "autosendAfter", 5, _number(1, 15),
@@ -181,7 +186,11 @@ BY_FLAT = {k.flat: k for k in KEYS}
 # done are kept in .config.migrated), so a user who sets the old value again afterwards keeps it.
 DEFAULT_CHANGES = {
     "codex-luna": ("brain.codex_model", "gpt-6.1-sol"),     # 2026-10-21: the backup brain is GPT-6 Luna
+    "phonon-speed": ("voice.speed", 1.05),                  # 2026-11-19: Phonon's own pace is 1.0
 }
+# Settings that are gone. An older config.toml may still have them: they're removed, not reported as unknown.
+RETIRED = ("language", "voice.steps")                       # voice.steps: Supertonic's quality, 2026-11-19
+SUPERTONIC_NAME = re.compile(r"[FM]\d")                     # F2, M3, ...: voices from before Phonon
 
 HEADER = """Auren's settings. Edit them here or with `auren config set KEY VALUE`; the bar panel and
 auren-ctl change some of them too (comments and order are kept)."""
@@ -208,7 +217,7 @@ def _unknown(doc: dict, prefix: str = "") -> list[str]:
     out = []
     for name, value in doc.items():
         path = prefix + name
-        if path == "language":        # retired setting: older installs may still have it
+        if path in RETIRED:
             continue
         if isinstance(value, dict) and not any(k.path == path for k in KEYS):
             out += _unknown(value, path + ".")
@@ -290,8 +299,8 @@ def _write(doc: tomlkit.TOMLDocument) -> None:
 
 
 def ensure() -> None:
-    """Create config.toml if missing; on older installs remove the retired language setting and move
-    defaults that changed (DEFAULT_CHANGES)."""
+    """Create config.toml if missing; on older installs remove retired settings (RETIRED), move defaults
+    that changed (DEFAULT_CHANGES) and replace a Supertonic voice name with the default voice."""
     with _locked():
         _ensure()
 
@@ -317,11 +326,29 @@ def _ensure() -> None:
             doc = tomlkit.parse(CONFIG_FILE.read_text())
         except (OSError, tomlkit.exceptions.TOMLKitError):
             return                    # leave unreadable files alone, as save() does
-        changed = "language" in doc
-        if changed:
-            del doc["language"]
+        changed = False
+        for path in RETIRED:
+            section, _, name = path.rpartition(".")
+            table = doc.get(section) if section else doc
+            if isinstance(table, dict) and name in table:
+                del table[name]
+                changed = True
+        with contextlib.suppress(KeyError):
+            old_voice = _plain(_lookup(doc, "voice.name"))
+            if isinstance(old_voice, str) and SUPERTONIC_NAME.fullmatch(old_voice):
+                _update(doc, {"voiceName": DEFAULT_VOICE})
+                changed = True
+                log.info("%s: the Supertonic voice %s is gone: using %s", CONFIG_FILE, old_voice, DEFAULT_VOICE)
         done = _done()
         todo = DEFAULT_CHANGES.keys() - done
+        if "phonon-speed" in todo:     # once, with Phonon: a Supertonic speed past Phonon's range is clamped
+            with contextlib.suppress(KeyError, TypeError, ValueError):
+                speed, (_, low, high) = float(_plain(_lookup(doc, "voice.speed"))), TUNING["speed"]
+                if not low <= speed <= high:
+                    _update(doc, {"speed": min(high, max(low, speed))})
+                    changed = True
+                    log.info("%s: voice.speed %s is past Phonon's range: using %s", CONFIG_FILE, speed,
+                             min(high, max(low, speed)))
         for name in todo:
             path, old = DEFAULT_CHANGES[name]
             try:

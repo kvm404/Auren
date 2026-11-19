@@ -82,7 +82,7 @@ If something doesn't work, run `auren doctor`.
 |---|---|
 | **Brain** | Your signed-in Claude Code on Claude Haiku, with Codex as backup. No extra API key. |
 | **Ears** (speech to text) | AssemblyAI, only while you're talking. |
-| **Voice** (text to speech) | Supertonic, running on your own CPU. |
+| **Voice** (text to speech) | Gradium's Phonon, running on your own CPU, in four voices. |
 | **Coding agents** | herdr (optional) |
 | **Browser** | Open Browser Use (optional) |
 

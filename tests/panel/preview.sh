@@ -47,7 +47,7 @@ asking=''
 [[ ,$shots, != *:awaiting,* ]] || asking=",\"awaiting\":true,\"question\":\"• Close Calculator “Calc”?\\n• Run \`rm -r old-notes\`? It can change your system or data (rm).\",\"until\":$((now + 300))"
 autosend=false
 [[ ,$shots, != *:autosend,* ]] || autosend=true
-printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"F2","mode":"auto","effort":"low","codexModel":"gpt-6-luna","codexEffort":"low","safety":"ask","tts":{"speed":1.05,"steps":5,"volume":1.0,"pause":0.1},"autosend":%s,"autosendAfter":5%s}' \
+printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"Everly","mode":"auto","effort":"low","codexModel":"gpt-6-luna","codexEffort":"low","safety":"ask","tts":{"speed":1.0,"volume":1.0,"pause":0.1},"autosend":%s,"autosendAfter":5%s}' \
   "$now" "$keeper" "$autosend" "$asking" >"$tmp/run/auren/state.json"
 # A stand-in for `auren vocab`, with a few words of the user's own.
 mkdir -p "$tmp/data/auren/venv/bin"

@@ -9,8 +9,10 @@ The installer needs `git`, `uv`, `qs`, `hyprctl`, `pw-record`, and `pw-cat`. Scr
 
 Install and sign in to Claude Code or Codex. Auren uses your locally installed CLI and its selected
 model. It does not yet have an API-key model backend. Microphone input requires an AssemblyAI key.
-The local Supertonic voice model downloads about 380 MB during installation; a failed download leaves
-Auren able to show text replies. Retry with `auren voice-model`.
+The local voice model (Gradium's Phonon 31m and its four voices) downloads about 100 MB into the
+Hugging Face cache during installation; a failed download leaves Auren able to show text replies.
+Retry with `auren voice-model`. An install from before Phonon left the Supertonic model in
+`~/.local/share/auren/models/` (about 380 MB); nothing uses it now, so it can be deleted.
 
 Follow the [README installation steps](../README.md#install). A normal install is a copy, while
 `./install.sh --dev` links the runtime and UI to your checkout.
@@ -67,7 +69,7 @@ anything else unless something fails.
    `--no-browser` if the user didn't want the browser tools) with `--keys=super` or `--keys=alt`
    for the chosen talk keys; a normal install, not `--dev`. It adds the keys to `bindings.lua`
    after a backup, and leaves them alone if Auren is already bound. It
-   downloads a 380 MB voice model. With `--browser`, tell the user just before it gets there to click
+   downloads a 100 MB voice model. With `--browser`, tell the user just before it gets there to click
    Add on the Web Store page that opens; it waits up to three minutes. If no window could open, run
    `auren browser setup --yes` afterwards instead.
 3. Write `ASSEMBLYAI_API_KEY=...` to `~/.config/auren/secrets.env` (mode 600) without printing it, or

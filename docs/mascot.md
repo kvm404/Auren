@@ -27,7 +27,7 @@ Mascot page, or set `mascot` in `~/.config/auren/mascot.json`; it switches live.
 | Yes/no | head tilt, scratching his head, "?" | head tilt, one ear folded, "?" |
 | Error | red visor, X eyes, sparks | ears flat, X eyes |
 | Asleep | sinks to the ground, thruster off, dim eyes | ears droop, eyes ‿ ‿, tail wrapped down |
-| Voice (if "voice follows mascot") | M3 | F2 |
+| Voice (if "voice follows mascot") | Trevor | Juniper |
 | Colour (bar icon, panel accents) | gold `#F5B83D` (body cobalt) | lavender `#A08BF7` |
 
 ## What it shows

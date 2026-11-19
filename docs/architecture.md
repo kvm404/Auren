@@ -38,7 +38,7 @@ design was agreed on 2026-10-12; release preparation is tracked through pull req
 | Paths and config | `src/auren/config.py` | XDG paths; `~/.config/auren/config.toml` |
 | Ears | `src/auren/ears.py` | AssemblyAI streaming (decision 0002) |
 | Brain | `src/auren/brain/` | Claude Code (Haiku) with Codex as backup (decision 0003) |
-| Voice | `src/auren/voice.py` | Supertonic 3, model kept in Auren's data folder |
+| Voice | `src/auren/voice.py` | Phonon 31m through `ptts` (decision 0001), model in the Hugging Face cache |
 | Tools | `src/auren/tools.py`, `src/auren/server.py` | Tool runtime (in the daemon) and the MCP adapter |
 | Hands | `src/auren/hands/` | desktop, herdr, browser, screen, shell |
 | Profile | `src/auren/profile/` | What the brain knows about the machine |
@@ -54,7 +54,6 @@ design was agreed on 2026-10-12; release preparation is tracked through pull req
   editable, so code changes need only a service restart.
 - `mascot/`, `bar-plugin/`: the UI files (copied, or symlinked to the checkout with `--dev`).
 - `bin/auren-ctl`: what key bindings, the mascot and the bar plugin call.
-- `models/`: the voice model.
 - `install.json`: what was installed (version, commit, branch, the repo it came from, `install` or `dev`),
   written last, so it only names an install that finished. `auren update` compares it with GitHub.
 

@@ -8,7 +8,7 @@ Auren targets voice-driven tasks on an Omarchy desktop. The first release is v0.
 - AssemblyAI streaming speech recognition with detected and user-managed vocabulary.
 - Claude Code as the primary brain, Codex fallback on a usage limit before an action runs, and
   configurable brain modes, models, and effort.
-- Local English speech with Supertonic 3 and adjustable voice settings.
+- Local English speech with Phonon 31m, four voices and adjustable voice settings.
 - Desktop, browser, screen, shell, herdr-agent, and Excalidraw tools.
 - Approval levels, bound confirmations, batch answers, cancellation, and the full-access send judge.
 - Press-to-start and press-to-send controls, fresh conversations, and typed terminal conversations.

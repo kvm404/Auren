@@ -1,5 +1,11 @@
 
+import contextlib
+import io
+import sys
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 from auren import daemon, settings
 from auren.tools import Runtime
@@ -7,19 +13,27 @@ from auren.voice import tuning
 
 
 def test_tuning_defaults_are_decision_0001():
-    assert tuning() == {"speed": 1.05, "steps": 5, "volume": 1.0, "pause": 0.0}
+    assert tuning() == {"speed": 1.0, "volume": 1.0, "pause": 0.0}
 
 
 def test_tuning_clamps_rounds_and_ignores_junk():
     t = tuning({"speed": "2", "steps": "4.6", "volume": "loud", "pause": -1, "other": 3})
-    assert t == {"speed": 1.6, "steps": 5, "volume": 1.0, "pause": 0.0}
+    assert t == {"speed": 1.25, "volume": 1.0, "pause": 0.0}
+
+
+def test_speed_maps_onto_phonons_duration_delta():
+    from auren.voice import TUNING, duration_delta
+
+    _, low, high = TUNING["speed"]
+    assert duration_delta(1.0) == 0 and duration_delta(high) == -0.5 and duration_delta(low) == 0.4
+    assert duration_delta(1.1) < 0 < duration_delta(0.9)
 
 
 class _Quiet(daemon.Daemon):
     """Only what the tts command touches: no voice model, no brain."""
 
     def __init__(self):
-        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", "safety": "ask", **tuning()}
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "Everly", "safety": "ask", **tuning()}
         self.tools = Runtime(Path("/nonexistent/tools.sock"))       # never started
         self.voice = None
         self.profile = None
@@ -42,18 +56,18 @@ def _saved(tmp_path) -> dict:
 def test_tts_command_saves_and_resets(tmp_path, monkeypatch):
     _config_in(tmp_path, monkeypatch)
     d = _Quiet()
-    assert d._tts(["speed", "1.2", "pause", "0.3"]) == "tts speed 1.2 steps 5 volume 1.0 pause 0.3"
+    assert d._tts(["speed", "1.2", "pause", "0.3"]) == "tts speed 1.2 volume 1.0 pause 0.3"
     saved = _saved(tmp_path)
-    assert saved["speed"] == 1.2 and saved["pause"] == 0.3 and saved["voiceName"] == "F2"
-    assert d._tts(["reset"]).startswith("tts speed 1.05 steps 5")
+    assert saved["speed"] == 1.2 and saved["pause"] == 0.3 and saved["voiceName"] == "Everly"
+    assert d._tts(["reset"]) == "tts speed 1.0 volume 1.0 pause 0.0"
     assert d.refreshed == 2
 
 
 def test_tts_command_rejects_bad_input(tmp_path, monkeypatch):
     _config_in(tmp_path, monkeypatch)
     d = _Quiet()
-    for words in ([], ["speed"], ["pitch", "2"]):
-        assert d._tts(words).startswith("usage:")
+    for words in ([], ["speed"], ["pitch", "2"], ["steps", "5"]):
+        assert d._tts(words) == "usage: tts speed 0.8..1.25 | volume 0.1..1.0 | pause 0.0..1.0 | reset"
     assert not (tmp_path / "config.toml").exists()
 
 
@@ -144,7 +158,7 @@ def test_daemon_state_and_status_have_no_language_field(tmp_path, monkeypatch):
     state = json.loads((tmp_path / "state.json").read_text())
     status = json.loads(asyncio.run(d.command("status")))
     assert state["state"] == status["state"] == "idle"
-    assert state["voiceName"] == "F2" and state["codexModel"] == "gpt-6.1-sol" and state["codexEffort"] == "medium"
+    assert state["voiceName"] == "Everly" and state["codexModel"] == "gpt-6.1-sol" and state["codexEffort"] == "medium"
     assert "language" not in state and "language" not in status
 
 
@@ -170,7 +184,7 @@ def test_state_goes_back_to_claude_when_codex_handover_ends(tmp_path, monkeypatc
 
     async def run():
         d = daemon.Daemon.__new__(daemon.Daemon)
-        d.settings, d.voice, d.speak_enabled = {"voice": True, "voiceName": "F2", **tuning()}, None, False
+        d.settings, d.voice, d.speak_enabled = {"voice": True, "voiceName": "Everly", **tuning()}, None, False
         d.tools, d.loop = SimpleNamespace(level="ask"), asyncio.get_running_loop()
         d.brain = Handover()
         d.brain.primary, d.brain.backup = SimpleNamespace(effort="low"), SimpleNamespace(model="m", effort="low")
@@ -182,48 +196,79 @@ def test_state_goes_back_to_claude_when_codex_handover_ends(tmp_path, monkeypatc
     assert asyncio.run(run()) == ("codex", "claude")
 
 
-def test_voice_synthesizes_every_sentence_in_english(monkeypatch):
-    import io
-    from types import SimpleNamespace
+class _FakePhonon:
+    """Stands in for ptts.TTS: two chunks per sentence, and a log of what it was asked."""
 
-    import numpy as np
+    sample_rate = 24000
+    known = {"Everly", "Juniper", "Hugh", "Trevor"}
+
+    def __init__(self, **kwargs):
+        self.kwargs, self.said, self.conditions = kwargs, [], []
+
+    def set_conditions(self, conditions):
+        self.conditions.append(conditions)
+
+    @contextlib.contextmanager
+    def stream(self, text, voice):
+        if voice not in self.known:
+            raise LookupError(voice)
+        self.said.append((text, voice))
+        yield iter([np.ones(240, dtype=np.float32), np.ones(240, dtype=np.float32)])
+
+
+@pytest.fixture
+def phonon(monkeypatch):
+    from types import SimpleNamespace
 
     from auren import voice
 
-    calls = []
-
-    class TTS:
-        sample_rate = 44100
-
-        def __init__(self, **kwargs):
-            pass
-
-        def get_voice_style(self, **kwargs):
-            return "style"
-
-        def synthesize(self, **kwargs):
-            calls.append(kwargs)
-            return np.zeros(100, dtype=np.float32), None
-
-    monkeypatch.setattr("supertonic.TTS", TTS)
-    monkeypatch.setattr(voice, "model_dir", lambda: "fake-model")
-    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: SimpleNamespace(stdin=io.BytesIO(), wait=lambda: 0))
+    played = io.BytesIO()
+    played.close = lambda: None
+    monkeypatch.setitem(sys.modules, "ptts", SimpleNamespace(TTS=_FakePhonon, DEFAULT_MODEL="hf://x/phonon@1"))
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: SimpleNamespace(stdin=played, wait=lambda: 0))
     monkeypatch.setattr(voice.Voice, "_follow", lambda self: None)
+    return played
+
+
+def test_voice_streams_every_sentence_in_english_with_its_voice_speed_and_volume(phonon):
+    from auren import voice
+
+    v = voice.Voice("Hugh", speed=1.25, volume=0.5, pause=0.1)
+    tts = v.tts
+    tts.said.clear()                     # the voices it registered while loading
     # Unexpected non-English text must never switch the engine into Hindi mode.
-    assert voice.Voice().speak("Firefox is open. नमस्ते! Done?")
-    assert [c["text"] for c in calls] == ["Firefox is open.", "नमस्ते!", "Done?"]
-    assert all(c["lang"] == "en" for c in calls)
+    assert v.speak("Firefox is open. नमस्ते! Done?")
+    assert tts.kwargs == {"lang": "en"}
+    assert tts.said == [("Firefox is open.", "Hugh"), ("नमस्ते!", "Hugh"), ("Done?", "Hugh")]
+    assert tts.conditions == [{"duration_delta": -0.5}]          # set once, not per sentence
+    audio = np.frombuffer(phonon.getvalue(), dtype=np.float32)
+    assert len(audio) == 3 * 480 + 2 * int(0.1 * 24000)        # the pause goes between sentences only
+    assert audio.max() == 0.5 and audio[479] == 0.5 and audio[480] == 0.0    # 0.1 s of silence, then "नमस्ते!"
+    v.tune({"speed": 1.0})
+    v.speak("Again.")
+    assert tts.conditions[-1] == {"duration_delta": 0.0}
+
+
+def test_voice_knows_only_its_four_voices(phonon):
+    from auren import voice
+
+    v = voice.Voice()
+    assert v.name == "Everly" and v.names == list(voice.VOICES) and len(v.names) == 4
+    v.set_voice("Trevor")
+    with pytest.raises(ValueError, match="no voice F2"):
+        v.set_voice("F2")
+    assert v.name == "Trevor"
 
 
 class _FakeVoice:
-    name = "F2"
+    name = "Everly"
 
     def __init__(self):
         self.tuned, self.stopped = None, False
 
     def set_voice(self, name):
-        if name == "M9":
-            raise ValueError("no voice M9")
+        if name == "F2":
+            raise ValueError("no voice F2")
         self.name = name
 
     def tune(self, values):
@@ -250,7 +295,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
         d.settings = settings.load()
         d.brain, d.voice = _FakeBrain(), _FakeVoice()
         assert await d.command("reload") == "no changes"
-        for path, value in (("voice.name", "M3"), ("voice.speed", "1.3"), ("voice.enabled", "false"),
+        for path, value in (("voice.name", "Trevor"), ("voice.speed", "1.2"), ("voice.enabled", "false"),
                             ("brain.mode", "codex"), ("brain.effort", "high"),
                             ("brain.claude_model", "sonnet"), ("brain.codex_effort", "medium")):
             settings.set_value(path, value)
@@ -259,7 +304,7 @@ def test_reload_applies_what_changed_in_config(tmp_path, monkeypatch):
         return d
 
     d = asyncio.run(run())
-    assert d.voice.name == "M3" and d.voice.tuned["speed"] == 1.3 and d.voice.stopped
+    assert d.voice.name == "Trevor" and d.voice.tuned["speed"] == 1.2 and d.voice.stopped
     assert d.brain.mode == "codex" and efforts == [("high", "sonnet")]
     assert d.brain.codex == ("gpt-6-luna", "medium")
     assert d.refreshed == 1

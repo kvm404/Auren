@@ -12,7 +12,7 @@
 #   ~/.local/share/auren/mascot/        the floating mascot (Quickshell)
 #   ~/.local/share/auren/bar-plugin/    the Omarchy bar plugin, linked as kvm404.auren
 #   ~/.local/share/auren/bin/auren-ctl  what key bindings call
-#   ~/.local/share/auren/models/        the voice model
+#   ~/.cache/huggingface/hub/           the voice model (Phonon), fetched by `auren voice-model`
 #
 # In a terminal it asks which talk keys to add to ~/.config/hypr/bindings.lua (backed up first);
 # otherwise it prints them. It never touches the rest of your Hyprland config.

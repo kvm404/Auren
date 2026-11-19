@@ -10,8 +10,8 @@
     auren-ctl say <text> | cancel | status | quit
     auren-ctl forget        # a fresh conversation (also by voice: "start fresh", "forget everything")
     auren-ctl voice on|off|toggle     # spoken replies (off: replies only in the mascot's bubble)
-    auren-ctl voice-name F1..F5|M1..M5 [sample] # which Supertonic voice (says the sample, or a short default one)
-    auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
+    auren-ctl voice-name Everly|Juniper|Hugh|Trevor [sample] # which voice (says the sample, or a short default one)
+    auren-ctl tts speed 1.1 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
     auren-ctl safety ask|task|free|never    # how much it asks before risky actions (saved in config.toml)
@@ -57,7 +57,7 @@ from .settings import BY_FLAT as SETTING_KEYS
 from .settings import load as load_settings
 from .settings import save as save_settings
 from .tools import Outcome, Runtime
-from .voice import TUNING, tuning
+from .voice import TUNING, VOICES, tuning
 
 SESSION = "daemon"          # the daemon's tool session (an `auren chat` has its own)
 log = logging.getLogger("auren")
@@ -135,7 +135,7 @@ class Daemon:
                                    "codexEffort": self.brain.backup.effort, "voice": self.voice_on,
                                    "safety": self.tools.level,
                                    "voiceName": self.voice.name if self.voice else self.settings["voiceName"],
-                                   "voices": self.voice.names if self.voice else [],
+                                   "voices": list(VOICES),
                                    "tts": tuning(self.settings), "autosend": self.autosend,
                                    "autosendAfter": self.autosend_after, "origin": self._origin(), **extra}))
         tmp.replace(STATE_FILE)
@@ -271,18 +271,14 @@ class Daemon:
         if cmd == "stop":
             return await self.release()
         if cmd == "voice-name":
-            if not self.voice:
-                return "the voice isn't loaded"
             name, _, sample = arg.strip().partition(" ")
             try:
-                self.voice.set_voice(name)
+                name = self.set_voice_name(name)
             except ValueError as e:
                 return str(e)
-            self._save({"voiceName": self.voice.name})
-            self._refresh_state()
-            if self.state == "idle":
-                asyncio.create_task(self.say(sample.strip() or f"Hi, this is voice {self.voice.name}."))
-            return "voice " + self.voice.name
+            if self.voice and self.state == "idle":
+                asyncio.create_task(self.say(sample.strip() or f"Hi, this is {name}."))
+            return "voice " + name
         if cmd == "tts":
             return self._tts(arg.split())
         if cmd == "cancel":
@@ -458,6 +454,19 @@ class Daemon:
         self._refresh_state()
         return "Auren picked it up"
 
+    def set_voice_name(self, name: str) -> str:
+        """Pick the voice (`auren-ctl voice-name`, the bar, a phone's voice.set): one setting, which the phone
+        also speaks with. Works without the PC's voice loaded. Returns the name; ValueError for an unknown one."""
+        try:
+            name = SETTING_KEYS["voiceName"].check(name)
+        except ValueError as e:
+            raise ValueError(f"no voice {name!r}: choose {e}") from None
+        if self.voice:
+            self.voice.set_voice(name)
+        self._save({"voiceName": name})
+        self._refresh_state()
+        return name
+
     def _autosend(self, words: list[str]) -> str:
         """autosend on | off | toggle | after 5"""
         usage = "usage: autosend on|off|toggle | autosend after 1..15"
@@ -475,12 +484,13 @@ class Daemon:
         return f"autosend {'on' if self.autosend else 'off'}, after {self.autosend_after:g} s"
 
     def _tts(self, words: list[str]) -> str:
-        """tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 (several at once is fine) | reset"""
+        """tts speed 1.1 | volume 0.8 | pause 0.2 (several at once is fine) | reset"""
         if words == ["reset"]:
             values = tuning()
         else:
             if not words or len(words) % 2 or any(k not in TUNING for k in words[::2]):
-                return "usage: tts speed 0.7..1.6 | steps 2..12 | volume 0.1..1 | pause 0..1 | reset"
+                return "usage: tts speed {1}..{2} | volume {4}..{5} | pause {7}..{8} | reset".format(
+                    *TUNING["speed"], *TUNING["volume"], *TUNING["pause"])
             values = tuning({**self.settings, **dict(zip(words[::2], words[1::2], strict=True))})
         self._save(values)
         if self.voice:

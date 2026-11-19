@@ -1,8 +1,11 @@
 """Paths, auren-ctl, the daemon lock, the voice model download and doctor's helpers."""
 
+import contextlib
+import os
 import socket
+import sys
 import threading
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -68,65 +71,78 @@ def test_only_one_daemon_holds_the_lock(monkeypatch, tmp_path):
     second.close()
 
 
+class _Hub:
+    """A fake ptts over a fake Hugging Face cache: online it downloads, offline it only finds what's cached."""
+
+    def __init__(self):
+        self.cached, self.reachable, self.offline_seen = set(), True, []
+
+    def _fetch(self, name):
+        offline = os.environ.get("HF_HUB_OFFLINE") == "1"
+        self.offline_seen.append(offline)
+        if name not in self.cached:
+            if offline:
+                raise LookupError(f"{name} is not in the cache")
+            if not self.reachable:
+                raise OSError("offline")
+            self.cached.add(name)
+
+    def module(self):
+        hub = self
+
+        class TTS:
+            sample_rate = 24000
+
+            def __init__(self, lang):
+                hub._fetch("model")
+
+            @contextlib.contextmanager
+            def stream(self, text, voice):
+                hub._fetch(voice)
+                yield iter([])
+
+        return SimpleNamespace(TTS=TTS, DEFAULT_MODEL="hf://gradium/phonon-31m-en@abc")
+
+
 @pytest.fixture
-def models(monkeypatch, tmp_path):
-    import supertonic.config
-    import supertonic.loader
-
-    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path / "models")
-    monkeypatch.setattr(supertonic.config, "get_model_cache_dir", lambda model: tmp_path / "sdk-cache")
-    monkeypatch.setattr(supertonic.loader, "has_all_onnx_modules", lambda d: (d / "onnx/model.onnx").exists())
-    return tmp_path / "models"
+def hub(monkeypatch):
+    hub = _Hub()
+    monkeypatch.setitem(sys.modules, "ptts", hub.module())
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    return hub
 
 
-def _fake_model(folder):
-    (folder / "onnx").mkdir(parents=True)
-    (folder / "onnx/model.onnx").write_text("x")
-    (folder / "voice_styles").mkdir()
-    (folder / "voice_styles/F2.json").write_text("{}")
+def test_missing_lists_what_isnt_cached_without_going_online(hub):
+    assert voice.missing() == ["model", *voice.VOICES]
+    hub.cached.update({"model", "Everly", "Hugh"})
+    assert voice.missing() == ["Juniper", "Trevor"]
+    hub.cached.update(voice.VOICES)
+    assert voice.missing() == []
+    assert all(hub.offline_seen) and "HF_HUB_OFFLINE" not in os.environ
 
 
-def test_model_dir_needs_a_complete_model(models):
-    assert voice.model_dir() is None
-    (models / voice.MODEL / "onnx").mkdir(parents=True)
-    (models / voice.MODEL / "onnx/model.onnx").write_text("x")
-    assert voice.model_dir() is None                          # no voices yet
-    (models / voice.MODEL / "voice_styles").mkdir()
-    (models / voice.MODEL / "voice_styles/F2.json").write_text("{}")
-    assert voice.model_dir() == models / voice.MODEL
+def test_download_fetches_the_model_and_every_voice(hub):
+    assert voice.download_model(log=lambda _: None) == "Phonon 31m with Everly, Juniper, Hugh, Trevor"
+    assert hub.cached == {"model", *voice.VOICES} and not any(hub.offline_seen)
+    assert voice.missing() == []
 
 
-def test_download_falls_back_to_the_archive(models, monkeypatch):
-    import huggingface_hub
-
-    tried = []
-
-    def snapshot(repo_id, revision, local_dir, allow_patterns):
-        tried.append(repo_id)
-        if repo_id != voice.ARCHIVE_REPO:
-            raise OSError("gone")
-        _fake_model(Path(local_dir))
-
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
-    assert voice.download_model(log=lambda _: None) == models / voice.MODEL
-    assert tried[-1] == voice.ARCHIVE_REPO and len(tried) == 2
-    assert not (models / f".{voice.MODEL}.tmp").exists()
-
-
-def test_download_reports_when_every_source_fails(models, monkeypatch):
-    import huggingface_hub
-
-    def snapshot(**kw):
-        raise OSError("offline")
-
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+def test_download_reports_when_the_hub_is_unreachable(hub):
+    hub.reachable = False
     with pytest.raises(voice.VoiceModelMissing, match="offline"):
         voice.download_model(log=lambda _: None)
 
 
-def test_voice_refuses_to_start_without_a_model(models):
-    with pytest.raises(voice.VoiceModelMissing):
+def test_voice_refuses_to_start_without_a_model_and_never_downloads(hub):
+    with pytest.raises(voice.VoiceModelMissing, match="auren voice-model"):
         voice.Voice()
+    assert hub.cached == set() and all(hub.offline_seen)
+
+
+def test_voice_starts_from_the_cache(hub):
+    hub.cached.update({"model", *voice.VOICES})
+    assert voice.Voice("Juniper").name == "Juniper"
+    assert all(hub.offline_seen) and "HF_HUB_OFFLINE" not in os.environ
 
 
 @pytest.mark.parametrize("text, want", [

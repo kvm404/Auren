@@ -28,7 +28,7 @@ when judging whether v1 is done.
 - **Audio goes to the PC.** The phone streams 16 kHz mono PCM; the daemon feeds it to the same ears
   (AssemblyAI, vocabulary). The API key stays on the PC.
 - **Replies:** text on the phone, spoken by the phone's own text-to-speech when its voice toggle is on.
-  The PC speaks only for requests made at the PC. Streaming Supertonic audio to the phone is later.
+  The PC speaks only for requests made at the PC. Streaming the PC's voice to the phone is later.
 - **Inbox on the PC is the source of truth.** The phone syncs by cursor when it connects and gets new
   items live while connected.
 
@@ -51,7 +51,7 @@ when judging whether v1 is done.
 
 - Background alerts when the app is closed (agent job done or needs input): UnifiedPush or FCM ping
   that fetches over the pinned link.
-- "Show me my screen" screenshot, home widget, Supertonic voice on the phone, transcript review
+- "Show me my screen" screenshot, home widget, the PC's voice on the phone, transcript review
   before running in noisy places.
 - **PC → phone:** on-demand notification triage (allowlisted apps, redacted) through a
   NotificationListenerService; then typed phone actions ("open this link"); full control by mirroring

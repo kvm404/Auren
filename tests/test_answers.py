@@ -29,7 +29,7 @@ class _Harness(daemon.Daemon):
     """The daemon without a voice, ears or real brain: what it says, shows and records is kept."""
 
     def __init__(self, tmp_path: Path):
-        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", "safety": "ask"}
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "Everly", "safety": "ask"}
         self.tools = Runtime(tmp_path / "tools.sock")
         self.brain = _Brain()
         self.voice = self.profile = self.listening = None

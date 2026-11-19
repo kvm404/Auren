@@ -183,7 +183,7 @@ class _Level:
 
 class _Harness(daemon.Daemon):
     def __init__(self, tmp_path, autosend=False, after=5):
-        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", "safety": "ask",
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "Everly", "safety": "ask",
                          "autosend": autosend, "autosendAfter": after}
         self.tools = Runtime(tmp_path / "tools.sock")
         self.voice = self.profile = None

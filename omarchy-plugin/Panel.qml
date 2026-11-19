@@ -12,8 +12,8 @@ import qs.Ui
 //                 pages on the left, the page on the right, and Auren's on/off, restart and log below:
 //                   Home     the live mascot (click it to talk), status, Yes/No when it asks, last exchange, quick switches
 //                   Mascot   Auren or Veyra; speech bubble, sleep animation, voice follows mascot, fade, size
-//                   Voice    spoken replies in English, voice (F2, M3, F1, M1), speed,
-//                            quality, volume, pause, test; listening: auto-send and its delay
+//                   Voice    spoken replies in English, voice (voiceChoices), speed, volume,
+//                            pause, test; listening: auto-send and its delay
 //                   Brain    auto / Claude / Codex, Claude's effort, how much it asks before risky actions, today's numbers
 //                   Updates  the installed version, a check for a newer one, and the update (auren update)
 //   right-click   start a fresh conversation
@@ -45,8 +45,8 @@ Panel {
 
   // ---- the mascots ----------------------------------------------------------------------------
   readonly property var mascots: [
-    { kind: "auren", name: "Auren", tip: "hover-bot", color: "#F5B83D", voice: "M3", hello: "Hey, I'm Auren." },
-    { kind: "veyra", name: "Veyra", tip: "fox spirit", color: "#A08BF7", voice: "F2", hello: "Hi, I'm Veyra." }
+    { kind: "auren", name: "Auren", tip: "hover-bot", color: "#F5B83D", voice: "Trevor", hello: "Hey, I'm Auren." },
+    { kind: "veyra", name: "Veyra", tip: "fox spirit", color: "#A08BF7", voice: "Juniper", hello: "Hi, I'm Veyra." }
   ]
   function mascotOf(k) { return mascots.find(function(m) { return m.kind === k }) }
   readonly property string kind: mascotOf(mascotPrefs.mascot) ? mascotPrefs.mascot : "auren"
@@ -76,7 +76,7 @@ Panel {
     return "GPT-" + parts[1] + " " + parts.slice(2).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
   }
   readonly property string safety: st.safety || "ask"
-  readonly property string voiceName: st.voiceName || "F2"
+  readonly property string voiceName: st.voiceName || voiceChoices[0].value
   // Auto-send: the daemon sends by itself once no new words come for autosendAfter seconds. Off, it reminds
   // the user to press Super+A after 3 s of quiet and sends after 12 s (daemon.REMIND_AFTER, SEND_AFTER).
   readonly property bool autosend: st.autosend === true
@@ -87,13 +87,13 @@ Panel {
     { value: "5", label: "5 s", tip: "Room to think mid-sentence (the default)" },
     { value: "8", label: "8 s", tip: "Long pauses; slower to send" }
   ]
-  readonly property var tts: st.tts || ({ speed: 1.05, steps: 5, volume: 1.0, pause: 0.0 })
-  // The voices picked by ear in decision 0001: F2 (chosen), M3 (normal pace), F1 and M1 (slower, calmer).
+  readonly property var tts: st.tts || ({ speed: 1.0, volume: 1.0, pause: 0.0 })
+  // Phonon's voices Auren offers, the default first: the same list as VOICES in src/auren/voice.py.
   readonly property var voiceChoices: [
-    { value: "F2", label: "F2", tip: "Auren's voice (chosen): click to hear it" },
-    { value: "M3", label: "M3", tip: "Male, normal pace: click to hear it" },
-    { value: "F1", label: "F1", tip: "Female, slower and calmer: click to hear it" },
-    { value: "M1", label: "M1", tip: "Male, slower and calmer: click to hear it" }
+    { value: "Everly", label: "Everly", tip: "US female, the default: click to hear her" },
+    { value: "Juniper", label: "Juniper", tip: "US female, Veyra's voice: click to hear her" },
+    { value: "Hugh", label: "Hugh", tip: "UK male: click to hear him" },
+    { value: "Trevor", label: "Trevor", tip: "US male, Auren's voice: click to hear him" }
   ]
 
   FileView {
@@ -157,7 +157,7 @@ Panel {
       property bool bubble: true
       property bool sleepAnimation: true
       property string mascot: "auren"
-      property bool matchVoice: true      // picking a mascot also picks its voice (Auren speaks with M3)
+      property bool matchVoice: true      // picking a mascot also picks its voice (Auren speaks with Trevor)
     }
   }
   function savePrefs() { mascotPrefsFile.writeAdapter() }
@@ -420,7 +420,7 @@ Panel {
   }
   function round(v, step) { return Math.round(v / step) * step }
   readonly property var sliders: ({
-    speed: { min: 0.8, max: 1.4, step: 0.05 },
+    speed: { min: 0.8, max: 1.25, step: 0.05 },
     volume: { min: 0.3, max: 1.0, step: 0.05 },
     pause: { min: 0, max: 0.6, step: 0.05 },
     opacity: { min: 0.15, max: 1.0, step: 0.05 },
@@ -457,11 +457,6 @@ Panel {
                                        : st.brain === "codex" ? "Codex for now (Claude's limit)" : "Claude Haiku")
                                       + ", " + (codexAnswers ? codexEffort : effort) + " effort"
 
-  readonly property var qualities: [
-    { value: "3", label: "Fast", tip: "3 steps: least CPU" },
-    { value: "5", label: "Balanced", tip: "5 steps: Auren's default (decision 0001)" },
-    { value: "8", label: "Best", tip: "8 steps: smoother, ~45% more CPU" }
-  ]
   // Claude Code's --effort for the brain (Haiku 5.5). Low is decision 0003's: higher is slower and uses
   // more of the Claude allowance. Changing it restarts the brain, so the conversation starts fresh.
   readonly property var efforts: [
@@ -517,7 +512,7 @@ Panel {
   ]
   readonly property var voiceActions: [
     { label: "Test", icon: "󰐊", tip: "Say a sample sentence", run: function() { root.ctlRun(["say", root.sample]) } },
-    { label: "Defaults", icon: "󰦛", tip: "Speed 1.05, balanced, full volume, no pause", run: function() { root.ctlRun(["tts", "reset"]) } }
+    { label: "Defaults", icon: "󰦛", tip: "Speed 1.0, full volume, no pause", run: function() { root.ctlRun(["tts", "reset"]) } }
   ]
   readonly property var footerActions: [
     { label: root.daemonAlive || root.daemonActive ? "Turn off" : "Turn on", icon: "󰐥", tip: "Start or stop Auren",
@@ -562,9 +557,8 @@ Panel {
       { n: root.mascotActions.length, act: function(c) { root.runAction(root.mascotActions, c) } }]
     if (page === 2) return [
       { n: 1, act: function() { root.toggleVoice() } },
-      { n: 4, act: function(c) { root.setVoiceName(root.voiceChoices[c].value) } },
+      { n: root.voiceChoices.length, act: function(c) { root.setVoiceName(root.voiceChoices[c].value) } },
       { n: 1, adjust: function(dx) { root.nudge("speed", dx) } },
-      { n: 3, act: function(c) { root.setTts("steps", root.qualities[c].value) } },
       { n: 1, adjust: function(dx) { root.nudge("volume", dx) } },
       { n: 1, adjust: function(dx) { root.nudge("pause", dx) } },
       { n: root.voiceActions.length, act: function(c) { root.runAction(root.voiceActions, c) } },
@@ -1141,16 +1135,6 @@ Panel {
                 onReleased: function(v) { root.setTts("speed", root.round(v, 0.05).toFixed(2)) }
                 onHovered: root.hover(2)
               }
-              Choice {
-                width: parent.width
-                title: "QUALITY"
-                options: root.qualities
-                value: String(root.ttsValue("steps"))
-                foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(3) ? root.cursorCol : -1
-                onPicked: function(v) { root.setTts("steps", v) }
-                onHoveredIndex: function(i) { root.hover(3, i) }
-              }
               SliderRow {
                 id: volumeRow
                 width: parent.width
@@ -1160,9 +1144,9 @@ Panel {
                 minimum: root.sliders.volume.min; maximum: root.sliders.volume.max; step: root.sliders.volume.step
                 value: root.ttsValue("volume")
                 foreground: root.fg; fontFamily: root.font
-                hasCursor: root.has(4)
+                hasCursor: root.has(3)
                 onReleased: function(v) { root.setTts("volume", root.round(v, 0.05).toFixed(2)) }
-                onHovered: root.hover(4)
+                onHovered: root.hover(3)
               }
               SliderRow {
                 id: pauseRow
@@ -1173,17 +1157,17 @@ Panel {
                 minimum: root.sliders.pause.min; maximum: root.sliders.pause.max; step: root.sliders.pause.step
                 value: root.ttsValue("pause")
                 foreground: root.fg; fontFamily: root.font
-                hasCursor: root.has(5)
+                hasCursor: root.has(4)
                 onReleased: function(v) { root.setTts("pause", root.round(v, 0.05).toFixed(2)) }
-                onHovered: root.hover(5)
+                onHovered: root.hover(4)
               }
               Choice {
                 width: parent.width
                 options: root.asOptions(root.voiceActions)
                 foreground: root.fg; fontFamily: root.font
-                cursorIndex: root.has(6) ? root.cursorCol : -1
+                cursorIndex: root.has(5) ? root.cursorCol : -1
                 onPicked: function(v, i) { root.runAction(root.voiceActions, i) }
-                onHoveredIndex: function(i) { root.hover(6, i) }
+                onHoveredIndex: function(i) { root.hover(5, i) }
               }
             }
 
@@ -1196,9 +1180,9 @@ Panel {
                                          : "Reminds you to press Super+A after 3 s of quiet; sends after 12 s"
               checked: root.autosend
               foreground: root.fg; fontFamily: root.font
-              hasCursor: root.has(7)
+              hasCursor: root.has(6)
               onClicked: root.toggleAutosend()
-              onHovered: function(h) { if (h) root.hover(7) }
+              onHovered: function(h) { if (h) root.hover(6) }
             }
             Choice {
               width: parent.width
@@ -1207,9 +1191,9 @@ Panel {
               options: root.autosendDelays
               value: String(root.autosendAfter)
               foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(8) ? root.cursorCol : -1
+              cursorIndex: root.has(7) ? root.cursorCol : -1
               onPicked: function(v) { root.setAutosendAfter(v) }
-              onHoveredIndex: function(i) { root.hover(8, i) }
+              onHoveredIndex: function(i) { root.hover(7, i) }
             }
           }
 

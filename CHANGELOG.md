@@ -19,6 +19,14 @@
   nothing: sending, publishing, root, packages, secrets, buying and wiping just run. The old Full
   access (`free`: windows and files run, sending and the floor still ask) is now called Auto.
   `auren-ctl safety never` or the panel's Brain page sets it; existing configs keep what they had.
+- The voice is now Gradium's Phonon 31m (through `ptts`) instead of Supertonic 3: four voices, Everly
+  (the default), Juniper, Hugh and Trevor, picked from the bar panel, `auren-ctl voice-name` or the
+  phone (`voice.set`). Speech streams in chunks, so the first words play sooner. Speed now runs 0.8–1.25
+  (default 1.0) and the quality setting is gone. A Supertonic voice in `config.toml` becomes Everly once
+  (logged), `voice.steps` is dropped and an out-of-range speed is clamped. Run `auren voice-model` to
+  fetch the new model (about 100 MB); the old one in `~/.local/share/auren/models/` can be deleted. Auren
+  now speaks with Trevor and Veyra with Juniper when the voice follows the mascot.
+
 
 ### Fixed
 

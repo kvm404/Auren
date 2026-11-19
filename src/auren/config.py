@@ -55,7 +55,6 @@ SECRETS = CONFIG_DIR / "secrets.env"
 CONFIG_FILE = CONFIG_DIR / "config.toml"    # the user's settings (settings.py)
 SETTINGS = CONFIG_DIR / "settings.json"     # the old settings file, moved into config.toml once
 ROUTINES_DIR = CONFIG_DIR / "routines"
-MODELS_DIR = DATA_HOME / "models"
 DATA = Path(__file__).parent / "data"
 
 

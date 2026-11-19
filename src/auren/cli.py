@@ -3,7 +3,7 @@
   auren daemon                # the voice daemon (the auren systemd service runs this)
   auren doctor                # what works on this machine, and how to fix what doesn't
   auren config                # settings (~/.config/auren/config.toml): show, get, set, edit
-  auren voice-model           # download the voice model (install.sh runs this)
+  auren voice-model           # download the voice model and its four voices (install.sh runs this)
   auren phone pair            # pair the phone app (also: auren phone devices, auren phone revoke <id>)
   auren update                # check for a newer version, and install it if you say so
   auren browser               # the browser tools: status, setup, which browser to use
