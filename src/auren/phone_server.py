@@ -619,6 +619,16 @@ def _bind(host: str, port: int) -> socket.socket:
     return sock
 
 
+def _free(rows: list[dict], port: int) -> bool:
+    """Has an address whose port was taken come free? (Then the server starts again to listen there too.)"""
+    for r in rows:
+        if not r["ok"]:
+            with contextlib.suppress(OSError):
+                _bind(r["ip"], port).close()
+                return True
+    return False
+
+
 class _Running:
     """One uvicorn server over the sockets of the addresses it was started for."""
 
@@ -628,6 +638,17 @@ class _Running:
                                 ssl_certfile=str(certfile), ssl_keyfile=str(keyfile), timeout_graceful_shutdown=2)
         self.hub, self.socks, self.server = hub, socks, _Server(config)
         self.task = asyncio.create_task(self.server.serve(sockets=socks))
+
+    async def up(self, timeout: float = 10) -> str:
+        """Wait for uvicorn to start serving: "" once it does, else why not (the status says on only then)."""
+        end = time.monotonic() + timeout
+        while not self.server.started and not self.task.done() and time.monotonic() < end:
+            await asyncio.sleep(0.02)
+        if self.server.started:
+            return ""
+        if self.task.done() and not self.task.cancelled() and self.task.exception():
+            return f"{type(self.task.exception()).__name__}: {self.task.exception()}"[:200]
+        return "it didn't start in time" if not self.task.done() else "it stopped"
 
     async def stop(self) -> None:
         """Close the phones' sockets and the listening ones; wait (briefly) for uvicorn to wind down."""
@@ -654,18 +675,23 @@ async def supervise(daemon) -> None:
     port = int(daemon.settings.get("phone.port", 8735))
     lan = daemon.settings.get("phone.lan", True) is not False
     running: _Running | None = None
-    started_for, tried = None, 0.0
+    started_for, seen, tried, rows = None, None, 0.0, []
     try:
         certfile, keyfile, hub.fp = await asyncio.to_thread(phone.cert)
         while True:
             addrs, missing = await asyncio.to_thread(phone.addresses, lan)
-            failed = running is None or running.task.done()     # a port taken on one address waits for a change
-            if addrs != started_for or (failed and time.monotonic() - tried >= RETRY):
+            down = running is None or running.task.done()
+            # A change counts once it is seen twice in a row: one failed Tailscale probe doesn't drop the LAN.
+            moved = addrs != started_for and (down or addrs == seen)
+            seen = addrs
+            retry = time.monotonic() - tried >= RETRY and (down or _free(rows, port))
+            if moved or retry:
                 if running:
-                    log.info("phone server: the addresses changed (%s): restarting", ", ".join(ip for ip, _ in addrs))
+                    log.info("phone server: restarting on %s", ", ".join(ip for ip, _ in addrs) or "nothing")
                     await running.stop()
                     running = None
-                started_for, tried = addrs, time.monotonic()
+                    addrs, missing = await asyncio.to_thread(phone.addresses, lan)   # as they are now
+                started_for, seen, tried = addrs, addrs, time.monotonic()
                 socks, rows = [], []
                 for ip, via in addrs:
                     try:
@@ -675,12 +701,18 @@ async def supervise(daemon) -> None:
                         rows.append({"ip": ip, "via": via, "ok": False,
                                      "why": f"can't listen on {ip}:{port} ({e.strerror}): set phone.port"})
                 hub.addrs = [{"ip": r["ip"], "via": r["via"]} for r in rows if r["ok"]]
+                why = "; ".join([r["why"] for r in rows if not r["ok"]] + list(missing.values()))
                 if socks:
                     running = _Running(hub, socks, certfile, keyfile)
-                    log.info("phone server on %s, port %s (TLS)", ", ".join(a["ip"] for a in hub.addrs), port)
-                why = "" if socks else ("; ".join([r["why"] for r in rows if not r["ok"]] + list(missing.values()))
-                                        or "nowhere to listen")
-                _write_status(bool(socks), port, rows, hub.fp, why, missing)
+                    if err := await running.up():
+                        log.warning("phone server didn't start: %s", err)
+                        await running.stop()
+                        running, hub.addrs = None, []
+                        why, rows = f"the server didn't start: {err}", [{**r, "ok": False} for r in rows]
+                    else:
+                        log.info("phone server on %s, port %s (TLS)", ", ".join(a["ip"] for a in hub.addrs), port)
+                _write_status(bool(hub.addrs), port, rows, hub.fp, "" if hub.addrs else why or "nowhere to listen",
+                              missing)
             await asyncio.sleep(WATCH)
     finally:
         sweeper.cancel()

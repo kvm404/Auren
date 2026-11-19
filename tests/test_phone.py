@@ -106,6 +106,19 @@ def test_the_certificate_is_made_once_and_its_key_is_private():
     assert phone.cert()[2] == fp and (crt.read_bytes(), key.read_bytes()) == before    # kept, not made again
 
 
+def test_a_certificate_and_key_that_dont_match_are_made_again():
+    crt, key, _ = phone.cert()
+    old_key = key.read_bytes()
+    phone._make_cert()
+    new_cert = crt.read_bytes()
+    key.write_bytes(old_key)                                   # a partial restore: the old key, the new certificate
+    os.chmod(crt, 0o644)
+    assert not phone._pair_ok()
+    phone.cert()
+    assert phone._pair_ok() and crt.read_bytes() != new_cert
+    assert stat.S_IMODE(os.stat(crt).st_mode) == stat.S_IMODE(os.stat(key).st_mode) == 0o600
+
+
 IP_ADDR = [   # `ip -j -4 addr show up`, trimmed
     {"ifname": "lo", "flags": ["LOOPBACK", "UP"], "addr_info": [{"family": "inet", "local": "127.0.0.1", "prefixlen": 8}]},
     {"ifname": "enp7s0", "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": "192.168.0.100", "prefixlen": 24}]},
@@ -1108,3 +1121,84 @@ def test_listening_leaves_no_sender_behind_when_the_service_drops(monkeypatch):
 
     senders, text, error = asyncio.run(go())
     assert senders == [] and text == "hello" and error
+
+
+# --- the server following its addresses --------------------------------------------------------------------
+
+def _supervised(monkeypatch, tmp_path, addrs_seq, scenario):
+    """Run supervise with addresses from addrs_seq (a callable), fast clocks, counting server starts."""
+    starts = []
+    monkeypatch.setattr(phone_server, "WATCH", 0.05)
+    monkeypatch.setattr(phone_server, "RETRY", 0.2)
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: addrs_seq())
+    real = phone_server._Running.__init__
+
+    def counted(self, *a, **k):
+        starts.append(a[1])
+        real(self, *a, **k)
+
+    monkeypatch.setattr(phone_server._Running, "__init__", counted)
+
+    async def go():
+        d = _Daemon()
+        d.settings = {"phone.port": _free_port()}
+        task = asyncio.create_task(phone_server.supervise(d))
+        try:
+            await scenario(d, starts)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(go())
+
+
+def test_a_port_that_comes_free_on_one_address_is_listened_on(monkeypatch, tmp_path):
+    import socket
+    blocker = socket.socket()
+
+    async def scenario(d, starts):
+        port = d.settings["phone.port"]
+        blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        blocker.bind(("127.0.0.2", port))
+        blocker.listen()
+        await _until(lambda: phone.status().get("on"), 10)
+        assert [r["ok"] for r in phone.status()["addrs"]] == [True, False]
+        blocker.close()                                        # the other program let the port go
+        await _until(lambda: [r["ok"] for r in phone.status().get("addrs", [])] == [True, True], 10)
+
+    try:
+        _supervised(monkeypatch, tmp_path, lambda: ([("127.0.0.1", "tailscale"), ("127.0.0.2", "lan")], {}), scenario)
+    finally:
+        blocker.close()
+
+
+def test_one_failed_tailscale_probe_doesnt_restart_the_server(monkeypatch, tmp_path):
+    both = [("127.0.0.1", "lan"), ("127.0.0.3", "tailscale")]
+    flaky = {"n": 0}
+
+    def addrs():
+        flaky["n"] += 1
+        return (both[:1], {"tailscale": "timed out"}) if flaky["n"] == 3 else (both, {})
+
+    async def scenario(d, starts):
+        await _until(lambda: flaky["n"] > 6, 10)
+        assert len(starts) == 1
+
+    _supervised(monkeypatch, tmp_path, addrs, scenario)
+
+
+def test_the_status_says_on_only_once_the_server_serves(monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    crt, key, fp = phone.cert()
+    monkeypatch.setattr(phone, "KEY", other / "key.pem")
+    monkeypatch.setattr(phone, "CERT", other / "cert.pem")
+    phone._make_cert()                                         # a key that isn't the certificate's
+    monkeypatch.setattr(phone, "cert", lambda: (crt, other / "key.pem", fp))
+
+    async def scenario(d, starts):
+        await _until(lambda: "didn't start" in phone.status().get("why", ""), 10)
+        assert phone.status()["on"] is False and not d.phone.addrs
+
+    _supervised(monkeypatch, tmp_path, lambda: ([("127.0.0.1", "lan")], {}), scenario)

@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -35,6 +36,8 @@ import time
 from pathlib import Path
 
 from .config import CONFIG_DIR, RUNTIME_DIR, STATE_DIR
+
+log = logging.getLogger("auren.phone")
 
 API = 1                             # the protocol version, in every path (/v1/...)
 PHONE_DIR = STATE_DIR / "phone"
@@ -409,10 +412,24 @@ def cert() -> tuple[Path, Path, str]:
     fingerprint of the certificate, lowercase hex). It names no address, so a new LAN IP needs no new one;
     the app checks the fingerprint, not the name."""
     with _locked("cert"):
-        if not (CERT.is_file() and KEY.is_file()):
+        if not _pair_ok():
+            if CERT.exists() or KEY.exists():
+                log.warning("phone: the certificate and key don't go together: made new ones (pair phones again)")
             _make_cert()
-        os.chmod(KEY, 0o600)
+        for f in (KEY, CERT):
+            os.chmod(f, 0o600)
         return CERT, KEY, fingerprint(CERT.read_bytes())
+
+
+def _pair_ok() -> bool:
+    """The certificate and key exist, parse, and belong together (as the TLS server will load them)."""
+    import ssl
+    try:
+        ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(CERT, KEY)
+        fingerprint(CERT.read_bytes())
+    except (OSError, ValueError, ssl.SSLError):
+        return False
+    return True
 
 
 def fingerprint(pem: bytes) -> str:
