@@ -16,6 +16,8 @@ data class Pc(
     val hosts: List<String>, val port: Int, val token: String, val deviceId: String, val name: String,
     val fp: String, val last: String? = null,
 ) {
+    /** This pairing: the PC's certificate and the device id it gave this phone. */
+    val owner get() = "$fp/$deviceId"
     fun base(host: String) = "https://$host:$port"
     fun ws(host: String) = "wss://$host:$port"
 }
@@ -59,16 +61,19 @@ class Store(context: Context) {
 }
 
 /**
- * The inbox on disk: its items and the cursor (the newest id the PC has sent) in one file, so they can't
- * disagree after a crash. Each save writes a temp file of its own and renames it over the old one; saves are
- * serialized, so the last one to start is the one that stays.
+ * The inbox on disk: its items, the cursor (the newest id the PC has sent) and the pairing they came from
+ * ([Pc.owner]) in one file, so they can't disagree after a crash, and a new pairing never opens with the old
+ * PC's inbox even if the app died before clearing it. Each save writes a temp file of its own and renames it
+ * over the old one; saves are serialized, so the last one to start is the one that stays.
  */
 class InboxDisk(private val file: File) {
     data class Saved(val last: Long, val items: List<InboxItem>)
 
+    /** What was saved for [owner]; empty when the file belongs to another pairing, or there is none. */
     @Synchronized
-    fun load(): Saved = try {
+    fun load(owner: String): Saved = try {
         val o = JSONObject(file.readText())
+        if (o.optString("owner") != owner) throw IllegalStateException("another pairing's inbox")
         val a = o.optJSONArray("items") ?: JSONArray()
         Saved(o.optLong("last", 0), (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(InboxItem::from) })
     } catch (_: Exception) {
@@ -76,10 +81,10 @@ class InboxDisk(private val file: File) {
     }
 
     @Synchronized
-    fun save(last: Long, items: List<InboxItem>) {
+    fun save(owner: String, last: Long, items: List<InboxItem>) {
         val a = JSONArray()
         items.take(Store.KEEP).forEach { a.put(it.toJson()) }
-        val text = JSONObject().put("last", last).put("items", a).toString()
+        val text = JSONObject().put("owner", owner).put("last", last).put("items", a).toString()
         file.parentFile?.mkdirs()
         val tmp = File.createTempFile(file.name, ".tmp", file.parentFile)
         try {

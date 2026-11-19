@@ -100,10 +100,11 @@ object Remote {
     private var ws: WebSocket? = null
     private var connected = false
     @Volatile private var host: String? = null      // the address the open connection uses
-    private var gen = 0                             // bumped on pair/unpair: the old PC's connection is dropped
+    @Volatile private var gen = 0                   // bumped on pair/unpair: the old PC's connection is dropped
     private var loop: Job? = null
     private val wake = Channel<Unit>(Channel.CONFLATED)
-    private val saves = Channel<Unit>(Channel.CONFLATED)
+    private class Snapshot(val owner: String, val last: Long, val items: List<InboxItem>)
+    private val saves = Channel<Snapshot>(Channel.CONFLATED)
     @Volatile private var inboxLast = 0L             // the newest inbox id the PC has sent; saved with the items
     private val users = Users(scope, GRACE_MS, onLast = ::leftScreen, onIdle = ::idle)
     private val pending = LinkedHashMap<String, Pair<String, Long>>()     // id -> (message, when queued)
@@ -119,7 +120,7 @@ object Remote {
         app = application
         store = Store(application)
         _readAloud.value = store.readAloud
-        val saved = store.inbox.load()
+        val saved = store.inbox.load(store.pc?.owner.orEmpty())
         inboxLast = saved.last
         _inbox.value = saved.items.sortedByDescending { it.id }
         _unread.value = _inbox.value.count { it.id > store.inboxSeen }
@@ -129,8 +130,9 @@ object Remote {
             override fun onAvailable(network: Network) { wake.trySend(Unit) }
             override fun onLost(network: Network) { wake.trySend(Unit) }
         })
-        // One writer, always the newest state: an older save can't land after a newer one.
-        scope.launch(Dispatchers.IO) { for (x in saves) store.inbox.save(inboxLast, _inbox.value) }
+        // One writer, always the newest state: an older save can't land after a newer one. Each save is taken
+        // whole on the main thread, so items, cursor and pairing always belong together.
+        scope.launch(Dispatchers.IO) { for (x in saves) store.inbox.save(x.owner, x.last, x.items) }
     }
 
     // --- lifecycle: connected while something shows ----------------------------------------------
@@ -464,7 +466,11 @@ object Remote {
         _inbox.value = all
         if (item.id > inboxLast) inboxLast = item.id
         if (item.id > store.inboxSeen) _unread.value = all.count { it.id > store.inboxSeen }
-        saves.trySend(Unit)
+        saveInbox()
+    }
+
+    private fun saveInbox() {
+        saves.trySend(Snapshot(store.pc?.owner.orEmpty(), inboxLast, _inbox.value))
     }
 
     fun inboxSeen() {
@@ -476,7 +482,7 @@ object Remote {
     fun clearInbox() {
         _inbox.value = emptyList()
         _unread.value = 0
-        saves.trySend(Unit)
+        saveInbox()
         scope.launch(Dispatchers.IO) { File(app.cacheDir, "inbox").deleteRecursively() }
     }
 
@@ -611,25 +617,32 @@ object Remote {
             if (last.startsWith(REFUSED)) "error: Auren isn't serving on the PC" else "error: can't reach the PC"
         }
 
-    /** An inbox item's file, downloaded once into the cache. */
+    /**
+     * An inbox item's file, downloaded once into the cache. Files are kept per pairing (item ids restart with
+     * another PC), and one still coming when the phone is paired again is thrown away, not cached.
+     */
     suspend fun download(item: InboxItem): File? = withContext(Dispatchers.IO) {
+        val g = gen
         val pc = store.pc ?: return@withContext null
         val f = item.file ?: return@withContext null
-        val dir = File(app.cacheDir, "inbox").apply { mkdirs() }
+        val dir = File(app.cacheDir, "inbox/${pc.owner.replace(Regex("[^\\w.-]"), "_")}").apply { mkdirs() }
         val out = File(dir, "${item.id}-${f.name.replace(Regex("[^\\w.-]"), "_")}")
         if (out.exists() && out.length() == f.size) return@withContext out
         for (h in routes(pc)) {
             val req = Request.Builder().url("${pc.base(h)}/v1/inbox/${item.id}/file")
                 .header("Authorization", "Bearer ${pc.token}").build()
+            val tmp = File.createTempFile(out.name, ".part", dir)
             try {
                 client(pc.fp).newCall(req).execute().use { r ->
                     if (!r.isSuccessful) return@withContext null
-                    val tmp = File.createTempFile(out.name, ".part", dir)
                     r.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } } ?: return@withContext null
-                    if (!tmp.renameTo(out)) tmp.delete()
+                    if (g != gen) return@withContext null
+                    tmp.renameTo(out)
                     return@withContext out.takeIf { it.exists() }
                 }
             } catch (_: IOException) {
+            } finally {
+                tmp.delete()                    // gone already once renamed; otherwise no half file stays behind
             }
         }
         null
