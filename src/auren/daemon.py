@@ -94,7 +94,8 @@ class Turn:
 class Daemon:
     _open: tuple[Turn, ...] = ()          # admitted turns, oldest first: while one is open, anyone else gets "busy"
     _hearing: Turn | None = None          # the turn the current listen belongs to
-    _finishing = None                     # the listen whose transcript release() is waiting for (a Stop drops it)
+    _finishing: dict = {}                 # listens whose transcript release() waits for -> their turns (a Stop
+                                          # empties it; always replaced, never changed in place)
     phone = None                          # the phone server's hub (phone_server.Hub), when it runs
     phone_requests = None                 # what phones asked (phone_server.Requests): kept across its restarts
     _phone_lock: asyncio.Lock | None = None
@@ -395,7 +396,8 @@ class Daemon:
 
     async def phone_gone(self, device: str) -> None:
         """A phone disconnected: a listen it was feeding can't go on (nor the transcript it was waiting for)."""
-        if (self.listening or self._finishing) and self._hears(device):
+        finishing = any(t.origin == "phone" and t.device == device for t in self._finishing.values())
+        if (self.listening and self._hears(device)) or finishing:
             await self.cancel()
 
     async def phone_paired_changed(self) -> None:
@@ -613,11 +615,12 @@ class Daemon:
             self.set_state("idle", "key tap ignored")
             return "too short"
         t = time.perf_counter()
-        self._finishing = session
+        self._finishing = {**self._finishing, session: turn}     # another press may finish alongside it
         try:
             text = await session.finish()
         finally:
-            stopped, self._finishing = self._finishing is not session, None
+            stopped = session not in self._finishing
+            self._finishing = {s: t for s, t in self._finishing.items() if s is not session}
         if stopped:                          # Stop came while the transcript was coming: nothing is sent
             self._close(turn)
             return "cancelled"
@@ -639,11 +642,13 @@ class Daemon:
 
     async def cancel(self) -> None:
         if self.listening or self._finishing:
-            session, self.listening, self._finishing = self.listening, None, None
+            # The turn is the one heard now: a newer press while this awaits isn't this Stop's to close.
+            session, hearing = self.listening, self._hearing
+            self.listening, self._finishing = None, {}
             if session:
                 await session.cancel()
-            if self._hearing:
-                self._close(self._hearing)      # an answer in progress closes its own turn when it ends
+            if hearing:
+                self._close(hearing)            # an answer in progress closes its own turn when it ends
         self.level.set(0)
         if self.state in ("thinking", "working"):     # an answer in progress: stop the brain and its tools
             self.tools.cancel(SESSION)

@@ -628,6 +628,53 @@ def test_a_stop_while_the_transcript_comes_wins(tmp_path, monkeypatch):
     assert d.brain.asked == [] and d.history == []     # nothing was sent
 
 
+def test_overlapping_desk_releases_each_send_their_words(tmp_path, monkeypatch):
+    """A second press and release while the first transcript is still coming: both are sent, and a Stop
+    afterwards drops only what is still coming."""
+    class SlowEars(_Ears):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.go, self.heard = asyncio.Event(), f"words {len(made)}"
+            made.append(self)
+
+        async def finish(self, timeout=8):
+            await self.go.wait()
+            return self.heard
+
+    made: list = []
+    monkeypatch.setattr(daemon, "MIN_HOLD", 0)
+
+    async def scenario(d):
+        assert await d.command("start") == "listening"
+        first = asyncio.create_task(d.command("stop"))
+        await asyncio.sleep(0)
+        assert await d.command("start") == "listening"
+        second = asyncio.create_task(d.command("stop"))
+        await asyncio.sleep(0)
+        made[0].go.set()
+        assert await first == "heard: words 0"
+        made[1].go.set()
+        assert await second == "heard: words 1"
+        assert await d.command("start") == "listening"
+        third = asyncio.create_task(d.command("stop"))
+        await asyncio.sleep(0)
+        await d.cancel()
+        made[2].go.set()
+        assert await third == "cancelled"
+
+    monkeypatch.setattr(daemon, "Listening", SlowEars)
+    monkeypatch.setattr(daemon, "QUIET_TICK", 0.01)
+
+    async def go():
+        d = _Harness(tmp_path)
+        d.busy, d.loop = asyncio.Lock(), asyncio.get_running_loop()
+        await scenario(d)
+        await _until(lambda: len(d.said) == 2)
+        return d
+
+    assert asyncio.run(go()).brain.asked == ["words 0", "words 1"]
+
+
 def test_one_phone_at_a_time_and_only_it_stops_its_listen(tmp_path, monkeypatch):
     async def scenario(d):
         assert await d.phone_talk(Turn("phone", "a1", "phone-a"), asyncio.Queue()) == "ok"
