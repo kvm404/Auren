@@ -273,7 +273,7 @@ def check(notify: bool = False) -> dict:
         info = installed()
         if not info.get("commit"):
             return _write(state="unknown", checked_at=time.time(),
-                          message="This install doesn't know its version: run install.sh from a git checkout once")
+                          message=f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
         try:
             repo, _, latest, release = _fetch(info)
             have = info["commit"]
@@ -486,8 +486,9 @@ def run_package() -> int:
 
 
 def _suggest_package() -> None:
-    """Once, after an install.sh install updated itself: there's a package now."""
-    if SUGGESTED.exists():
+    """Once, after an install.sh install updated itself: there's a package now. Only on Omarchy (a Mac
+    keeps updating itself), and only once the AUR has the package, so yay can find it."""
+    if sys.platform == "darwin" or SUGGESTED.exists() or not _aur_version():
         return
     notice.notify("Auren is now an Arch package",
                   f"Switch with yay -S {config.PACKAGE_NAME}, then run /usr/bin/auren setup: your settings, talk "
@@ -622,7 +623,7 @@ def _update() -> tuple[str, bool]:
     info = installed()
     before = info.get("commit", "")
     if not before:                             # not knowing what's there, don't replace it
-        raise UpdateError("This install doesn't know its version: run install.sh from a git checkout once")
+        raise UpdateError(f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
     _step("Looking for the newest version…")
     repo, dev, target, release = _fetch(info)
     if _contains(repo, before, target):

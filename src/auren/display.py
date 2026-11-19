@@ -39,8 +39,8 @@ def manager_env() -> dict[str, str]:
 
 def wait(timeout: float = WAIT, sleep=time.sleep) -> int | None:
     """None when the display is there (or this isn't a systemd service); else the code to exit with."""
-    if os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("INVOCATION_ID"):
-        return None                     # outside systemd, the program itself says what's missing
+    if sys.platform == "darwin" or os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("INVOCATION_ID"):
+        return None                     # outside systemd (or on a Mac), the program itself says what's missing
     deadline = time.monotonic() + timeout
     while True:
         if manager_env().get("WAYLAND_DISPLAY"):

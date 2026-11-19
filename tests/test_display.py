@@ -12,6 +12,13 @@ def test_outside_systemd_or_with_a_display_it_carries_on(monkeypatch):
     assert display.wait() is None
 
 
+def test_a_mac_never_waits_for_a_wayland_display(monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "x")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(display.sys, "platform", "darwin")
+    assert display.wait() is None
+
+
 def test_a_display_that_arrives_late_restarts_the_service(monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "x")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)

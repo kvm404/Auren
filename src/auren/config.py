@@ -122,7 +122,8 @@ def _packaged() -> bool:
 
 
 PACKAGED = _packaged()                         # running from the Arch package, not an install.sh install
-REINSTALL = f"yay -S {PACKAGE_NAME}" if PACKAGED else "./install.sh"   # what puts missing program files back
+REINSTALL = (f"yay -S {PACKAGE_NAME}" if PACKAGED              # what puts missing program files back
+             else "./install-macos.sh" if MAC else "./install.sh")
 
 
 def secret(name: str) -> str | None:

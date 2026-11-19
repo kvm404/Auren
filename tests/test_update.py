@@ -51,6 +51,7 @@ def env(tmp_path, monkeypatch):
                        "SUGGESTED": tmp_path / "state" / "package-suggested",
                        "STATE_FILE": tmp_path / "run" / "state.json"}.items():
         monkeypatch.setattr(update, name, path)
+    monkeypatch.setattr(update, "_aur_version", lambda: "")     # no network in tests: the AUR doesn't answer
     monkeypatch.setenv("INSTALLS", str(tmp_path / "installs"))
     monkeypatch.setenv("INSTALL_INFO", str(info))
     calls, shell = [], []
@@ -535,13 +536,26 @@ def test_the_package_update_stops_auren_runs_yay_and_starts_it_again(package):
     assert package.shell == [True]                              # the bar plugin changed
 
 
-def test_after_a_self_update_the_package_is_suggested_once(env):
+def test_after_a_self_update_the_package_is_suggested_once(env, monkeypatch):
+    monkeypatch.setattr(update, "_aur_version", lambda: "0.1.1-1")
     env.install_info(env.first)
     commit(env.remote, "a.py")
     assert update.run() == 0
     commit(env.remote, "b.py")
     assert update.run() == 0
     assert len([n for n in notice.shown if "Arch package" in " ".join(n)]) == 1
+
+
+def test_the_package_isnt_suggested_before_the_aur_has_it_or_on_a_mac(env, monkeypatch):
+    env.install_info(env.first)
+    commit(env.remote, "a.py")
+    assert update.run() == 0                                    # the AUR has no auren yet
+    assert not [n for n in notice.shown if "Arch package" in " ".join(n)]
+    assert not update.SUGGESTED.exists()                        # so it can still say so once it does
+    monkeypatch.setattr(update, "_aur_version", lambda: "0.1.1-1")
+    monkeypatch.setattr(update.sys, "platform", "darwin")
+    update._suggest_package()
+    assert not [n for n in notice.shown if "Arch package" in " ".join(n)]
 
 
 def test_a_release_not_on_the_aur_yet_isnt_offered(package, monkeypatch):

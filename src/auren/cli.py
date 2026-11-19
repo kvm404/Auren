@@ -135,12 +135,18 @@ def main() -> None:
         from . import config, setup
         if config.PACKAGED and not setup.done():
             return setup.main([])
-        if not config.PACKAGED and (config.PACKAGE_BIN / "auren").exists():    # an install.sh copy hides it
+        if sys.platform != "darwin" and not config.PACKAGED and (config.PACKAGE_BIN / "auren").exists():
+            # an install.sh copy hides the package's
             print(f"This is the install.sh copy of Auren. To use the package instead, run: "
                   f"{config.PACKAGE_BIN / 'auren'} setup\n")
         p.print_help()
         return 0
     if sys.argv[1] == "setup":               # its own flags and --help
+        if sys.platform == "darwin":         # the Mac's setup is Auren.app's setup window
+            print("On macOS, Auren sets up in its setup window: opening it (also: open Auren.app, "
+                  "or Set up Auren… in the menu bar)")
+            from .mac.app import open_app
+            return open_app()
         from .setup import main as setup_main
         return setup_main(sys.argv[2:])
     if sys.argv[1] == "with-display":        # the mascot's service (display.py)
@@ -179,7 +185,7 @@ def main() -> None:
         return daemon_main(speak=not a.quiet)
     if a.cmd in ("mascot", "permissions", "service", "open", "app"):
         if sys.platform != "darwin":
-            print(f"auren {a.cmd} is for macOS; on Omarchy the mascot, permissions and services are set up by install.sh")
+            print(f"auren {a.cmd} is for macOS; on Omarchy the mascot, permissions and services are set up by auren setup")
             return 2
         if a.cmd == "mascot":
             from .mac.mascot import main as mascot_main
