@@ -260,6 +260,47 @@ def test_voice_knows_only_its_four_voices(phonon):
     assert v.name == "Trevor"
 
 
+def test_a_voice_missing_from_the_cache_counts_as_not_downloaded(phonon, monkeypatch):
+    """An interrupted download (the model but not every voice): fetch them now, not online at the first reply."""
+    from auren import voice
+    monkeypatch.setattr(_FakePhonon, "known", {"Everly", "Hugh", "Trevor"})
+    with pytest.raises(voice.VoiceModelMissing, match="Juniper"):
+        voice.Voice()
+
+
+def test_a_failure_while_speaking_stops_the_player_and_counts_as_interrupted(phonon, monkeypatch):
+    from types import SimpleNamespace
+
+    from auren import voice
+    killed = []
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: SimpleNamespace(
+        stdin=phonon, wait=lambda: 0, kill=lambda: killed.append(1)))
+    v = voice.Voice()
+
+    @contextlib.contextmanager
+    def offline(text, voice):
+        raise OSError("couldn't reach the Hub")
+        yield
+
+    v.tts.stream = offline
+    assert v.speak("Hello.") is False and killed == [1] and v._player is None
+    v.tts.stream = _FakePhonon().stream
+    assert v.speak("Hello.") is True                    # the next reply speaks again
+
+
+def test_an_interrupted_reply_goes_back_to_idle():
+    """Voice.speak returning False (stopped, or it failed): the daemon doesn't stay "speaking"."""
+    import asyncio
+    from types import SimpleNamespace
+
+    states = []
+    d = SimpleNamespace(voice_on=True, voice=SimpleNamespace(speak=lambda text: False), state="idle")
+    d.set_state = lambda state, detail="", **k: setattr(d, "state", state) or states.append((state, detail))
+    d.idle = lambda detail="": d.set_state("idle", detail)
+    asyncio.run(daemon.Daemon.say(d, "Hello."))
+    assert states == [("speaking", ""), ("idle", "interrupted")]
+
+
 class _FakeVoice:
     name = "Everly"
 
@@ -495,6 +536,7 @@ class _Starting:
     settings = {"voiceName": "Hugh", "speed": 1.0, "volume": 1.0, "pause": 0.0}
     voice = None
     vocab: list = []
+    _voice_task = _voice_wake = None
 
     def __init__(self):
         import types
@@ -516,7 +558,7 @@ class _Starting:
 
 def _starting():
     from auren.daemon import Daemon
-    for name in ("warm_up", "_load_voice", "_fetch_voice"):
+    for name in ("warm_up", "_load_voice", "_fetch_voice", "_start_fetch", "_voice_load", "command"):
         setattr(_Starting, name, getattr(Daemon, name))
     return _Starting()
 
@@ -558,19 +600,41 @@ def test_after_an_update_the_daemon_downloads_the_new_voice_itself(monkeypatch):
     assert "Downloading Auren's new voice" in d.notes[0]
 
 
-def test_a_failed_voice_download_leaves_replies_text_only(monkeypatch):
-    import asyncio
-
+def _missing_until(monkeypatch, fetched, works_after):
+    """voice.Voice raises VoiceModelMissing until download_model has run `works_after` times (it fails before)."""
     from auren import voice
 
-    def missing(**kwargs):
-        raise voice.VoiceModelMissing("not downloaded")
+    class FakeVoice:
+        name = "Everly"
 
-    def offline(log=print):
-        raise voice.VoiceModelMissing("couldn't download the voice model: offline")
+        def __init__(self, **kwargs):
+            if len(fetched) < works_after:
+                raise voice.VoiceModelMissing("not downloaded")
 
-    monkeypatch.setattr(voice, "Voice", missing)
-    monkeypatch.setattr(voice, "download_model", offline)
+        def tune(self, values):
+            pass
+
+        def set_voice(self, name):
+            self.name = name
+
+    def download(log=print):
+        fetched.append(1)
+        if len(fetched) < works_after:
+            raise voice.VoiceModelMissing("couldn't download the voice model: offline")
+        return "ok"
+
+    monkeypatch.setattr(voice, "Voice", FakeVoice)
+    monkeypatch.setattr(voice, "download_model", download)
+
+
+def test_a_failed_voice_download_keeps_trying_until_it_works(monkeypatch):
+    """The session started before the Wi-Fi: the first downloads fail, a later one works, and it speaks."""
+    import asyncio
+
+    from auren import daemon
+    monkeypatch.setattr(daemon, "VOICE_RETRY", (0.01,))
+    fetched = []
+    _missing_until(monkeypatch, fetched, works_after=3)
 
     async def go():
         d = _starting()
@@ -579,7 +643,90 @@ def test_a_failed_voice_download_leaves_replies_text_only(monkeypatch):
         return d
 
     d = asyncio.run(go())
-    assert d.voice is None and "auren voice-model" in d.notes[-1]
+    assert len(fetched) == 3 and d.voice.name == "Hugh" and d.detail == ""
+    assert len(d.notes) == 2 and "keeps trying" in d.notes[1]       # told once, not on every failure
+
+
+def test_voice_load_wakes_the_one_download_task_instead_of_starting_another(monkeypatch):
+    """`auren voice-model` filled the cache while the daemon waits to try again: it speaks at once."""
+    import asyncio
+
+    from auren import daemon
+    monkeypatch.setattr(daemon, "VOICE_RETRY", (3600,))
+    fetched = []
+    _missing_until(monkeypatch, fetched, works_after=99)
+
+    async def go():
+        d = _starting()
+        await d.warm_up()
+        task = d._voice_task
+        while not fetched:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)                    # now waiting an hour to try again
+        fetched.extend([1] * 98)                     # the cache is complete now
+        assert await d.command("voice-load") == "loading the voice"
+        assert await d.command("voice-load") == "loading the voice" and d._voice_task is task
+        await asyncio.wait_for(task, 1)
+        return d
+
+    d = asyncio.run(go())
+    assert len(fetched) == 99 and d.voice is not None           # loaded from the cache, not downloaded again
+    assert asyncio.run(d.command("voice-load")) == "voice loaded"
+
+
+def test_voice_load_loads_a_voice_that_failed_at_start_from_the_cache(monkeypatch):
+    import asyncio
+
+    fetched = [1]
+    _missing_until(monkeypatch, fetched, works_after=1)
+
+    async def go():
+        d = _starting()
+        assert await d.command("voice-load") == "loading the voice"
+        await d._voice_task
+        return d
+
+    d = asyncio.run(go())
+    assert d.voice is not None and fetched == [1] and d.notes == []   # nothing downloaded, nothing announced
+    quiet = _starting()
+    quiet.speak_enabled = False
+    assert asyncio.run(quiet.command("voice-load")).startswith("voice off")
+
+
+def test_the_voice_download_retries_can_be_cancelled(monkeypatch):
+    import asyncio
+
+    from auren import daemon
+    monkeypatch.setattr(daemon, "VOICE_RETRY", (3600,))
+    fetched = []
+    _missing_until(monkeypatch, fetched, works_after=99)
+
+    async def go():
+        d = _starting()
+        await d.warm_up()
+        while not fetched:
+            await asyncio.sleep(0.01)
+        d._voice_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await d._voice_task
+        return d
+
+    assert asyncio.run(go()).voice is None
+
+
+def test_auren_voice_model_tells_a_running_daemon_to_speak(monkeypatch, capsys):
+    from auren import cli, ctl, voice
+    sent = []
+    monkeypatch.setattr(voice, "download_model", lambda log=print: "Phonon 31m")
+    monkeypatch.setattr(ctl, "send", lambda line, timeout=30: sent.append(line) or "loading the voice")
+    monkeypatch.setattr("sys.argv", ["auren", "voice-model"])
+    assert cli.main() == 0 and sent == ["voice-load"] and "speaks with it" in capsys.readouterr().out
+
+    def off(line, timeout=30):
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(ctl, "send", off)                       # no daemon: nothing to tell
+    assert cli.main() == 0
 
 
 def test_the_voice_cache_follows_hugging_face_s_variables(monkeypatch, tmp_path):
@@ -614,6 +761,19 @@ def test_the_old_model_folder_goes_when_it_was_all_there_was(monkeypatch, tmp_pa
     old.mkdir(parents=True)
     monkeypatch.setattr(voice, "old_model", lambda: old)
     assert voice.retire_old_model(lambda line: None) and not (tmp_path / "models").exists()
+
+
+def test_the_old_model_stays_when_its_models_folder_is_shared(monkeypatch, tmp_path):
+    """models/ links to another program's folder: its supertonic-3 isn't Auren's to delete."""
+    from auren import voice
+    shared = tmp_path / "shared"
+    (shared / "supertonic-3").mkdir(parents=True)
+    (tmp_path / "auren").mkdir()
+    (tmp_path / "auren/models").symlink_to(shared)
+    monkeypatch.setattr(voice, "old_model", lambda: tmp_path / "auren/models/supertonic-3")
+    said = []
+    assert voice.retire_old_model(said.append) is False
+    assert (shared / "supertonic-3").is_dir() and said == []
 
 
 def test_a_download_deletes_the_old_model_only_when_it_worked(monkeypatch, tmp_path):

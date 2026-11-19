@@ -40,6 +40,9 @@ def _target(name: str) -> str:
     return f"{_domain()}/{LABELS[name]}"
 
 
+HF_VARS = ("HF_HOME", "HF_HUB_CACHE", "XDG_CACHE_HOME")      # where the voice model is (voice.hf_cache)
+
+
 def plist(name: str, path: str | None = None) -> dict:
     """The launch agent for `auren <name>`, run from the installed venv."""
     home = str(Path.home())
@@ -60,7 +63,9 @@ def plist(name: str, path: str | None = None) -> dict:
         "ProcessType": "Interactive",          # the mic and the voice want low latency
         "EnvironmentVariables": {"PATH": ":".join(seen), "PYTHONUNBUFFERED": "1",
                                  "AUREN_PYTHON": str(DATA_HOME / "venv/bin/python"),
-                                 **({"LANG": os.environ["LANG"]} if os.environ.get("LANG") else {"LANG": "en_US.UTF-8"})},
+                                 **({"LANG": os.environ["LANG"]} if os.environ.get("LANG") else {"LANG": "en_US.UTF-8"}),
+                                 # The cache `auren voice-model` downloaded the voice into, else it downloads again
+                                 **{v: os.environ[v] for v in HF_VARS if os.environ.get(v, "").startswith("/")}},
         "StandardOutPath": str(STATE_DIR / f"{name}.out.log"),
         "StandardErrorPath": str(STATE_DIR / f"{name}.out.log"),
     }

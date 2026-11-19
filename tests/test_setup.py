@@ -223,6 +223,18 @@ def test_custom_xdg_folders_reach_the_package_s_services(home, monkeypatch):
     assert not drop.parent.exists()
 
 
+def test_the_hugging_face_cache_set_in_the_shell_reaches_the_services(home, monkeypatch):
+    """The voice downloaded into HF_HOME or HF_HUB_CACHE: the daemon must look there, not download it again."""
+    monkeypatch.setenv("HF_HOME", "/big/hf")
+    monkeypatch.setenv("HF_HUB_CACHE", "relative/hub")          # not a path systemd can use: left out
+    setup.xdg_drop_ins()
+    drop = (home.cfg / "systemd/user/auren.service.d/auren-xdg.conf").read_text()
+    assert "Environment=HF_HOME=/big/hf" in drop and "HF_HUB_CACHE" not in drop
+    monkeypatch.setenv("HF_HUB_CACHE", "/big/hub")
+    setup.xdg_drop_ins()
+    assert "Environment=HF_HUB_CACHE=/big/hub" in (home.cfg / "systemd/user/auren.service.d/auren-xdg.conf").read_text()
+
+
 def test_a_custom_data_folder_moves_where_the_mascot_starts(home, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", "/elsewhere/data")
     setup.xdg_drop_ins()

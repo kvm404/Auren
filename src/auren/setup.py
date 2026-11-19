@@ -576,8 +576,9 @@ def _unit_quote(text: str) -> str:
 
 
 def xdg_drop_ins() -> None:
-    """Custom XDG folders reach the package's services through a drop-in (install.sh writes them into its
-    own units instead): the user manager may not have them. A custom XDG_DATA_HOME also moves where the
+    """Custom XDG folders and a Hugging Face cache set in the shell (HF_HOME, HF_HUB_CACHE: where the voice
+    was downloaded) reach the package's services through a drop-in (install.sh writes them into its own
+    units instead): the user manager may not have them. A custom XDG_DATA_HOME also moves where the
     mascot starts from, since the bar plugin calls it by that path (qs matches the path as given)."""
     env, data = [], None
     home = Path.home()
@@ -588,13 +589,17 @@ def xdg_drop_ins() -> None:
             env.append(f"Environment={_unit_quote(f'{var}={value}')}")
             if var == "XDG_DATA_HOME":
                 data = value
+    for var in ("HF_HOME", "HF_HUB_CACHE"):        # else the daemon downloads the voice again, elsewhere
+        value = os.environ.get(var, "")
+        if value.startswith("/"):
+            env.append(f"Environment={_unit_quote(f'{var}={value}')}")
     for unit in UNITS:
         path = user_units() / f"{unit}.service.d" / DROP_IN
         lines = list(env)
         if unit == "auren-mascot" and data:
             lines += ["ExecStart=", "ExecStart=" + MASCOT_START.format(_unit_quote(data + "/auren/mascot"))]
         if lines:
-            _write_atomic(path, "# Written by auren setup: your custom XDG folders\n[Service]\n" + "\n".join(lines) + "\n")
+            _write_atomic(path, "# Written by auren setup: your custom XDG and Hugging Face folders\n[Service]\n" + "\n".join(lines) + "\n")
         elif path.exists():
             path.unlink()
             with_parent = path.parent

@@ -11,6 +11,7 @@
     auren-ctl forget        # a fresh conversation (also by voice: "start fresh", "forget everything")
     auren-ctl voice on|off|toggle     # spoken replies (off: replies only in the mascot's bubble)
     auren-ctl voice-name Everly|Juniper|Hugh|Trevor [sample] # which voice (says the sample, or a short default one)
+    auren-ctl voice-load              # speak now if the voice wasn't there yet (auren voice-model sends this)
     auren-ctl tts speed 1.1 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
@@ -39,6 +40,7 @@ import asyncio
 import contextlib
 import fcntl
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -69,6 +71,9 @@ MAX_LISTEN = 120         # seconds; listening stops by itself (the speech servic
 REMIND_AFTER = 3         # seconds without new words: "Press Super+A to send"
 SEND_AFTER = 12          # seconds without new words: send what was heard
 QUIET_TICK = 0.2         # how often a listen checks for quiet
+# Seconds between tries to download the voice when it failed (offline: a laptop's Wi-Fi isn't up yet); the
+# last one repeats until it works.
+VOICE_RETRY = (30, 60, 120, 300, 600)
 ALREADY_SENT = 2         # seconds after a send by itself (of something heard) in which the talk key does nothing
 # Said on its own, these start a fresh conversation instead of going to the brain.
 FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|a new conversation)|new conversation|"
@@ -106,6 +111,8 @@ class Daemon:
     _sent_by_itself = float("-inf")       # when a listen last ended without the key (quiet), time.monotonic()
     _reminding = False                    # the "Press Super+A to send" reminder is up (state.json `remind`)
     _quiet_watch: asyncio.Task | None = None   # the current listen's _watch_quiet (kept: the loop holds tasks weakly)
+    _voice_task: asyncio.Task | None = None    # _fetch_voice, while the voice is missing (one at a time)
+    _voice_wake: asyncio.Event | None = None   # set by voice-load: try the cache now, not after the wait
 
     def __init__(self, speak: bool = True):
         self.settings = load_settings()
@@ -239,7 +246,7 @@ class Daemon:
                 # An update that changed the voice model (Supertonic to Phonon in 0.1.7): a package update (yay)
                 # runs no setup, so the daemon fetches the new model itself, in the background. Replies show as
                 # text until it's ready.
-                self._voice_task = asyncio.create_task(self._fetch_voice())
+                self._start_fetch()
                 problems.append("downloading the voice: replies are text until it's ready")
             except Exception as e:  # noqa: BLE001 - run text-only rather than not at all
                 log.error("voice didn't load, replies are text only: %s", e)
@@ -264,23 +271,55 @@ class Daemon:
         from .voice import retire_old_model
         await asyncio.to_thread(retire_old_model, log.info)   # an update from Supertonic: its 380 MB go
 
-    async def _fetch_voice(self) -> None:
-        """Download the voice model and its voices, then speak with them (replies were text until then)."""
-        from .voice import download_model
-        log.info("the voice model isn't downloaded: downloading it now (about 100 MB)")
-        self._notify("Auren", "Downloading Auren's new voice (about 100 MB). Replies show as text until it's ready.",
-                     always=True)
-        try:
-            await asyncio.to_thread(download_model, log.info)
-            await self._load_voice()
-        except Exception as e:  # noqa: BLE001 - offline, the Hub down: text only, as before
-            log.error("couldn't download the voice, replies are text only: %s", e)
-            self._notify("Auren", "Couldn't download Auren's voice: replies stay text only. Retry: auren voice-model",
+    def _start_fetch(self, cached: bool = False) -> None:
+        self._voice_wake = asyncio.Event()
+        if cached:
+            self._voice_wake.set()
+        self._voice_task = asyncio.create_task(self._fetch_voice(announce=not cached))
+
+    async def _fetch_voice(self, announce: bool = True) -> None:
+        """Download the voice model and its voices, then speak with them (replies were text until then).
+        While that fails it keeps trying (VOICE_RETRY); a voice-load (`auren voice-model` filled the cache)
+        tries the cache at once."""
+        from .voice import VoiceModelMissing, download_model
+        if announce:
+            log.info("the voice model isn't downloaded: downloading it now (about 100 MB)")
+            self._notify("Auren", "Downloading Auren's new voice (about 100 MB). Replies show as text until it's ready.",
                          always=True)
-            return
+        for attempt in itertools.count():
+            try:
+                if self._voice_wake.is_set():
+                    self._voice_wake.clear()
+                    with contextlib.suppress(VoiceModelMissing):
+                        await self._load_voice()
+                if not self.voice:
+                    await asyncio.to_thread(download_model, log.info)
+                    await self._load_voice()
+                break
+            except Exception as e:  # noqa: BLE001 - offline, the Hub down: text only until it works
+                wait = VOICE_RETRY[min(attempt, len(VOICE_RETRY) - 1)]
+                log.error("couldn't download the voice, replies are text only; trying again in %d s: %s", wait, e)
+                if attempt == 0:
+                    self._notify("Auren", "Couldn't download Auren's voice yet (offline?). It keeps trying; replies "
+                                 "are text until then.", always=True)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._voice_wake.wait(), wait)
         log.info("voice downloaded and loaded")
         if self.state == "idle" and "downloading the voice" in self.detail:
             self.set_state("idle", "; ".join(p for p in self.detail.split("; ") if not p.startswith("downloading the voice")))
+
+    def _voice_load(self) -> str:
+        """voice-load: speak with the voice now if it wasn't there (`auren voice-model` just fetched it), not
+        after the next try or a restart."""
+        if self.voice:
+            return "voice loaded"
+        if not self.speak_enabled:
+            return "voice off (started with --quiet)"
+        if self._voice_task and not self._voice_task.done():
+            self._voice_wake.set()
+        else:
+            self._start_fetch(cached=True)
+        return "loading the voice"
 
     # --- commands -----------------------------------------------------------------------
 
@@ -314,6 +353,8 @@ class Daemon:
             return "voice " + name
         if cmd == "tts":
             return self._tts(arg.split())
+        if cmd == "voice-load":
+            return self._voice_load()
         if cmd == "cancel":
             await self.cancel()
             return "cancelled"

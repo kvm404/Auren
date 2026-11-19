@@ -65,6 +65,20 @@ def test_the_launch_agents_run_the_installed_auren_with_a_full_path(monkeypatch,
     assert p["StandardOutPath"].endswith("daemon.out.log")
 
 
+def test_the_launch_agents_look_for_the_voice_where_it_was_downloaded(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "DATA_HOME", tmp_path / "share")
+    monkeypatch.setattr(service, "STATE_DIR", tmp_path / "state")
+    for var in service.HF_VARS:
+        monkeypatch.delenv(var, raising=False)
+    assert not set(service.HF_VARS) & set(service.plist("daemon")["EnvironmentVariables"])
+    monkeypatch.setenv("HF_HOME", "/Volumes/big/hf")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/Volumes/big/cache")
+    monkeypatch.setenv("HF_HUB_CACHE", "relative")             # meaningless to launchd: left out
+    env = service.plist("daemon")["EnvironmentVariables"]
+    assert env["HF_HOME"] == "/Volumes/big/hf" and env["XDG_CACHE_HOME"] == "/Volumes/big/cache"
+    assert "HF_HUB_CACHE" not in env
+
+
 def test_update_s_systemctl_calls_are_answered_by_launchd(monkeypatch):
     calls = []
     monkeypatch.setattr(service, "running", lambda n: n == "daemon")

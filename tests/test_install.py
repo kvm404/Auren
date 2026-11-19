@@ -192,3 +192,22 @@ def test_the_pkgbuild_matches_the_project_version():
     pkgbuild = (ROOT / "packaging/arch/PKGBUILD").read_text()
     assert f"pkgver={version}\n" in pkgbuild
 
+
+
+def test_install_sh_gives_its_services_the_shell_s_hugging_face_cache(tmp_path):
+    """The voice is downloaded with the shell's variables: the units must look in the same cache."""
+    import subprocess
+    script = (ROOT / "install.sh").read_text()
+    block = script[script.index('env=""\n'):script.index("for unit in auren.service")]    # just the env lines
+    home = str(tmp_path)
+
+    def env_for(**extra):
+        run = subprocess.run(["bash", "-c", f'config="$HOME/.config"; data="$HOME/.local/share"\n{block}printf "$env"'],
+                             env={"HOME": home, "PATH": os.environ["PATH"], **extra}, capture_output=True, text=True, check=True)
+        return run.stdout
+
+    assert env_for() == ""
+    assert env_for(XDG_CACHE_HOME=home + "/.cache") == ""
+    assert env_for(XDG_CACHE_HOME="/big/cache", HF_HOME="/big/hf", HF_HUB_CACHE="/big/hub").splitlines() == [
+        "Environment=XDG_CACHE_HOME=/big/cache", "Environment=HF_HOME=/big/hf", "Environment=HF_HUB_CACHE=/big/hub"]
+    assert env_for(HF_HOME="relative") == ""

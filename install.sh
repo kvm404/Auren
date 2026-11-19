@@ -98,11 +98,16 @@ qs="$(command -v qs)"
 env=""
 [[ $config == "$HOME/.config" ]] || env+="Environment=XDG_CONFIG_HOME=$config\n"
 [[ $data == "$HOME/.local/share" ]] || env+="Environment=XDG_DATA_HOME=$data\n"
+# And the Hugging Face cache the voice is downloaded into, else the daemon downloads it again elsewhere.
+cache="$(realpath -m "${XDG_CACHE_HOME:-$HOME/.cache}")"
+[[ $cache == "$HOME/.cache" ]] || env+="Environment=XDG_CACHE_HOME=$cache\n"
+[[ ${HF_HOME:-} != /* ]] || env+="Environment=HF_HOME=$HF_HOME\n"
+[[ ${HF_HUB_CACHE:-} != /* ]] || env+="Environment=HF_HUB_CACHE=$HF_HUB_CACHE\n"
 for unit in auren.service auren-mascot.service; do
   sed -e "s#@AUREN@#$share/venv/bin/auren#g" -e "s#@MASCOT@#$share/mascot#g" -e "s#@QS@#$qs#g" \
     -e "s#^@ENV@\$#$env#" "$repo/systemd/$unit" >"$units/$unit"
 done
-[[ -z $env ]] || warn "custom XDG folders: the bar plugin uses your session's, so set them there too"
+[[ -z $env ]] || warn "custom XDG or Hugging Face folders: the bar plugin uses your session's, so set them there too"
 systemctl --user daemon-reload 2>/dev/null || true
 
 # ---- what's installed, for auren update ----------------------------------------------------------

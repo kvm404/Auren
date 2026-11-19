@@ -73,6 +73,16 @@ def _permissions() -> int:
     return 0
 
 
+def _voice_load() -> None:
+    """A running daemon that has no voice yet speaks with it now, without a restart."""
+    from .ctl import send
+    try:
+        if send("voice-load", timeout=5) == "loading the voice":
+            print("Auren speaks with it in a moment.")
+    except OSError:                 # not running (it loads the voice when it starts), or it didn't answer
+        pass
+
+
 def _app(args: list[str]) -> int:
     from .mac import app
     what = args[0] if args else "status"
@@ -225,6 +235,7 @@ def main() -> None:
         except VoiceModelMissing as e:
             print(f"{RED}{e}{END}")
             return 1
+        _voice_load()
         return 0
     # This process runs its own tool runtime and session: confirmations and turns are its own.
     from .config import RUNTIME_DIR

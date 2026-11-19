@@ -76,6 +76,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `voice on\|off\|toggle` | Spoken replies |
 | `voice-name <name> [sample]` | Voice: `Everly`, `Juniper`, `Hugh` or `Trevor`, any case (says the sample when idle). The same setting as a phone's `voice.set` |
 | `tts speed X volume X pause X` / `tts reset` | Voice tuning |
+| `voice-load` | Speak now if the voice wasn't there at start (it keeps retrying the download until then): `auren voice-model` sends it after a download |
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
 | `codex-effort minimal\|low\|medium\|high\|xhigh` | Codex's effort (from its next answer) |

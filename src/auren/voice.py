@@ -24,6 +24,7 @@ them from that cache without going online.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import shutil
@@ -39,6 +40,7 @@ from . import config
 from .config import MAC
 from .live import envelope
 
+log = logging.getLogger("auren")
 LATENCY = 0.12        # pw-cat's start-up and buffering, roughly
 
 # The voices Auren offers, by Phonon catalog name, the default first. To swap one, change it here and in
@@ -165,6 +167,8 @@ def retire_old_model(log: Callable[[str], None] = print) -> bool:
     old = old_model()
     if not (old.is_dir() or old.is_symlink()):
         return False
+    if old.parent.is_symlink():                 # models/ points at a shared folder: its supertonic-3 isn't Auren's
+        return False
     try:
         if old.is_symlink():
             old.unlink()
@@ -186,9 +190,10 @@ class Voice:
             self.tts = _load(offline=True)
         except Exception as e:  # noqa: BLE001
             raise VoiceModelMissing(f"the voice model isn't downloaded ({e}): run `auren voice-model`") from e
-        with _offline():                    # the voices on disk now; a missing one downloads when first used
-            for name in VOICES:
-                _register(self.tts, name)
+        with _offline():                    # the voices on disk now
+            lost = [name for name in VOICES if not _register(self.tts, name)]
+        if lost:                            # an interrupted download: fetch them now, not at the first reply
+            raise VoiceModelMissing(f"the voices {', '.join(lost)} aren't downloaded: run `auren voice-model`")
         self.name = DEFAULT_VOICE
         self.set_voice(voice)
         self.speed, self.volume, self.pause = speed, volume, pause
@@ -223,6 +228,13 @@ class Voice:
                 self._player.wait()
             except (BrokenPipeError, ValueError):
                 pass
+            except Exception as e:  # noqa: BLE001 - the model or the player failed: no speech, but no crash
+                log.error("couldn't speak: %s", e)
+                self._stop.set()            # counts as interrupted: the daemon goes back to idle
+                p = self._player
+                for step in (lambda: p.kill(), lambda: p.stdin.close(), lambda: p.wait()):   # nothing left playing
+                    with contextlib.suppress(Exception):
+                        step()
             finally:
                 self._player = None
                 self._timeline = []
