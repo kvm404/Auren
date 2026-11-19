@@ -34,6 +34,13 @@
 - With the brain on auto and only Codex installed, Codex answers. Before, Auren kept trying to start
   Claude Code, and every request ended without a reply. A brain that isn't installed is now said out
   loud as an error.
+- Two Codex turns at once (`auren ask` while the daemon answers) no longer swap replies: each run
+  writes its reply to a file of its own.
+- The brain's working folder must belong to you and be closed to others; one an older Auren left open
+  is closed up.
+- Risky shortcuts are recognized in any modifier order and under any modifier name (`shift+ctrl+q`
+  asks, like `ctrl+shift+q`). Shortcuts that delete for good or empty the Trash count as wiping, and
+  logging out as a system action, so they ask at every level but Full access.
 
 ## 0.1.5
 
