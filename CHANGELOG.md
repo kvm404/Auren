@@ -13,7 +13,8 @@
   phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same
   Phonon voices. The server listens only on the Tailscale address and private LAN addresses, over TLS
   pinned to the PC's own certificate; `[phone]` in `config.toml` turns it off, and `auren doctor`
-  checks it, the firewall included. Omarchy only for now. See [docs/phone.md](docs/phone.md).
+  checks it, the firewall included. Omarchy only for now. The app comes with each release, as
+  `auren-phone-X.Y.Z.apk`. See [docs/phone.md](docs/phone.md).
 
 ### Changed
 

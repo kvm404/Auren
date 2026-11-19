@@ -96,6 +96,30 @@ fixes that: add the new account as a co-maintainer on the package's AUR page (or
 disown it to the new one), put a new key on the new account, replace the secret, and take the old
 key off the old account.
 
+### The phone app, once
+
+Publishing a release also runs the `android-release` workflow: it builds the phone app with Phonon's
+library, signs it, and attaches `auren-phone-X.Y.Z.apk` (and its `.sha256`) to the release. The app has
+Auren's version (from `pyproject.toml`), so each release's APK installs over the one before.
+
+Android only installs an update signed with the same key as the app already on the phone, so the key is
+made once and kept for good. **Back it up** somewhere outside this machine (a password manager): if it is
+lost, no later APK installs over the old one, and every user has to uninstall the app (losing its pairing
+and inbox) to get the new one. To set it up:
+
+1. Make the key (keytool comes with any JDK; it asks for a password, use the same one for both):
+
+   ```sh
+   keytool -genkeypair -v -keystore auren-release.jks -alias auren -keyalg RSA -keysize 4096 \
+     -validity 10000 -dname "CN=Auren"
+   ```
+
+2. Add four Actions secrets to the repository: `ANDROID_KEYSTORE` (the file, base64:
+   `base64 -w0 auren-release.jks | gh secret set ANDROID_KEYSTORE`), `ANDROID_KEYSTORE_PASSWORD`,
+   `ANDROID_KEY_ALIAS` (`auren`) and `ANDROID_KEY_PASSWORD`.
+3. Back up `auren-release.jks` and its password, then delete the file here.
+4. Publish a release (or run the `android-release` workflow for an existing tag).
+
 The PKGBUILD in this repository has `sha256sums=('SKIP')`; only the copy on the AUR carries the
 checksum, filled in by the workflow from the published tarball.
 

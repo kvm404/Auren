@@ -24,8 +24,11 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    ```
 
    `auren doctor` checks this and prints the commands for your own addresses.
-3. Build and install the app: `cd android && ./gradlew installDebug` (or copy
-   `android/app/build/outputs/apk/debug/app-debug.apk` to the phone).
+3. Install the app: download `auren-phone-X.Y.Z.apk` from the
+   [latest release](https://github.com/kvm404/Auren/releases/latest) on the phone and open it (Android asks
+   you to allow installing from your browser once). A newer release's APK installs over it, keeping the
+   pairing. To build it yourself: `cd android && ./gradlew installDebug` (a debug build can't update a
+   release one: uninstall that first), with `android/native/build-phonon.sh` first for the phone's own voice.
 4. On the PC, run `auren phone pair`. It prints a QR code, the same thing as text (`auren://pair?...`), and
    waits. Scan the QR with the app, or paste the text. The code works once, for 5 minutes, and 5 wrong
    codes cancel it. The QR also carries every address the server listens on and the fingerprint of the

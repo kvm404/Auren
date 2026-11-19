@@ -3,6 +3,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// The app has Auren's version (pyproject.toml), so the APK of a release is that release. versionCode grows
+// with it: 0.1.7 is 107, 1.2.3 is 10203.
+val aurenVersion: String = Regex("""(?m)^version = "(\d+\.\d+\.\d+)"$""")
+    .find(rootProject.file("../pyproject.toml").readText())?.groupValues?.get(1)
+    ?: error("no version = \"X.Y.Z\" in pyproject.toml")
+val aurenVersionCode: Int = aurenVersion.split(".").map(String::toInt).let { (a, b, c) -> a * 10000 + b * 100 + c }
+
+// Release signing, from the environment (the release workflow's secrets): AUREN_KEYSTORE is the keystore's
+// path. Without it a release build is unsigned (and the release workflow stops).
+val keystore: String? = System.getenv("AUREN_KEYSTORE")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "app.auren.phone"
     compileSdk = 37
@@ -11,13 +22,25 @@ android {
         applicationId = "app.auren.phone"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = aurenVersionCode
+        versionName = aurenVersion
+    }
+
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("AUREN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("AUREN_KEY_ALIAS")
+                keyPassword = System.getenv("AUREN_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (keystore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
