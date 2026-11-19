@@ -1,7 +1,7 @@
 <h1 align="center">Auren</h1>
 
 <p align="center">
-  An Omarchy voice assistant.<br>
+  A voice assistant for Omarchy, and for macOS in preview.<br>
   Talk to it, and it opens apps, plays music, messages friends and runs coding agents in herdr.
 </p>
 
@@ -22,20 +22,11 @@ mouse and keyboard.
 
 ## Install
 
-You need Omarchy, Claude Code or Codex, and an [AssemblyAI](https://www.assemblyai.com/) API key for
+Auren runs on [Omarchy](https://omarchy.org) and, as a preview, on Apple Silicon Macs. On both you
+need Claude Code or Codex, signed in, and an [AssemblyAI](https://www.assemblyai.com/) API key for
 speech to text.
 
-### With a coding agent
-
-Paste this into Claude Code or Codex. It installs Auren, sets it up and checks that it works.
-
-```text
-Install Auren from https://github.com/kvm404/Auren on this Omarchy machine.
-Use the latest release and follow "For coding agents" in its docs/install.md.
-Ask all your questions at the start, then install everything in one go.
-```
-
-### By hand
+### Omarchy
 
 Auren is in the AUR:
 
@@ -49,26 +40,44 @@ The first `auren` sets it up for you. It asks which keys start Auren (it adds th
 in your own logged-in browser, and for your AssemblyAI key. Then it adds the bar plugin, downloads
 the voice model, starts Auren and runs `auren doctor`. Run `auren setup` again any time.
 
-Updates come with your system updates, or from the bar panel. To set up the browser tools later, run
-`auren browser setup` or ask Auren.
+Updates come with your system updates (`yay`), or from the bar panel.
+
+Installed Auren before it was a package, with `./install.sh`? Run `yay -S auren`, then
+`/usr/bin/auren setup` once. It moves your install over and keeps your settings, keys and voice model.
+
+To let a coding agent do it, paste this into Claude Code or Codex:
+
+```text
+Install Auren from https://github.com/kvm404/Auren on this Omarchy machine.
+Follow "For coding agents" in its docs/install.md.
+Ask all your questions at the start, then install everything in one go.
+```
 
 The [install guide](docs/install.md) covers optional extras, troubleshooting, removal, and installing
 from a checkout.
 
-### On a Mac (preview)
+### macOS (preview)
 
-Auren also runs on Apple Silicon Macs with macOS 14 or newer: run `./install-macos.sh` instead. It
-installs Auren.app and opens its setup window, which walks through the permissions, the AssemblyAI key
-and the brain. Then press Control+Option+A to talk. [Auren on macOS](docs/macos.md) has the details.
+You need an Apple Silicon Mac on macOS 14 or newer, and [uv](https://docs.astral.sh/uv/)
+(`brew install uv`).
+
+```bash
+git clone https://github.com/kvm404/Auren.git auren
+cd auren && ./install-macos.sh
+```
+
+It installs Auren.app and opens its setup window, which walks through the permissions, the AssemblyAI
+key and the brain. Then press **Control+Option+A** to talk. `auren update` installs new versions.
+[Auren on macOS](docs/macos.md) has the details and what doesn't work yet.
 
 ## Using it
 
 | | |
 |---|---|
-| **Super+A** | Start talking. Press again to send, or while it works to stop it. |
-| **Super+Shift+A** | Start a fresh conversation. |
+| **Super+A** (Mac: Control+Option+A) | Start talking. Press again to send, or while it works to stop it. |
+| **Super+Shift+A** (Mac: Control+Option+Shift+A) | Start a fresh conversation. |
 | **Mascot** | Click to talk. Drag to move it, scroll to resize it. |
-| **Bar icon** | Change the mascot, voice, brain and vocabulary, and install updates. |
+| **Bar icon** (Mac: menu bar icon) | Change the mascot, voice, brain and vocabulary, and install updates. |
 
 Things to try:
 

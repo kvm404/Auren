@@ -1,5 +1,7 @@
 # Install and troubleshoot
 
+This guide is for Omarchy. On a Mac, see [Auren on macOS](macos.md).
+
 ## Requirements
 
 Auren requires Omarchy with Hyprland 0.56 or newer, Lua configuration, Wayland, PipeWire, and the
