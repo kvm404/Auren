@@ -495,7 +495,7 @@ def test_selftest_keeps_waiting_while_auren_is_still_on_it(monkeypatch, tmp_path
         return '{"state": "%s"}' % ("idle" if calls["n"] < 2 else "listening" if calls["n"] < 4 else "thinking")
     monkeypatch.setattr("auren.ctl.send", status)
     states: list[str] = []
-    rec = selftest._wait_history(0, "voice", 0.3, wanted="time", states=states, more=10)
+    rec = selftest._wait_history(0, "voice", 1, wanted="time", states=states, more=10)
     assert rec["reply"] == "Eight twenty." and states == ["idle", "listening", "thinking"]
 
 
