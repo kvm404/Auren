@@ -329,10 +329,15 @@ private fun TalkPad(enabled: Boolean, talk: app.auren.phone.Talk?, level: Float,
                             return@detectTapGestures
                         }
                         if (!enabledNow) return@detectTapGestures
-                        var started = false
-                        askMic { started = Remote.talkStart(handsFree = false) }
-                        tryAwaitRelease()
-                        if (started) Remote.talkStop()
+                        var mine: String? = null
+                        askMic { if (Remote.talkStart(handsFree = false)) mine = Remote.talk.value?.id }
+                        // On release, and when the screen goes away mid-hold (that cancels this), so the mic
+                        // never stays on. Only this press's talk: not one that started after it ended.
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            if (mine != null && Remote.talk.value?.id == mine) Remote.talkStop()
+                        }
                     })
                 },
             contentAlignment = Alignment.Center,

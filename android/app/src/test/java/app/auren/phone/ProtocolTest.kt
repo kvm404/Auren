@@ -25,6 +25,9 @@ class ProtocolTest {
         assertNull(Pairing.parse("auren://pair?v=2&hosts=100.92.209.55&port=8735&code=x&fp=$fp"))
         assertNull(Pairing.parse("auren://pair?v=1&hosts=100.92.209.55&port=8735&code=&fp=$fp"))
         assertNull(Pairing.parse("https://example.com/?hosts=100.92.209.55"))
+        // A malformed percent-escape is refused, not thrown.
+        assertNull(Pairing.parse("auren://pair?v=1&hosts=100.92.209.55&port=8735&code=%&fp=$fp"))
+        assertNull(Pairing.parse("auren://pair?v=1&hosts=100.92.209.55&port=8735&code=%zz&fp=$fp"))
         // Only the usable addresses are kept.
         assertEquals(listOf("10.0.0.2"), Pairing.parse("auren://pair?v=1&hosts=8.8.8.8,10.0.0.2,127.0.0.1&port=1&code=x&fp=$fp")?.hosts)
     }

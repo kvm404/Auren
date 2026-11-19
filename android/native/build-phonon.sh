@@ -34,7 +34,9 @@ got="$(git -C "$src" rev-parse HEAD)"
 # The NDK.
 ndk="$sdk/ndk/$NDK_VERSION"
 if [ ! -d "$ndk" ]; then
-    yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
+    # yes dies of SIGPIPE once sdkmanager stops reading; with pipefail that alone would fail the script.
+    { yes || true; } | "$sdk/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
+    [ -d "$ndk" ] || { echo "sdkmanager didn't install the NDK at $ndk" >&2; exit 1; }
 fi
 export ANDROID_NDK_HOME="$ndk"
 

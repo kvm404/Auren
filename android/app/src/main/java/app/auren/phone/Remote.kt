@@ -314,16 +314,20 @@ object Remote {
         _pendingVoice.value = null          // a pick sent on the old link: the PC's state says what took
         voiceSetId = null
         setState(m.state)
-        if (m.inboxLast < inboxLast) inboxLast = 0                // the PC's inbox was reset
-        send(Outgoing.sync(inboxLast))
-        val now = System.currentTimeMillis()
-        pending.filterValues { now - it.second > STALE_MS }.keys.forEach {
-            pending.remove(it)
-            done(it)
+        if (m.inboxLast < inboxLast) {      // the PC's inbox was reset: its new items reuse the old ids
+            inboxLast = 0
+            store.inboxSeen = 0
+            clearInbox()
         }
+        send(Outgoing.sync(inboxLast))
+        // An old ask isn't sent again, but the PC may have taken it before the link dropped: it is resumed
+        // below like the rest, so its reply (or "lost") still comes back and its line stops waiting.
+        val now = System.currentTimeMillis()
+        val stale = pending.filterValues { now - it.second > STALE_MS }.keys.toList()
+        stale.forEach { pending.remove(it) }
         pending.values.forEach { send(it.first) }
         // What the PC took but hadn't answered when the link dropped: its reply, or "lost", comes back.
-        val waiting = _lines.value.filter { it.waiting && it.id !in pending }.map { it.id } + listOfNotNull(voiceTurn)
+        val waiting = _lines.value.filter { it.waiting && it.id !in pending }.map { it.id } + stale + listOfNotNull(voiceTurn)
         if (waiting.isNotEmpty()) send(Outgoing.resume(waiting.distinct()))
         if (talkWhenConnected) {
             talkWhenConnected = false
@@ -616,22 +620,29 @@ object Remote {
     /**
      * POST /v1/share. Returns the PC's status ("ok", "in progress", "busy", "error: ...") or why it couldn't
      * send. [id] stays the same when the user tries again, so a share that ran but whose answer got lost
-     * doesn't run twice. An ask is a waiting line from the start, so a reconnect resumes its reply.
+     * doesn't run twice. An ask is a waiting line from the start, so a reconnect resumes its reply. It goes
+     * only when the PC turned the ask down: when the request may have reached the PC (it failed on the way),
+     * it stays waiting, and the next hello resumes it (the reply, or "lost").
      */
     suspend fun share(id: String, kind: String, action: String, text: String, note: String, data: String? = null,
                       mime: String? = null): String = withContext(Dispatchers.Main) {
-        val asking = action == "ask" && _lines.value.none { it.id == id }
-        if (asking) addLine(Line(id, Who.YOU, listOf(note, if (kind == "image") "(an image)" else text)
-            .filter { it.isNotBlank() }.joinToString("\n"), waiting = true))
-        val status = post(id, kind, action, text, note, data, mime)
-        if (asking && status != "ok" && status != "in progress") _lines.value = _lines.value.filterNot { it.id == id }
-        status
+        val asking = action == "ask"
+        if (asking && _lines.value.none { it.id == id }) addLine(Line(id, Who.YOU, listOf(note,
+            if (kind == "image") "(an image)" else text).filter { it.isNotBlank() }.joinToString("\n"), waiting = true))
+        val p = post(id, kind, action, text, note, data, mime)
+        if (asking && p.answered && p.status != "ok" && p.status != "in progress") {
+            _lines.value = _lines.value.filterNot { it.id == id }
+        }
+        p.status
     }
 
+    /** What a share POST came to: [answered] when the PC (or this phone, unpaired) said so, not a failed send. */
+    private class Posted(val status: String, val answered: Boolean = true)
+
     private suspend fun post(id: String, kind: String, action: String, text: String, note: String, data: String?,
-                             mime: String?): String =
+                             mime: String?): Posted =
         withContext(Dispatchers.IO) {
-            val pc = store.pc ?: return@withContext "error: not paired"
+            val pc = store.pc ?: return@withContext Posted("error: not paired")
             val body = Outgoing.share(id, kind, action, text, note, data, mime)
             var last = ""
             for ((h, net) in routes(pc)) {      // the same id on every try: the PC runs it at most once
@@ -639,15 +650,17 @@ object Remote {
                     .post(body.toRequestBody(JSON)).build()
                 try {
                     client(pc.fp, net).newCall(req).execute().use { r ->
-                        if (r.code == 401) return@withContext "error: this phone isn't paired any more"
-                        val o = runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
-                        return@withContext o.optString("status").ifBlank { o.optString("error", "error: ${r.code}") }
+                        if (r.code == 401) return@withContext Posted("error: this phone isn't paired any more")
+                        val raw = r.body?.string().orEmpty()     // cut off here: unknown, like a failed send
+                        val o = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
+                        return@withContext Posted(o.optString("status").ifBlank { o.optString("error", "error: ${r.code}") })
                     }
                 } catch (e: IOException) {
                     last = describe(e)
                 }
             }
-            if (last.startsWith(REFUSED)) "error: Auren isn't serving on the PC" else "error: can't reach the PC"
+            Posted(if (last.startsWith(REFUSED)) "error: Auren isn't serving on the PC" else "error: can't reach the PC",
+                answered = false)
         }
 
     /**

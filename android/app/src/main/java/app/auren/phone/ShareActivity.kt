@@ -32,6 +32,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,11 +97,15 @@ private const val MAX_IMAGE = 14 * 1024 * 1024        // base64 of it stays unde
 private fun Sheet(shared: Shared?, onDone: () -> Unit, openApp: () -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var note by remember { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
     var working by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val paired = Remote.store.pc != null
-    val ids = remember { mutableMapOf<String, String>() }     // one id per action: trying again can't run it twice
+    // One id per action: trying again can't run it twice. Saved, so a recreated sheet keeps them too.
+    val ids = rememberSaveable(saver = listSaver<MutableMap<String, String>, String>(
+        save = { m -> m.flatMap { listOf(it.key, it.value) } },
+        restore = { l -> l.chunked(2).associate { it[0] to it[1] }.toMutableMap() },
+    )) { mutableMapOf() }
 
     fun go(action: String) {
         if (shared == null || working != null) return

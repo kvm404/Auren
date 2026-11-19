@@ -80,10 +80,15 @@ data class Pairing(val hosts: List<String>, val port: Int, val code: String, val
         fun parse(text: String): Pairing? {
             val s = text.trim()
             if (!s.startsWith("auren://pair?")) return null
-            val q = s.substringAfter('?').split('&').mapNotNull {
-                val k = it.substringBefore('=', "")
-                if (k.isEmpty()) null else k to URLDecoder.decode(it.substringAfter('='), "UTF-8")
-            }.toMap()
+            // A bad percent-escape (from any QR code or web page) is not a pairing link, not a crash.
+            val q = try {
+                s.substringAfter('?').split('&').mapNotNull {
+                    val k = it.substringBefore('=', "")
+                    if (k.isEmpty()) null else k to URLDecoder.decode(it.substringAfter('='), "UTF-8")
+                }.toMap()
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
             if ((q["v"]?.toIntOrNull() ?: return null) != API) return null
             val hosts = hosts(q["hosts"].orEmpty().split(','))
             val port = q["port"]?.toIntOrNull() ?: return null

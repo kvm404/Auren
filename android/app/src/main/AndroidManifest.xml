@@ -55,8 +55,10 @@
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
 
+        <!-- configChanges as above: a rotation keeps the sheet, its request ids and the share in flight. -->
         <activity
             android:name=".ShareActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="@string/share_label"
