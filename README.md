@@ -94,7 +94,7 @@ seconds.
 
 ## Safety and privacy
 
-Auren asks before anything risky, and always asks before publishing, buying or changing the system.
+Auren asks before anything risky, and always asks before publishing, buying or changing the system, except at Full access (`never`), which asks about nothing.
 These checks catch mistakes, but they are not a sandbox.
 
 Your voice goes to AssemblyAI, and your request goes to Claude or Codex. The voice, your history and

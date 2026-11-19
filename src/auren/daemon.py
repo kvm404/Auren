@@ -12,7 +12,7 @@
     auren-ctl tts speed 1.1 | steps 5 | volume 0.8 | pause 0.2 | reset   # how the voice speaks
     auren-ctl brain auto|claude|codex # which brain answers (saved in ~/.config/auren/config.toml)
     auren-ctl effort low|medium|high|xhigh|max   # Claude's effort (restarts it: a fresh conversation)
-    auren-ctl safety ask|task|free    # how much it asks before risky actions (saved in config.toml)
+    auren-ctl safety ask|task|free|never    # how much it asks before risky actions (saved in config.toml)
     auren-ctl autosend on|off|toggle  # send by itself when you stop talking (off: remind you to press Super+A)
     auren-ctl autosend after 5        # seconds without new words before auto-send sends (1 to 15)
     auren-ctl yes | no                # answer the question(s) it is waiting on (the bubble's buttons do this)

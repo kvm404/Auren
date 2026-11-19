@@ -6,9 +6,11 @@ permission modes):
 
 - ask:  every risky action asks first.
 - task: the first risky action asks; a yes also covers the rest of that task for the same kinds.
-- free: full access. Windows and files just run; sending still asks, and so does the floor.
+- free (shown as Auto): windows and files just run; sending still asks, and so does the floor.
+- never (shown as Full access): nothing asks, the floor included. For a machine whose owner accepts that a page or screen the
+  brain reads could talk it into anything.
 
-The floor (publish, system, secrets, money, wipe, auren) asks at every level, every time: publishing,
+The floor (publish, system, secrets, money, wipe, auren) asks at every level but never, every time: publishing,
 root, power, services, packages, secrets, buying and paying, wiping a disk or a home, and Auren's own
 controls. None of them can be taken back.
 
@@ -46,7 +48,7 @@ MAX_BATCH = 6     # questions one yes can answer: the bubble and the panel can't
 
 # --- levels and kinds of risk --------------------------------------------------------------------
 
-LEVELS = ("ask", "task", "free")
+LEVELS = ("ask", "task", "free", "never")
 
 WINDOW = "window"      # closing windows and apps, locking the screen
 FILES = "files"        # deleting, moving, overwriting, permissions, losing local git work
@@ -58,11 +60,13 @@ MONEY = "money"        # buy, pay, check out, transfer, book
 WIPE = "wipe"          # disk tools, deleting your home or the root, running a downloaded script, deleting a repo
 AUREN = "auren"        # Auren's own controls: answering for the user, or changing how much it asks
 
-FLOOR = frozenset({PUBLISH, SYSTEM, SECRETS, MONEY, WIPE, AUREN})    # asked at every level, every time
+FLOOR = frozenset({PUBLISH, SYSTEM, SECRETS, MONEY, WIPE, AUREN})    # asked at every level but never, every time
 
 
 def needs_ask(level: str, kinds: Iterable[str], granted: Iterable[str] = ()) -> bool:
     """Does an action of these kinds have to ask at this level? `granted`: the kinds a yes already covers."""
+    if level == "never":
+        return False
     kinds = set(kinds)
     if not kinds or kinds & FLOOR:
         return True

@@ -481,14 +481,16 @@ Panel {
     { value: "xhigh", label: "XHigh", tip: "Much slower; uses more of the ChatGPT allowance" }
   ]
   // How much Auren asks before a risky action (like Claude Code's permission modes). Publishing, root,
-  // packages, secrets, buying and wiping ask at every level; sending asks even at Full access.
+  // packages, secrets, buying and wiping ask at every level but Full access; sending asks even at Auto.
   readonly property var safeties: [
     { value: "ask", label: "Ask first", icon: "󰒃", tip: "Asks before every risky action; one yes answers everything waiting (the default)" },
     { value: "task", label: "Once per task", icon: "󰒓", tip: "Asks the first time; a yes covers the rest of that task" },
-    { value: "free", label: "Full access", icon: "󰒙", tip: "Windows and files just run; sending, publishing, root, packages, secrets, buying and wiping still ask" }
+    { value: "free", label: "Auto", icon: "󰒙", tip: "Windows and files just run; sending, publishing, root, packages, secrets, buying and wiping still ask" },
+    { value: "never", label: "Full access", icon: "󰦞", tip: "Nothing asks: everything just runs, even sending, buying and wiping" }
   ]
   readonly property string safetyText: safety === "task" ? "Asks the first time; a yes covers the rest of that task."
-                                     : safety === "free" ? "Full access. Windows and files just run; sending, publishing, root, packages, secrets, buying and wiping ask."
+                                     : safety === "free" ? "Auto. Windows and files just run; sending, publishing, root, packages, secrets, buying and wiping ask."
+                                     : safety === "never" ? "Full access. Nothing asks: everything just runs, even sending, publishing, root, buying and wiping."
                                      : "Asks before every risky action. One yes answers everything waiting."
   readonly property var brains: [
     { value: "auto", label: "Auto", icon: "󰁨", tip: "Claude Haiku; Codex when Claude's limit is hit" },
@@ -571,7 +573,7 @@ Panel {
     if (page === 3) return [
       { n: 3, act: function(c) { root.setBrain(root.brains[c].value) } },
       { n: (root.codexAnswers ? root.codexEfforts : root.efforts).length, act: function(c) { root.pickEffort(c) } },
-      { n: 3, act: function(c) { root.setSafety(root.safeties[c].value) } }]
+      { n: root.safeties.length, act: function(c) { root.setSafety(root.safeties[c].value) } }]
     if (page === 4) return [
       { n: 2, act: function(c) { if (c === 0) vocabField.forceActiveFocus(); else root.addVocab() } }
     ].concat(root.vocabMine.length ? [{ n: root.vocabMine.length, act: function(c) { root.removeVocab(root.vocabMine[c]) } }] : [])
