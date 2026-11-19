@@ -490,7 +490,7 @@ def test_selftest_keeps_waiting_while_auren_is_still_on_it(monkeypatch, tmp_path
 
     def status(line, timeout=0):
         calls["n"] += 1
-        if calls["n"] == 6:          # the answer lands well after the 0.3 s timeout
+        if calls["n"] == 6:          # read at the next poll, after the 1 s timeout
             hist.write_text('{"source": "voice", "transcript": "What time is it?", "reply": "Eight twenty."}\n')
         return '{"state": "%s"}' % ("idle" if calls["n"] < 2 else "listening" if calls["n"] < 4 else "thinking")
     monkeypatch.setattr("auren.ctl.send", status)
