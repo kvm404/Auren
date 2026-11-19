@@ -40,16 +40,19 @@ def types() -> list[str]:
         return []
 
 
-def save() -> tuple[str, bytes] | None:
+def save() -> tuple[str, list[tuple[str, bytes]]] | None:
+    """Everything on the clipboard, every type of it (rich text, a file, the concealed marker of a copied
+    password...), for restore() to put back as it was."""
     try:
-        offered = types()
-        kind = next((t for t in (TEXT, "image/png") if t in offered), next((t for t in offered if t != CONCEALED), None))
-        if kind is None:
-            return None
-        data = _board().dataForType_(_ns_type(kind))
+        board = _board()
+        held = []
+        for t in board.types() or []:
+            data = board.dataForType_(t)
+            if data is not None:
+                held.append((str(t), bytes(data)))
     except Exception:  # noqa: BLE001
         return None
-    return (kind, bytes(data)) if data is not None else None
+    return ("pasteboard", held) if held else None
 
 
 def copy(data: bytes, kind: str | None = None, sensitive: bool = True) -> None:
@@ -81,6 +84,13 @@ def restore(saved: tuple[str, bytes] | None, ours: bytes | None = None) -> None:
             return
         if saved is None:
             _board().clearContents()
+        elif saved[0] == "pasteboard":
+            from Foundation import NSData
+            board = _board()
+            board.clearContents()
+            board.declareTypes_owner_([t for t, _ in saved[1]], None)
+            for t, data in saved[1]:
+                board.setData_forType_(NSData.dataWithBytes_length_(data, len(data)), t)
         else:
             kind, data = saved
             copy(data, kind, sensitive=False)

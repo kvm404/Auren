@@ -34,15 +34,29 @@ def _xdg(var: str, default: Path) -> Path:
     return Path(value) if value.startswith("/") else default     # the spec says to ignore relative paths
 
 
+def _private(folder: Path) -> Path:
+    """Make the folder (mode 700) and check it's this user's: in /tmp someone else could make it first.
+    One of the user's own that others can read (an older Auren made it 755) is closed up."""
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = folder.lstat()
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise RuntimeError(f"{folder} isn't a folder of yours: remove it")
+    if st.st_mode & 0o077:
+        folder.chmod(0o700)
+    return folder
+
+
 def _mac_tmp() -> Path:
-    """macOS's private per-user temporary folder (/var/folders/...), outside $HOME."""
+    """macOS's private per-user temporary folder (/var/folders/...), outside $HOME. Launch agents don't
+    always get $TMPDIR, and Python has no name for it in os.confstr, so getconf is asked."""
     tmp = os.environ.get("TMPDIR", "")
     if not tmp.startswith("/var/folders/"):
         try:
-            tmp = os.confstr("CS_DARWIN_USER_TEMP_DIR") or ""
-        except (ValueError, OSError):
+            tmp = subprocess.run(["getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
             tmp = ""
-    return Path(tmp) if tmp.startswith("/") else Path(f"/tmp/auren-tmp-{os.getuid()}")
+    return Path(tmp) if tmp.startswith("/var/folders/") else Path(f"/tmp/auren-tmp-{os.getuid()}")
 
 
 def _runtime_base() -> Path:
@@ -76,6 +90,13 @@ STATE_FILE = RUNTIME_DIR / "state.json"      # current state, for the mascot and
 # The brain's working folder: outside $HOME on purpose (see brain/__init__.py). On macOS the runtime folder
 # is in $HOME, so it goes in the temporary folder; it's made again before every use.
 BRAIN_DIR = _mac_tmp() / "auren-brain" if MAC else RUNTIME_DIR / "brain"
+
+
+def brain_dir() -> Path:
+    """BRAIN_DIR, made now and checked to be private (the brain reads instructions from its working folder)."""
+    if MAC:
+        _private(BRAIN_DIR.parent)
+    return _private(BRAIN_DIR)
 SECRETS = CONFIG_DIR / "secrets.env"
 CONFIG_FILE = CONFIG_DIR / "config.toml"    # the user's settings (settings.py)
 SETTINGS = CONFIG_DIR / "settings.json"     # the old settings file, moved into config.toml once

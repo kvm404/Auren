@@ -1,5 +1,7 @@
 """Which brain runs: Claude's process only when the mode uses it, models from config."""
 
+import pytest
+
 from auren import brain as b
 from auren import settings
 
@@ -65,7 +67,7 @@ def test_auto_uses_codex_when_claude_code_isnt_installed(monkeypatch):
 
 def test_a_missing_brain_command_is_a_brain_error(tmp_path, monkeypatch):
     import pytest
-    monkeypatch.setattr(b, "BRAIN_DIR", tmp_path)
+    monkeypatch.setattr(b, "brain_dir", lambda: tmp_path)
     monkeypatch.setattr(b.ClaudeBrain, "_command", lambda self: ["auren-no-such-claude"])
     with pytest.raises(b.BrainError, match="isn't installed"):
         b.ClaudeBrain(None).start()
@@ -99,7 +101,7 @@ def _claude(tmp_path, monkeypatch, *mode):
 
     from auren.tools import Runtime
 
-    monkeypatch.setattr(b, "BRAIN_DIR", tmp_path)
+    monkeypatch.setattr(b, "brain_dir", lambda: tmp_path)
     monkeypatch.setattr(b.ClaudeBrain, "_command",
                         lambda self: [sys.executable, str(Path(__file__).with_name("fake_claude.py")), *mode])
     c = b.ClaudeBrain(Runtime(tmp_path / "t.sock"))
@@ -233,3 +235,36 @@ def test_a_brain_that_cant_start_doesnt_leave_the_daemon_stuck():
     def cant():
         raise b.BrainError("no claude command")
     asyncio.run(Daemon._restart_brain(None, cant))        # logged, not raised
+
+
+def test_each_codex_turn_has_its_own_reply_file(monkeypatch, tmp_path):
+    """Two Codex runs at once (auren selftest's `auren ask` and the daemon) mustn't read each other's reply."""
+    import types
+    fake = tmp_path / "bin" / "codex"
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\nwhile [ "$1" != "--output-last-message" ]; do shift; done\n'
+                    'echo "$2" >> "$(dirname "$2")/seen"\necho "Mine." > "$2"\ncat >/dev/null\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    monkeypatch.setattr(b, "brain_dir", lambda: tmp_path)
+    runtime = types.SimpleNamespace(socket=tmp_path / "t.sock", level="ask", summary=lambda s: "",
+                                    cancelled=lambda s: False)
+    c = b.CodexBrain(runtime)
+    monkeypatch.setattr(c.profile, "static_context", lambda: "")
+    monkeypatch.setattr(c.profile, "live_context", lambda: "")
+    assert [e for e in c.ask("hello") if e[0] == "say"] == [("say", "Mine.")]
+    list(c.ask("again"))
+    files = (tmp_path / "seen").read_text().split()
+    assert len(files) == 2 and files[0] != files[1]
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("codex-last")]     # removed after reading
+
+
+def test_the_brain_folder_is_made_private(monkeypatch, tmp_path):
+    from auren import config
+    loose = tmp_path / "brain"
+    loose.mkdir(mode=0o755)
+    loose.chmod(0o755)
+    assert config._private(loose) == loose and loose.stat().st_mode & 0o777 == 0o700
+    monkeypatch.setattr(config.os, "getuid", lambda: 12345)       # someone else made it first
+    with pytest.raises(RuntimeError, match="isn't a folder of yours"):
+        config._private(loose)

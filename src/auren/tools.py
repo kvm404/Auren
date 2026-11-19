@@ -942,6 +942,23 @@ if sys.platform == "darwin":            # mac/screen.py presses Super and Win as
 _RISKY = {frozenset(k.split("+")) for k in RISKY_KEYS}
 
 
+# Shortcuts that do more than close something: Finder's delete-now and empty-Trash (the Option ones skip its
+# question) and logging out. They're asked at every level, even full access (safety.FLOOR).
+_WIPES = {frozenset(k.split("+")) for k in ("shift+delete", "cmd+alt+backspace", "cmd+alt+delete", "cmd+shift+backspace",
+                                            "cmd+shift+delete", "cmd+alt+shift+backspace", "cmd+alt+shift+delete")}
+_LOGOUTS = {frozenset(k.split("+")) for k in ("cmd+shift+q", "cmd+alt+shift+q")}
+
+
+def _risk_of(keys: str) -> tuple[str, str]:
+    """A risky combo's kind (safety.WINDOW, WIPE or SYSTEM) and what to tell the user it does."""
+    combo = frozenset(_MOD_NAMES.get(p, p) for p in (p.strip().lower() for p in keys.split("+")) if p)
+    if combo in _WIPES:
+        return safety.WIPE, "It can delete files for good (or empty the Trash)."
+    if combo in _LOGOUTS and sys.platform == "darwin":
+        return safety.SYSTEM, "It logs you out of the Mac."
+    return safety.WINDOW, "It closes a window or app."
+
+
 def _risky(keys: str) -> bool:
     """A combo that quits, closes or deletes, in any order of its modifiers and under any of their names."""
     parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
@@ -1225,7 +1242,8 @@ def press_keys(keys: str) -> str:
         def check() -> None:
             if screen.key_target() != window:
                 raise PermissionError("the keys would go to a different window now: ask the user again")
-        return _gate({safety.WINDOW}, f"Press {keys}? It closes a window or app.", lambda: screen.press_keys(keys), check)
+        kind, does = _risk_of(keys)
+        return _gate({kind}, f"Press {keys}? {does}", lambda: screen.press_keys(keys), check)
     s = _session_now()
     k = _draft(window)
     if not k and window and _enter(keys, True) == "send":

@@ -111,6 +111,42 @@ def _loaded_program(name: str) -> str | None:
     return None
 
 
+def _loaded_env(name: str) -> dict[str, str] | None:
+    """The environment launchd gives the loaded agent (`environment = { KEY => value ... }` in its print)."""
+    p = _launchctl("print", _target(name))
+    if p.returncode != 0:
+        return None
+    env, inside = {}, False
+    for line in p.stdout.splitlines():
+        s = line.strip()
+        if s == "environment = {":
+            inside = True
+        elif inside and s == "}":
+            return env
+        elif inside:
+            key, sep, value = s.partition(" => ")
+            if sep:
+                env[key] = value
+    return None
+
+
+def _plist_env(name: str) -> dict[str, str]:
+    try:
+        with open(plist_path(name), "rb") as f:
+            return {str(k): str(v) for k, v in plistlib.load(f).get("EnvironmentVariables", {}).items()}
+    except (OSError, ValueError, AttributeError, plistlib.InvalidFileException):
+        return {}
+
+
+def _stale(name: str) -> bool:
+    """The plist changed since launchd loaded it: another program (Auren.app installed or removed), or another
+    PATH (Claude Code or Codex installed since). kickstart would keep the old ones."""
+    if _loaded_program(name) != _plist_program(name):
+        return True
+    loaded = _loaded_env(name)
+    return loaded is not None and any(loaded.get(k) != v for k, v in _plist_env(name).items())
+
+
 def _plist_program(name: str) -> str | None:
     try:
         with open(plist_path(name), "rb") as f:
@@ -129,11 +165,11 @@ def installed_path(name: str) -> str | None:
 
 
 def restart(name: str) -> bool:
-    """Start it again. kickstart -k keeps what launchd read at load time, so when the plist now names
-    another program (Auren.app was installed or removed), it's unloaded and loaded again instead."""
+    """Start it again. kickstart -k keeps what launchd read at load time, so when the plist changed since
+    (_stale), it's unloaded and loaded again instead."""
     if not loaded(name):
         return start(name)
-    if _loaded_program(name) != _plist_program(name):
+    if _stale(name):
         return stop(name) and start(name)
     return _launchctl("kickstart", "-k", _target(name)).returncode == 0
 

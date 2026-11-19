@@ -580,10 +580,11 @@ def set_up_somewhere() -> bool:
     if its host is connected."""
     if cli() is None:
         return False
-    kinds = [k for k in browsers.KINDS if browsers.installed(k) and registered(k)]
-    if any(with_extension(k) for k in kinds):
+    installed = [k for k in browsers.KINDS if browsers.installed(k)]
+    if any(registered(k) and with_extension(k) for k in installed):
         return True
-    hidden = {k.key for k in kinds if not readable(k)}
+    # Unreadable, its manifest can't be read either (it's in the same folder): the connection decides
+    hidden = {k.key for k in installed if not readable(k)}
     return bool(hidden) and any(c.kind.key in hidden for c in connections())
 
 

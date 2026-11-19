@@ -262,8 +262,15 @@ def close_window(window: str | dict) -> str:
     else:
         w = find_window(window)
     if not macwin.close(w):
-        macwin.focus(w)
+        # Cmd+W instead, sent only to this window: screen.focus makes it the keys' target (press_keys would
+        # otherwise refocus the window Auren last clicked), and it's checked to be in front first
         from . import screen
+        try:
+            screen.focus(w["address"])
+        except screen.ScreenError as e:
+            raise DesktopError(f"can't close {_describe(w)}: {e}") from None
+        if screen._active_window() != w["address"]:
+            raise DesktopError(f"can't close {_describe(w)}: it has no close button and didn't come to the front")
         screen.press_keys("cmd+w")
     for _ in range(8):
         time.sleep(0.25)

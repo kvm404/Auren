@@ -289,12 +289,14 @@ def test_a_failed_build_keeps_the_old_app(tmp_path, monkeypatch):
     assert app.current(target, stamp) and "# build 0" in app.executable(target).read_text()
 
 
-def test_restart_reloads_an_agent_whose_program_changed(monkeypatch, tmp_path):
+def test_restart_reloads_an_agent_whose_program_or_path_changed(monkeypatch, tmp_path):
     import plistlib
     monkeypatch.setattr(service, "AGENTS_DIR", tmp_path)
+    app = "/Users/a/Applications/Auren.app/Contents/MacOS/Auren"
     with open(service.plist_path("daemon"), "wb") as f:
-        plistlib.dump({"ProgramArguments": ["/Users/a/Applications/Auren.app/Contents/MacOS/Auren", "daemon"]}, f)
-    loaded_as = ["/Users/a/.local/share/auren/venv/bin/auren"]
+        plistlib.dump({"ProgramArguments": [app, "daemon"],
+                       "EnvironmentVariables": {"PATH": "/Users/a/.local/bin:/opt/homebrew/bin:/usr/bin"}}, f)
+    loaded = {"program": "/Users/a/.local/share/auren/venv/bin/auren", "path": "/Users/a/.local/bin:/usr/bin"}
     calls = []
     monkeypatch.setattr(service, "loaded", lambda n: True)
     monkeypatch.setattr(service, "stop", lambda n: calls.append("stop") or True)
@@ -302,13 +304,17 @@ def test_restart_reloads_an_agent_whose_program_changed(monkeypatch, tmp_path):
 
     def launchctl(*args):
         calls.append(args[0])
-        out = f"com.auren.daemon = {{\n\tstate = running\n\tprogram = {loaded_as[0]}\n}}\n"
+        out = (f"com.auren.daemon = {{\n\tstate = running\n\tprogram = {loaded['program']}\n"
+               f"\tenvironment = {{\n\t\tPATH => {loaded['path']}\n\t\tXPC_SERVICE_NAME => com.auren.daemon\n\t}}\n}}\n")
         return subprocess.CompletedProcess(args, 0, out, "")
     monkeypatch.setattr(service, "_launchctl", launchctl)
-    assert service.restart("daemon") and calls == ["print", "stop", "start"]    # kickstart would keep the old one
+    assert service.restart("daemon") and calls[-2:] == ["stop", "start"]    # kickstart would keep the old one
     calls.clear()
-    loaded_as[0] = "/Users/a/Applications/Auren.app/Contents/MacOS/Auren"
-    assert service.restart("daemon") and calls == ["print", "kickstart"]
+    loaded["program"] = app                     # the same program, but Codex was installed since: a new PATH
+    assert service.restart("daemon") and calls[-2:] == ["stop", "start"]
+    calls.clear()
+    loaded["path"] = "/Users/a/.local/bin:/opt/homebrew/bin:/usr/bin"
+    assert service.restart("daemon") and calls[-1] == "kickstart" and "stop" not in calls
 
 
 def test_setup_offers_no_restart_for_a_key_no_restart_fixes(monkeypatch):
@@ -408,7 +414,8 @@ def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
     def broken(*a):
         raise RuntimeError("no Quartz here")
 
-    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard", "_browser_folders"):
+    for name in ("_permissions", "_displays", "_mascot_window", "_screen", "_windows", "_clipboard", "_browser_folders",
+                 "_brain_folder"):
         monkeypatch.setattr(selftest, name, broken)
 
     async def fine(*a):
@@ -417,8 +424,8 @@ def test_selftest_in_the_daemon_reports_a_broken_check_and_goes_on(monkeypatch):
     for name in ("_microphone", "_speech_service", "_voice"):
         monkeypatch.setattr(selftest, name, fine)
     rows = asyncio.run(selftest.inside(object()))
-    assert len(rows) == 10
-    assert [r["status"] for r in rows].count("fail") == 7
+    assert len(rows) == 11
+    assert [r["status"] for r in rows].count("fail") == 8
     assert all("no Quartz here" in r["detail"] for r in rows if r["status"] == "fail")
 
 
@@ -430,6 +437,7 @@ def test_selftest_writes_a_report_with_every_result_and_the_logs(monkeypatch, tm
     monkeypatch.setattr(selftest, "_daemon", lambda: ([bad], {"state": "idle"}))
     monkeypatch.setattr(selftest, "_brain", lambda: ok)
     monkeypatch.setattr(selftest, "_browser", lambda: selftest.result("browser tools", "skip", "turned off"))
+    monkeypatch.setattr(selftest, "_agents", lambda: [])
     monkeypatch.setattr(selftest, "_settings", lambda: ["brain = 'auto'"])
     monkeypatch.setattr(selftest, "_by_hand", lambda *a: pytest.fail("--quick asks nothing"))
     monkeypatch.setattr(selftest, "STATE_DIR", tmp_path)
@@ -467,3 +475,103 @@ def test_selftest_waits_past_a_cancelled_try(monkeypatch, tmp_path):
     assert selftest._wait_history(0, "voice", 1, wanted="time")["reply"] == "Half past three."
     hist.write_text('{"source": "voice", "transcript": "what did each time", "reply": "(cancelled)"}\n')
     assert selftest._wait_history(0, "voice", 0.3, wanted="time")["reply"] == "(cancelled)"
+
+
+# --- fixes from the Codex review ---------------------------------------------------------------------
+
+def test_closing_without_a_close_button_presses_cmd_w_only_in_that_window(monkeypatch):
+    from auren.mac import desktop, screen
+    w = {"address": "7", "class": "Preview", "title": "report.pdf", "pid": 1}
+    pressed, focused = [], []
+    monkeypatch.setattr(desktop, "windows", lambda: [w])
+    monkeypatch.setattr(desktop.macwin, "close", lambda w: False)              # no close button
+    monkeypatch.setattr(screen, "focus", lambda address: focused.append(address))
+    monkeypatch.setattr(screen, "press_keys", lambda keys: pressed.append(keys))
+    monkeypatch.setattr(screen, "_active_window", lambda: "3")                 # Chrome stayed in front
+    with pytest.raises(desktop.DesktopError, match="didn't come to the front"):
+        desktop.close_window(w)
+    assert focused == ["7"] and pressed == []                                  # nothing sent to Chrome
+    monkeypatch.setattr(screen, "_active_window", lambda: "7")
+    monkeypatch.setattr(desktop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(desktop, "windows", lambda: [w] if not pressed else [])
+    assert desktop.close_window(w).startswith("closed") and pressed == ["cmd+w"]
+
+
+def test_stopping_speech_tears_the_stream_down_once(monkeypatch):
+    import sys
+    import threading
+    import types
+
+    calls = []
+
+    class Stream:
+        def __init__(self, **kw):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            calls.append("stop")
+
+        def abort(self):
+            calls.append("abort")
+
+        def close(self):
+            calls.append("close")
+    monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(RawOutputStream=Stream))
+    from auren.mac.audio import Player
+    p = Player(44100)
+    p.stdin.write(b"\0" * 400)
+    p.stdin.close()
+    t = threading.Thread(target=p.wait)          # the speaking thread, waiting for it to play out
+    t.start()
+    p.kill()                                     # Stop pressed meanwhile
+    t.join(2)
+    assert calls == ["abort", "close"]           # aborted (not played out), closed once
+
+
+def test_the_clipboard_comes_back_with_every_type_and_the_password_marker(monkeypatch):
+    import sys
+    import types
+
+    from auren.mac import clipboard
+
+    class Board:
+        def __init__(self):
+            self.items = {"public.utf8-plain-text": b"hunter2", clipboard.CONCEALED: b"", "public.rtf": b"{\\rtf1}"}
+
+        def types(self):
+            return list(self.items)
+
+        def dataForType_(self, t):
+            return self.items.get(t)
+
+        def clearContents(self):
+            self.items = {}
+
+        def declareTypes_owner_(self, types, owner):
+            self.items = {}
+
+        def setData_forType_(self, data, t):
+            self.items[t] = bytes(data)
+            return True
+    board = Board()
+    monkeypatch.setattr(clipboard, "_board", lambda: board)
+    fake = types.SimpleNamespace(NSData=types.SimpleNamespace(dataWithBytes_length_=lambda d, n: d,
+                                                              data=lambda: b""),
+                                 NSPasteboardTypeString="public.utf8-plain-text", NSPasteboardTypePNG="public.png")
+    monkeypatch.setitem(sys.modules, "Foundation", fake)
+    monkeypatch.setitem(sys.modules, "AppKit", fake)
+    saved = clipboard.save()
+    before = dict(board.items)
+    clipboard.copy(b"typed by auren", None)
+    clipboard.restore(saved, b"typed by auren")
+    assert board.items == before                 # the password is still marked concealed, the rich text is back
+
+
+def test_a_mistyped_service_name_does_nothing(monkeypatch, capsys):
+    from auren import cli
+    monkeypatch.setattr(service, "uninstall", lambda n: pytest.fail("uninstalled " + n))
+    assert cli._service(["uninstall", "masoct"]) == 2
+    assert "no service called masoct" in capsys.readouterr().err

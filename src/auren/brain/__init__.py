@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,7 @@ import threading
 import time
 from collections.abc import Iterator
 
-from ..config import BRAIN_DIR
+from ..config import brain_dir
 from ..profile import Profile
 from . import prompt
 
@@ -96,8 +97,7 @@ class ClaudeBrain:
         self.stop()
         # Outside $HOME on purpose: Claude Code loads `.claude/CLAUDE.md` from every parent folder, and
         # ~/.claude/CLAUDE.md is the user's personal file, which must not reach the brain.
-        workdir = BRAIN_DIR
-        workdir.mkdir(parents=True, exist_ok=True)
+        workdir = brain_dir()
         env = {**os.environ, "MCP_TOOL_TIMEOUT": "900000", "MCP_TIMEOUT": "30000"}
         try:
             self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -284,9 +284,9 @@ class CodexBrain:
 
     def ask(self, transcript: str) -> Iterator[tuple]:
         self._interrupted = False
-        workdir = BRAIN_DIR
-        workdir.mkdir(parents=True, exist_ok=True)
-        last = workdir / "codex-last.txt"
+        workdir = brain_dir()
+        # Its own file: another Codex turn (auren ask, auren selftest, a second daemon) may run at the same time
+        last = workdir / f"codex-last-{os.getpid()}-{secrets.token_hex(4)}.txt"
         recent = "\n".join(f"User: {u}\nAuren: {a}" for u, a in self.history[-4:])
         message = "\n\n".join(x for x in (
             prompt.system_prompt(self.profile.static_context()),
@@ -301,42 +301,45 @@ class CodexBrain:
                "-c", 'mcp_servers.auren.default_tools_approval_mode="approve"',
                "-c", "mcp_servers.auren.env=" + _env_toml(_mcp_env(self.runtime, self.session)),
                "--json", "--output-last-message", str(last), "-"]
-        sent = time.perf_counter()
         try:
-            self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                                stderr=subprocess.PIPE, text=True, cwd=workdir)
-        except FileNotFoundError as e:
-            raise BrainError("Codex isn't installed (no codex command)") from e
-        except OSError as e:
-            raise BrainError(f"Codex can't start: {e}") from e
-        if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
-            proc.kill()
-            proc.wait()
-            raise Interrupted("cancelled")
-        proc.stdin.write(message)
-        proc.stdin.close()
-        for line in proc.stdout:
+            sent = time.perf_counter()
             try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            item = ev.get("item") or {}
-            if item.get("type") == "mcp_tool_call":
-                if ev.get("type") == "item.started":
-                    yield ("tool", item.get("tool"), item.get("arguments", {}))
-                elif ev.get("type") == "item.completed":
-                    res = item.get("result") or {}
-                    text = " ".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict)) \
-                        if isinstance(res, dict) else str(res)
-                    yield ("result", item.get("tool"), text or str(item.get("error") or ""))
-            if ev.get("type") in ("error", "turn.failed"):
-                err = json.dumps(ev)[:300]
-                if any(w in err.lower() for w in LIMIT_WORDS):
-                    raise UsageLimit(err)
-        proc.wait()
-        if self._interrupted:
-            raise Interrupted("cancelled")
-        text = last.read_text().strip() if last.exists() else ""
+                self.proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE, text=True, cwd=workdir)
+            except FileNotFoundError as e:
+                raise BrainError("Codex isn't installed (no codex command)") from e
+            except OSError as e:
+                raise BrainError(f"Codex can't start: {e}") from e
+            if _cancelled(self.runtime, self.session):      # cancelled before self.proc was there to kill
+                proc.kill()
+                proc.wait()
+                raise Interrupted("cancelled")
+            proc.stdin.write(message)
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                item = ev.get("item") or {}
+                if item.get("type") == "mcp_tool_call":
+                    if ev.get("type") == "item.started":
+                        yield ("tool", item.get("tool"), item.get("arguments", {}))
+                    elif ev.get("type") == "item.completed":
+                        res = item.get("result") or {}
+                        text = " ".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict)) \
+                            if isinstance(res, dict) else str(res)
+                        yield ("result", item.get("tool"), text or str(item.get("error") or ""))
+                if ev.get("type") in ("error", "turn.failed"):
+                    err = json.dumps(ev)[:300]
+                    if any(w in err.lower() for w in LIMIT_WORDS):
+                        raise UsageLimit(err)
+            proc.wait()
+            if self._interrupted:
+                raise Interrupted("cancelled")
+            text = last.read_text().strip() if last.exists() else ""
+        finally:
+            last.unlink(missing_ok=True)
         if proc.returncode != 0 or not text:
             raise BrainError("codex failed: " + proc.stderr.read()[-300:])
         text = speakable(text)

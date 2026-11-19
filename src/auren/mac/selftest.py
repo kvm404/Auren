@@ -67,7 +67,19 @@ async def inside(daemon) -> list[dict]:
     await run("windows", in_thread(_windows))
     await run("clipboard", in_thread(_clipboard))
     await run("browser folders", in_thread(_browser_folders))
+    await run("brain folder", in_thread(_brain_folder))
     return out
+
+
+def _brain_folder() -> dict:
+    """The brain's working folder: outside $HOME, the user's own, private (the brain reads instructions there)."""
+    import stat as st
+
+    from ..config import brain_dir
+    d = brain_dir()
+    mode = d.stat().st_mode
+    ok = not str(d).startswith(str(Path.home())) and not mode & 0o077
+    return result("brain folder", OK if ok else FAIL, f"{d} ({st.filemode(mode)})")
 
 
 def _browser_folders() -> list[dict]:
@@ -252,8 +264,13 @@ def _clipboard() -> dict:
         back = clipboard.text()
     finally:
         clipboard.restore(saved, mark.encode())
-    return result("clipboard", OK if back == mark else FAIL, "copied and read back" if back == mark
-                  else f"read back {back[:60]!r}")
+    if back != mark:
+        return result("clipboard", FAIL, f"read back {back[:60]!r}")
+    again = clipboard.save()
+    kept = (again or (None, []))[1] == (saved or (None, []))[1]
+    kinds = len(saved[1]) if saved else 0
+    return result("clipboard", OK if kept else FAIL, f"copied, read back, and what was there came back ({kinds} "
+                  "types)" if kept else "copied and read back, but what was there before didn't come back as it was")
 
 
 # --- here, in Terminal ------------------------------------------------------------------------------
@@ -369,6 +386,25 @@ def _browser_details() -> list[str]:
     for c in obu.connections(fresh=True):
         lines.append(f"connection: {c.kind.name}, profile {c.profile.label() if c.profile else 'unknown'}, {c.socket}")
     return lines or ["no Chromium browser installed"]
+
+
+def _agents() -> list[dict]:
+    """The launch agents run what their plists say now (a PATH or program written since needs a reload)."""
+    from . import service
+    out = []
+    for name in service.LABELS:
+        try:
+            service.loaded(name)
+        except (OSError, subprocess.SubprocessError) as e:
+            out.append(result(f"{name} agent", FAIL, f"launchctl: {e}"))
+            continue
+        if not service.loaded(name):
+            out.append(result(f"{name} agent", FAIL, "not loaded: auren service start"))
+        else:
+            stale = service._stale(name)
+            out.append(result(f"{name} agent", WARN if stale else OK, "runs an older version of its plist: "
+                              "auren service restart" if stale else "runs what its plist says"))
+    return out
 
 
 def _settings() -> list[str]:
@@ -517,7 +553,7 @@ def main(argv: list[str]) -> int:
     rows, st = _daemon()
     section("Inside Auren", rows)
     print("\033[2mAsking the brain…\033[0m")
-    section("Brain and browser", [_brain(), _browser()])
+    section("Brain and browser", [_brain(), _browser(), *_agents()])
     if not a.quick and sys.stdin.isatty() and st is not None:
         keys = key_label(str(current().get("keys.talk") or "ctrl+alt+a"))
         rows = _by_hand(st, keys)
@@ -543,8 +579,12 @@ def main(argv: list[str]) -> int:
     lines += ["== settings (config.toml; keys aren't in it)", *_settings(), ""]
     for name in ("daemon", "mascot"):
         lines += [f"== {name} log (last {LOG_LINES} lines)", *_tail(STATE_DIR / f"{name}.out.log"), ""]
-    out.write_text("\n".join(lines) + "\n")
-    os.chmod(out, 0o600)
+    # Private from the first byte (transcripts and logs): a new file made 600 next to it, then moved into place
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, out)
 
     verdict = (f"\033[31m{counts[FAIL]} failed\033[0m" if counts[FAIL] else "\033[32mall passed\033[0m")
     print(f"\n{verdict}, {counts[WARN]} warning(s). The report is \033[1m{out}\033[0m: send that file.")

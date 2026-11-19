@@ -39,10 +39,11 @@ def status() -> int:
         parts = []
         if browsers.flatpak(kind):
             parts.append("a Flatpak: not supported")
-        elif not obu.registered(kind):
-            parts.append("not set up")
+        elif not obu.registered(kind) and not any(c.kind == kind for c in conns):
+            parts.append("not set up" if obu.readable(kind) else
+                         "its folder can't be read (macOS: Full Disk Access), so its setup can't be seen")
         else:
-            parts.append("host registered")
+            parts.append("host registered" if obu.registered(kind) else "host connected")
             ext = obu.with_extension(kind)
             if ext:
                 parts.append("extension in " + ", ".join(p.name for p in ext))

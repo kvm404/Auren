@@ -379,3 +379,22 @@ def test_auren_browser_setup_through_the_shell_asks():
         risk = safety.assess_command(cmd, "/home/u")
         assert risk and safety.AUREN in risk.kinds, cmd
     assert safety.assess_command("auren browser", "/home/u") is None          # just looking
+
+
+@pytest.mark.parametrize("keys,kind", [
+    ("cmd+w", "window"), ("cmd+q", "window"), ("alt+f4", "window"),
+    ("cmd+alt+shift+backspace", "wipe"), ("Command+Shift+Delete", "wipe"), ("shift+delete", "wipe"),
+    ("cmd+alt+backspace", "wipe"),
+])
+def test_shortcuts_that_delete_for_good_are_asked_at_every_level(keys, kind):
+    from auren import safety, tools
+    assert tools._risky(keys)
+    got, _ = tools._risk_of(keys)
+    assert got == kind
+    assert (got in safety.FLOOR) == (kind == "wipe")       # full access skips only the window kind
+
+
+def test_logging_out_is_a_system_shortcut_on_a_mac(monkeypatch):
+    from auren import safety, tools
+    monkeypatch.setattr(tools.sys, "platform", "darwin")
+    assert tools._risk_of("cmd+shift+q")[0] == safety.SYSTEM

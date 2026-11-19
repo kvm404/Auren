@@ -21,7 +21,7 @@ SPAWN = judge.Judge._spawn                       # the real one (conftest replac
 
 @pytest.fixture
 def fake(monkeypatch, tmp_path):
-    monkeypatch.setattr(judge, "BRAIN_DIR", tmp_path)
+    monkeypatch.setattr(judge, "brain_dir", lambda: tmp_path)
     monkeypatch.setattr(judge.Judge, "_spawn", lambda self: subprocess.Popen(
         FAKE, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True))
     return judge.Judge()

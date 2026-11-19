@@ -100,7 +100,12 @@ def _app(args: list[str]) -> int:
 def _service(args: list[str]) -> int:
     from .mac import service
     what = args[0] if args else "status"
-    names = [n for n in args[1:] if n in service.LABELS] or list(service.LABELS)
+    unknown = [n for n in args[1:] if n not in service.LABELS]
+    if unknown:
+        print(f"auren service: no service called {', '.join(unknown)} (they're {' and '.join(service.LABELS)})",
+              file=sys.stderr)
+        return 2
+    names = args[1:] or list(service.LABELS)
     if what == "install":
         for n in names:
             print("wrote", service.install(n, os.environ.get("AUREN_PATH")))

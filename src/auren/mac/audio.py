@@ -83,6 +83,8 @@ class Player:
         self._closed = False
         self._killed = False
         self._drained = threading.Event()
+        self._teardown = threading.Lock()
+        self._done = False
         self._stream = sd.RawOutputStream(samplerate=rate, channels=1, dtype="float32", callback=self._play)
         self._stream.start()
 
@@ -131,11 +133,18 @@ class Player:
             self._buf.clear()
             self._closed = True
         self._drained.set()
-        self._finish()
+        self._finish(abort=True)
 
-    def _finish(self) -> None:
-        try:
-            self._stream.stop()
-            self._stream.close()
-        except Exception:  # noqa: BLE001 - stopped twice, or the device went away
-            pass
+    def _finish(self, abort: bool = False) -> None:
+        """Stop and close the stream, once: wait() (the speaking thread) and kill() (a cancel) can both get
+        here at the same time, and PortAudio mustn't close one stream from two threads. abort drops what the
+        device still has queued; stop plays it out."""
+        with self._teardown:
+            if self._done:
+                return
+            self._done = True
+            try:
+                (self._stream.abort if abort else self._stream.stop)()
+                self._stream.close()
+            except Exception:  # noqa: BLE001 - the device went away
+                pass

@@ -422,6 +422,8 @@ def test_a_browser_macos_hides_is_set_up_when_its_host_is_connected(machine, mon
     assert not hosts.set_up_somewhere()
     monkeypatch.setattr(hosts, "connections", lambda fresh=False: [hosts.Conn("s", HELIUM, None, "iid", 0)])
     assert hosts.set_up_somewhere()
+    monkeypatch.setattr(hosts, "registered", lambda kind: False)    # the manifest is in that folder too
+    assert hosts.set_up_somewhere()
     monkeypatch.setattr(hosts, "readable", lambda kind: True)       # readable and empty: really not set up
     assert not hosts.set_up_somewhere()
 
