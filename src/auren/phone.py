@@ -357,13 +357,27 @@ def lan_addresses() -> tuple[list[str], str]:
     return pick_lan(links), ""
 
 
-def pick_lan(links: list[dict]) -> list[str]:
-    """The kept addresses of `ip -j -4 addr` output (see lan_addresses)."""
+SYS_NET = Path("/sys/class/net")
+
+
+def on_hardware(name: str, depth: int = 0) -> bool:
+    """Is this interface a network card (Wi-Fi, Ethernet, a USB adapter), or a bridge, bond or VLAN over one?
+    A VM or container bridge (whatever its name, br0 too), a tunnel or a veth has no device behind it."""
+    d = SYS_NET / name
+    if (d / "device").exists():
+        return True
+    below = [p.name.removeprefix("lower_") for p in d.glob("lower_*")] + [p.name for p in d.glob("brif/*")]
+    return depth < 4 and any(on_hardware(n, depth + 1) for n in below if n and "/" not in n)
+
+
+def pick_lan(links: list[dict], real=on_hardware) -> list[str]:
+    """The kept addresses of `ip -j -4 addr` output (see lan_addresses). real(name): the interface has a
+    network card behind it."""
     found = []
     for link in links if isinstance(links, list) else []:
         name = str(link.get("ifname", ""))
         flags = set(link.get("flags") or [])
-        if "LOOPBACK" in flags or "POINTOPOINT" in flags or name.startswith(VIRTUAL):
+        if "LOOPBACK" in flags or "POINTOPOINT" in flags or name.startswith(VIRTUAL) or not real(name):
             continue
         for a in link.get("addr_info") or []:
             ip, plen = str(a.get("local", "")), a.get("prefixlen", 32)

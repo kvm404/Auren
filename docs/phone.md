@@ -8,8 +8,8 @@ the phone is a microphone, a screen and a few buttons. The plan behind it is [ph
 
 1. Put the phone on the PC's Wi-Fi, or install Tailscale on both (signed in to the same tailnet) to reach
    the PC from anywhere. The PC's server listens on its Tailscale address (`tailscale ip -4`) and on its
-   private LAN addresses (10/8, 172.16/12, 192.168/16, on real interfaces only), never on `0.0.0.0`, a
-   public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
+   private LAN addresses (10/8, 172.16/12, 192.168/16, on interfaces with a network card behind them, or a
+   bridge over one), never on `0.0.0.0`, a public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
    home and Tailscale away.
 2. Build and install the app: `cd android && ./gradlew installDebug` (or copy
    `android/app/build/outputs/apk/debug/app-debug.apk` to the phone).

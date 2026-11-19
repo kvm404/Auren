@@ -121,8 +121,20 @@ IP_ADDR = [   # `ip -j -4 addr show up`, trimmed
 ]
 
 
-def test_the_lan_addresses_are_private_and_on_real_interfaces():
-    assert phone.pick_lan(IP_ADDR) == ["192.168.0.100", "10.1.2.3"]     # no loopback, VPN, docker, VM, /32, public
+def test_the_lan_addresses_are_private_and_on_real_interfaces(tmp_path, monkeypatch):
+    assert phone.pick_lan(IP_ADDR, real=lambda name: True) == ["192.168.0.100", "10.1.2.3"]   # no loopback, VPN,
+    # docker, VM, /32, public
+    net = tmp_path / "net"                                     # /sys/class/net
+    for card in ("enp7s0", "wlo1", "eno1"):
+        (net / card / "device").mkdir(parents=True)
+    (net / "br0" / "brif" / "vnet0").mkdir(parents=True)       # a VM bridge: only virtual ports
+    (net / "vnet0").mkdir()
+    (net / "br1" / "brif" / "eno1").mkdir(parents=True)        # the LAN bridged over the Ethernet card
+    (net / "warp0").mkdir()                                    # a tunnel under a name no list knows
+    monkeypatch.setattr(phone, "SYS_NET", net)
+    bridges = [{"ifname": n, "flags": ["BROADCAST", "UP"], "addr_info": [{"family": "inet", "local": ip, "prefixlen": 24}]}
+               for n, ip in (("br0", "192.168.50.1"), ("br1", "192.168.1.20"), ("warp0", "172.16.9.2"))]
+    assert phone.pick_lan(IP_ADDR + bridges) == ["192.168.0.100", "10.1.2.3", "192.168.1.20"]
 
 
 def test_the_server_listens_on_tailscale_and_the_lan(monkeypatch):
