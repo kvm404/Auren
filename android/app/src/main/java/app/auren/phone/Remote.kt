@@ -389,10 +389,13 @@ object Remote {
         if (!send(msg)) _notices.tryEmit("Sends when the PC is back")
     }
 
-    /** Yes or No to the question showing now. Not kept for later: after a reconnect, the PC asks again. */
-    fun answer(yes: Boolean) {
-        val s = _state.value
-        if (!s.awaiting || !send(Outgoing.answer(newId(), yes, s.ask))) _notices.tryEmit("Not connected to the PC")
+    /**
+     * Yes or No to the question [ask] names: the one on screen when it was tapped, so the PC refuses it if
+     * another question took its place. Not kept for later: after a reconnect, the PC asks again.
+     */
+    fun answer(yes: Boolean, ask: String) {
+        if (ask.isEmpty()) return
+        if (!send(Outgoing.answer(newId(), yes, ask))) _notices.tryEmit("Not connected to the PC")
     }
 
     fun cancel() {

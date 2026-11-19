@@ -114,7 +114,7 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
         StateLine(st, connected, talk != null)
 
         AnimatedVisibility(st.awaiting && connected, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            ApprovalCard(st.question)
+            ApprovalCard(st.question, st.ask)
         }
 
         Conversation(lines, Modifier.weight(1f))
@@ -221,7 +221,8 @@ private fun StateLine(st: AurenState, connected: Boolean, talking: Boolean) {
 }
 
 @Composable
-private fun ApprovalCard(question: String) {
+/** [ask] names the question this card shows: a tap answers that one, never a newer one that came in meanwhile. */
+private fun ApprovalCard(question: String, ask: String) {
     Column(
         Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(16.dp)).background(Au.Glass)
             .border(1.dp, Au.Gold.copy(alpha = 0.7f), RoundedCornerShape(16.dp)).padding(16.dp),
@@ -230,9 +231,9 @@ private fun ApprovalCard(question: String) {
         Text(question.ifBlank { "Go ahead?" }, color = Au.Text, fontSize = 15.sp, lineHeight = 21.sp,
             modifier = Modifier.padding(top = 8.dp))
         Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = { Remote.answer(false) }, modifier = Modifier.weight(1f).height(46.dp),
+            OutlinedButton(onClick = { Remote.answer(false, ask) }, modifier = Modifier.weight(1f).height(46.dp),
                 border = BorderStroke(1.dp, Au.Edge)) { Text("No", color = Au.Text) }
-            Button(onClick = { Remote.answer(true) }, modifier = Modifier.weight(1f).height(46.dp),
+            Button(onClick = { Remote.answer(true, ask) }, modifier = Modifier.weight(1f).height(46.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Au.Gold, contentColor = Au.Ink)) { Text("Yes") }
         }
     }
