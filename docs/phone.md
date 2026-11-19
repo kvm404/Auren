@@ -126,6 +126,7 @@ Phone to PC:
 | `talk.stop` | | `heard …`, `heard nothing`, `not listening` (also for a listen another phone started) |
 | `cancel` | | `cancelled` (Stop: listening, thinking, working) |
 | `answer` | `id`, `yes`, `ask` | `approved N`, `dropped N`, `that question is no longer open`, `nothing is waiting for an answer`, `busy` |
+| `voice.set` | `id`, `name` | `ok`, or `error: no voice 'X': choose Everly, Juniper, Hugh or Trevor` for an unknown name |
 | `resume` | `ids` | none: for each id, its `reply` if the PC kept it, else `lost`; nothing while it still runs |
 | `sync` | `after` | none: `inbox` messages for each item after the cursor |
 | `ping` | `id` | `{"type":"pong"}` |
@@ -136,6 +137,14 @@ status and `"duplicate": true`, so a phone that reconnects can safely resend; on
 first is still running gets `in progress` with `"duplicate": true`. A resent `ask` or `talk.start` is also
 treated as a `resume` of its id (the ack was lost, so the reply may have been too). A `busy` request isn't
 remembered and also gets `{"type":"busy", id, owner}` first.
+
+`voice.set` picks the voice, e.g. `{"type":"voice.set","id":"v1","name":"Hugh"}`. It is the same setting
+as `auren-ctl voice-name` and the panel's voice picker (`voice.name` in `config.toml`): the PC speaks
+with it, and the phone reads it back as `voiceName` in the next `state`. The name is matched ignoring
+case; the ack carries no name, so the app takes the canonical one from `voiceName`. It works whatever
+the PC is doing (it isn't a turn, so never `busy`) and even with the PC's voice off or not loaded; it
+doesn't speak a sample on the PC. The voices are the four in `src/auren/voice.py` (`VOICES`): Everly
+(the default), Juniper, Hugh and Trevor.
 
 An `answer` names the question it was tapped on: `ask` is the `ask` field of the state that showed it (a
 digest of the open confirmations). Any other value, or none, gets `that question is no longer open` and
@@ -149,7 +158,7 @@ so the phone never waits forever. An approval has nothing to resume: its effect 
 hello carries, and the turn's reply comes back under the ask's own id.
 
 PC to phone: `state` (the [state.json](ipc.md#statejson) fields `state, detail, since, brain, safety, voice,
-awaiting, question, until, ask, transcript, reply, silent, tool, remind, fresh`, plus `origin`: `desk`,
+voiceName, awaiting, question, until, ask, transcript, reply, silent, tool, remind, fresh`, plus `origin`: `desk`,
 `phone` or absent), `reply` (`{id, device, text, at}`, a phone turn's answer, sent only to that phone;
 empty text when there was nothing to say), `ended` (`{id}`, the turn ended without a reply: nothing was
 heard, or it was stopped), `lost` (`{id}`, after `resume` or a resend), `inbox` (`{item}`), `busy`, `revoked` (then

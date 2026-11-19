@@ -36,9 +36,9 @@ Always present:
 | `codexModel` | Codex's model (`brain.codex_model`), for the panel's labels |
 | `codexEffort` | Codex's effort (`brain.codex_effort`) |
 | `voice` | Spoken replies on |
-| `voiceName` | Supertonic voice (`F2`, `M3`, …) |
+| `voiceName` | The Phonon voice: `Everly` (the default), `Juniper`, `Hugh` or `Trevor`. Set by `voice-name`, the panel or a phone's `voice.set` ([phone.md](phone.md#protocol-api-v1)); the phone gets it in its `state` too |
 | `voices` | Voices available |
-| `tts` | `{speed, steps, volume, pause}` |
+| `tts` | `{speed, volume, pause}` |
 | `safety` | Approval level: `ask`, `task`, `free` or `never` ([safety.md](safety.md#approval-levels)) |
 | `autosend`, `autosendAfter` | Auto-send on, and its delay in seconds ([daemon.md](daemon.md)) |
 | `origin` | Who owns the turn now: `desk`, `phone`, or `null` when nobody does ([phone.md](phone.md#how-a-phone-turn-works)) |
@@ -70,8 +70,8 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `say <text>` | Speak a sentence |
 | `forget` | Fresh conversation |
 | `voice on\|off\|toggle` | Spoken replies |
-| `voice-name <name> [sample]` | Voice (says the sample) |
-| `tts speed X steps N volume X pause X` / `tts reset` | Voice tuning |
+| `voice-name <name> [sample]` | Voice: `Everly`, `Juniper`, `Hugh` or `Trevor`, any case (says the sample when idle). The same setting as a phone's `voice.set` |
+| `tts speed X volume X pause X` / `tts reset` | Voice tuning |
 | `brain auto\|claude\|codex` | Brain mode |
 | `effort low\|medium\|high\|xhigh\|max` | Claude's effort (fresh conversation) |
 | `codex-effort minimal\|low\|medium\|high\|xhigh` | Codex's effort (from its next answer) |
@@ -99,7 +99,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `~/.local/state/auren/herdr-jobs.json` | tools | herdr tabs Auren created |
 | `~/.local/state/auren/jobs/*.log` | tools | Output of commands run without herdr |
 | `~/.cache/auren/profile-static.json` | profile | Cached machine facts |
-| `~/.local/share/auren/models/supertonic-3/` | `auren voice-model` | The voice model |
+| `~/.cache/huggingface/hub/` (`models--gradium--phonon-*`) | `auren voice-model` | The voice model (Phonon 31m) and its voices, at the revisions `ptts` pins |
 | `~/.local/share/auren/{venv,mascot,bar-plugin,bin}/` | `install.sh` | The installed program |
 | `~/.local/share/auren/install.json` | `install.sh` | What's installed: version, commit, branch, tag (if HEAD has an exact tag), remote, source, mode, dirty, committed, installed_at |
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |
@@ -111,7 +111,8 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 
 The phone talks to the daemon over HTTPS and a secure WebSocket on the Tailscale address or a private
 LAN address, pinned to the PC's self-signed certificate, with a device token; the protocol is in
-[phone.md](phone.md#protocol-api-v1).
+[phone.md](phone.md#protocol-api-v1). A phone sets the PC's voice with `{"type":"voice.set","id":…,"name":"Hugh"}`
+(ack `ok` or `error: …`), the same setting as `voice-name`, and reads it back as `voiceName` in the state.
 
 ## English-only replies
 

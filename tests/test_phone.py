@@ -456,6 +456,37 @@ def test_shared_text_can_be_asked(server):
     assert r.json()["status"].startswith("error")
 
 
+def test_a_phone_sets_the_pcs_voice_and_reads_it_back_from_the_state(server, tmp_path, monkeypatch):
+    from auren import settings
+
+    client, d, hub = server
+    _, token = _paired()
+    monkeypatch.setattr(settings, "CONFIG_FILE", tmp_path / "config.toml")
+    monkeypatch.setattr(settings, "LEGACY", tmp_path / "settings.json")
+    state = tmp_path / "state.json"
+    d.settings, d.voice = {"voiceName": "Everly"}, None       # the PC's voice may not be loaded at all
+    d.set_voice_name = daemon.Daemon.set_voice_name.__get__(d)
+    d._save = daemon.Daemon._save.__get__(d)
+    d._refresh_state = lambda: state.write_text(json.dumps({"state": "idle", "voiceName": d.settings["voiceName"]}))
+    with client.websocket_connect("/v1/ws", headers=_auth(token)) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "voice.set", "id": "v1", "name": "hugh"})
+        assert ws.receive_json() == {"type": "ack", "id": "v1", "status": "ok"}
+        assert settings.load()["voiceName"] == "Hugh" and hub.snapshot()["voiceName"] == "Hugh"
+        for bad in ("F2", ""):
+            ws.send_json({"type": "voice.set", "id": "v2", "name": bad})
+            ack = ws.receive_json()
+            assert ack["id"] == "v2" and ack["status"].startswith(f"error: no voice {bad!r}")
+            assert "Everly, Juniper, Hugh or Trevor" in ack["status"]
+    assert settings.load()["voiceName"] == "Hugh"
+
+
+def test_the_state_the_phone_gets_has_the_voice_name():
+    phone_server.STATE_FILE.write_text(json.dumps({"state": "idle", "voiceName": "Juniper", "voices": ["x"]}))
+    snap = phone_server.Hub(_Daemon()).snapshot()
+    assert snap["voiceName"] == "Juniper" and "voices" not in snap
+
+
 # --- one turn at a time ------------------------------------------------------------------------------
 
 class _Brain:
@@ -514,7 +545,7 @@ class _Hub:
 
 class _Harness(daemon.Daemon):
     def __init__(self, tmp_path):
-        self.settings = {"voice": True, "brain": "auto", "voiceName": "F2", "safety": "ask"}
+        self.settings = {"voice": True, "brain": "auto", "voiceName": "Everly", "safety": "ask"}
         self.tools = tools.Runtime(tmp_path / "tools.sock")
         self.brain = _Brain()
         self.voice = self.profile = self.listening = None

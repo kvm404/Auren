@@ -56,7 +56,7 @@ PAIR_RATE = 10              # pairing attempts a minute, from anyone, before the
 SEEN = 500                  # request ids remembered, so a resent request doesn't run twice
 REPLY_TTL = 600             # seconds a reply is kept for a phone that lost its connection before it came
 REPLIES = 200
-STATE_FIELDS = ("state", "detail", "since", "brain", "safety", "voice", "origin", "awaiting", "question", "until",
+STATE_FIELDS = ("state", "detail", "since", "brain", "safety", "voice", "voiceName", "origin", "awaiting", "question", "until",
                 "ask", "transcript", "reply", "silent", "tool", "remind", "fresh")
 
 
@@ -257,6 +257,13 @@ class Hub:
         elif kind == "answer":
             # Bound to the question the phone showed: a yes kept from before a reconnect approves nothing new.
             status = d.yes_no(bool(msg.get("yes")), self._turn(rid, dev), "phone", str(msg.get("ask") or ""))
+        elif kind == "voice.set":
+            # The same setting as auren-ctl voice-name: the PC speaks with it, and the phone reads it from the state.
+            try:
+                d.set_voice_name(str(msg.get("name") or ""))
+                status = "ok"
+            except ValueError as e:
+                status = f"error: {e}"
         elif kind == "resume":
             ids = msg.get("ids")
             self.resume(conn, ids if isinstance(ids, list) else [])
