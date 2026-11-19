@@ -744,7 +744,10 @@ def main(args: list[str]) -> int:
 
 def _print(result: dict) -> None:
     have = result.get("installed", {})
-    print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
+    if have.get("mode") == "package" or config.PACKAGED:      # pacman knows the version, not a commit
+        print(f"Installed: {have.get('version', '')} (Arch package)")
+    else:
+        print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
     state = result.get("state")
     if state == "current":
         print("Up to date with published releases.")

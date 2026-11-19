@@ -595,3 +595,9 @@ def test_opening_the_update_terminal_counts_as_started(package, monkeypatch):
     monkeypatch.setattr(update.subprocess, "Popen", lambda cmd, **kw: None)
     monkeypatch.setattr(update.shutil, "which", lambda name: "/usr/bin/x" if name.startswith("omarchy-launch") else None)
     assert update.main(["apply"]) == 0
+
+
+def test_a_package_install_prints_its_version_not_a_commit(capsys):
+    update._print({"state": "current", "installed": {"mode": "package", "version": "0.1.5"}})
+    out = capsys.readouterr().out
+    assert "Installed: 0.1.5 (Arch package)" in out and "unknown" not in out
