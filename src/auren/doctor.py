@@ -292,7 +292,8 @@ def phone_checks() -> list[Check]:
     ts = next((ip for ip, via in addrs if via == "tailscale"), None)
     why_ts = missing.get("tailscale", "")
     out.append(Check(g, "Tailscale", OK, ts) if ts else Check(
-        g, "Tailscale", WARN, f"{why_ts}: the phone works only on the same Wi-Fi",
+        g, "Tailscale", WARN, f"{why_ts}: the phone works only on the same Wi-Fi"
+        + ("" if "installed" in why_ts else " (and a phone paired now can't reach this PC from elsewhere)"),
         "install Tailscale (omarchy install tailscale) and run: tailscale up" if "installed" in why_ts else "tailscale up"))
     lan_ips = [ip for ip, via in addrs if via == "lan"]
     if not lan:
@@ -339,9 +340,15 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
     except OSError:
         return None
     # Each path separately: a rule only for tailscale0 doesn't open the LAN, nor one for another subnet.
-    lan_ok, ts_ok = not lan_ips, not tailscale
+    # Tailscale's own firewall rules (on unless tailscale up --netfilter-mode=off/nodivert) let everything on
+    # tailscale0 in, before ufw sees it.
+    lan_ok, ts_ok = not lan_ips, not tailscale or _tailscale_lets_in()
     for line in rules.splitlines():
-        if not re.search(rf"--dport {port}\b.*-j ACCEPT", line):
+        if not line.startswith("-A ufw-user-input") or not re.search(r"-j ACCEPT\b", line):
+            continue
+        # This port, or every port (ufw allow from 192.168.1.0/24); not a rule for UDP only.
+        dport = re.search(r"--dports? (\S+)", line)
+        if dport and str(port) not in re.split(r"[,:]", dport[1]) or re.search(r"-p udp\b|-d \S", line):
             continue
         dev = re.search(r"-i (\S+)", line)
         src = re.search(r"-s (\S+)", line)
@@ -365,6 +372,15 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
     blocked = "Wi-Fi/LAN" if ts_ok else "Tailscale" if lan_ok else ""
     why = f"ufw blocks port {port} over {blocked}" if blocked else f"ufw blocks port {port}"
     return Check("Phone", "firewall", WARN, f"{why}: the phone can't reach this PC that way", "; ".join(fix))
+
+
+def _tailscale_lets_in() -> bool:
+    """Does Tailscale's own firewall rule (ts-input: accept all on tailscale0) run ahead of ufw's?"""
+    code, out = _run(["tailscale", "debug", "prefs"])
+    try:
+        return code == 0 and json.loads(out).get("NetfilterMode") == 2      # 2: on (1: nodivert, 0: off)
+    except (ValueError, AttributeError):
+        return False
 
 
 SYMBOL = {OK: "\033[32m✓\033[0m", WARN: "\033[33m!\033[0m", FAIL: "\033[31m✗\033[0m"}

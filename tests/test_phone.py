@@ -1514,3 +1514,25 @@ def test_the_status_lists_the_phones_connected_now(server):
     assert phone.status()["connected"] == []
     phone_server._write_status(False, 8735, why="the phone server stopped")
     assert phone.status()["connected"] == []
+
+
+def test_doctor_sees_a_rule_for_every_port_and_tailscales_own(monkeypatch, tmp_path):
+    """ufw allow from 192.168.31.0/24 opens every port to the LAN; Tailscale's own rules let tailscale0 in."""
+    from auren import doctor
+    rules = tmp_path / "user.rules"
+    monkeypatch.setattr(doctor, "UFW_RULES", rules)
+    prefs = {"NetfilterMode": 2}
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps(prefs)) if cmd[0] == "tailscale" else (0, "active"))
+    rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
+    assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.OK
+    for other in ("-A ufw-user-input -p udp -s 192.168.31.0/24 -j ACCEPT",           # UDP only
+                  "-A ufw-user-input -p tcp --dport 22 -s 192.168.31.0/24 -j ACCEPT",  # another port
+                  "-A ufw-user-input -p udp -d 172.17.0.1 --dport 53 -s 192.168.0.0/16 -j ACCEPT"):
+        rules.write_text(other + "\n")
+        assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.WARN
+    rules.write_text("-A ufw-user-input -p tcp -m multiport --dports 8000,8735 -j ACCEPT\n")
+    assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.OK
+    prefs["NetfilterMode"] = 1                                       # nodivert: ufw decides for tailscale0 too
+    rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
+    ts = doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True)
+    assert ts.status == doctor.WARN and "Tailscale" in ts.detail and "tailscale0" in ts.fix
