@@ -33,7 +33,9 @@
   offers **Restart Auren**. The talk keys start by themselves once Accessibility is allowed (with a restart
   when macOS still tells the running Auren no, as after a reset), without the window asking for one. The window checks again when it comes back to the front, and
   finds Claude Code or Codex installed after Auren (in `~/.local/bin` or `~/.claude/local`).
-  `auren doctor` says the same as the window.
+  `auren doctor` says the same as the window. Taking Accessibility away while Auren runs (in System
+  Settings, or `tccutil reset`) turns the talk keys off instead of slowing the keyboard down, and they
+  come back once it's allowed again.
 - **A tidier menu bar menu on macOS**: what Auren is doing at the top, Talk and Fresh conversation with
   their keys, Stop only while Auren is busy, **Open Auren…**, **Phone…**, **Set up Auren…** (marked
   while setup needs you), **Update to …** only when a release is waiting, then Restart and Quit. Edit

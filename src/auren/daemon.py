@@ -986,7 +986,37 @@ class Daemon:
                 self._hotkeys.stop()
             self._hotkeys = hotkey.start({"talk": self.settings["keys.talk"],
                                           "talk-fresh": self.settings["keys.talk_fresh"]},
-                                         lambda command: send(command, timeout=10))
+                                         lambda command: send(command, timeout=10),
+                                         on_lost=lambda: self.loop.call_soon_threadsafe(self._keys_lost))
+
+    def _keys_lost(self) -> None:
+        """macOS: Accessibility was taken away while the talk keys were on (tccutil reset, or turned off in
+        System Settings). A tap left in place would make every key press wait on it: drop it, and wait for
+        Accessibility again as at a start without it."""
+        def drop():
+            with self._keys_lock:
+                if getattr(self, "_hotkeys", None):
+                    self._hotkeys.stop()
+                self._hotkeys = None
+        drop()
+        log.warning("Accessibility is off: the talk keys stop until it's allowed again")
+        task = getattr(self, "_keys_task", None)
+        if not task or task.done():
+            self._keys_task = asyncio.create_task(self._keys_once_allowed())
+        self._watch_grants(names=("accessibility",))
+
+    async def _keys_watchdog(self, every: float = 5.0) -> None:
+        """macOS: notice Accessibility taken away while the talk keys are on, before the tap slows the
+        keyboard down. This process's answer can be stale, so a no is checked with a new process first."""
+        from .mac import permissions
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(every)
+            if not getattr(self, "_hotkeys", None) or await loop.run_in_executor(None, permissions.accessibility):
+                continue
+            fresh = await loop.run_in_executor(None, permissions.fresh)
+            if fresh.get("accessibility") is False and getattr(self, "_hotkeys", None):
+                self._keys_lost()
 
     async def _keys_once_allowed(self, every: float = 2.0) -> None:
         """macOS: the talk keys couldn't start (Accessibility not allowed yet). Wait for the user to allow it,
@@ -1136,6 +1166,7 @@ class Daemon:
             if not self._hotkeys:
                 self._keys_task = asyncio.create_task(self._keys_once_allowed())
                 self._watch_grants(names=("accessibility",))
+            asyncio.create_task(self._keys_watchdog())
         async with server:
             await server.serve_forever()
 

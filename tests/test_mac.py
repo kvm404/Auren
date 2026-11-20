@@ -2,6 +2,8 @@
 
 import re
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -1116,3 +1118,95 @@ def test_a_failed_listen_is_quiet_enough_to_restart_but_an_open_question_isnt():
                  _quiet_daemon("idle", live=["turn"]), _quiet_daemon("idle", locked=True),
                  _quiet_daemon("idle", batch=["a yes/no question"])):
         assert not Daemon._quiet(busy)
+
+
+def _fake_quartz(monkeypatch):
+    enabled = []
+    q = types.SimpleNamespace(kCGEventTapDisabledByTimeout=-2, kCGEventTapDisabledByUserInput=-1,
+                              CGEventTapEnable=lambda tap, on: enabled.append(on))
+    monkeypatch.setitem(sys.modules, "Quartz", q)
+    return q, enabled
+
+
+def test_a_tap_slowed_down_after_accessibility_was_taken_away_stays_off(monkeypatch):
+    """Turned back on without Accessibility, the tap would hold up every key press (the keyboard lags):
+    it stays off, and the daemon is told once."""
+    from auren.mac import hotkey
+    q, enabled = _fake_quartz(monkeypatch)
+    lost = []
+    allowed = [True]
+    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, on_lost=lambda: lost.append(1),
+                          trusted=lambda: allowed[0], clock=lambda: 0.0)
+    monkeypatch.setattr(hotkey.threading, "Thread", lambda target, daemon: types.SimpleNamespace(start=target))
+    assert keys._callback(None, q.kCGEventTapDisabledByUserInput, "e", None) == "e" and enabled == [True]
+    assert keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None) == "e" and enabled == [True, True]
+    allowed[0] = False
+    keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True] and lost == [1] and keys.lost
+
+
+def test_a_tap_macos_keeps_stopping_stays_off(monkeypatch):
+    from auren.mac import hotkey
+    q, enabled = _fake_quartz(monkeypatch)
+    now = [0.0]
+    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, trusted=lambda: True, clock=lambda: now[0])
+    for t in (0.0, 40.0, 80.0):                # now and then: turned back on each time
+        now[0] = t
+        keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True, True]
+    for t in (150.0, 151.0, 152.0):            # three times in half a minute: left off on the third
+        now[0] = t
+        keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True, True, True, True] and keys.lost
+
+
+class _KeysDaemon:
+    from auren.daemon import Daemon
+    _keys_lost = Daemon._keys_lost
+    _keys_watchdog = Daemon._keys_watchdog
+
+    def __init__(self, keys):
+        import threading
+        self._hotkeys, self._keys_lock, self.calls = keys, threading.Lock(), []
+
+    async def _keys_once_allowed(self):
+        self.calls.append("wait")
+
+    def _watch_grants(self, names=None):
+        self.calls.append(("watch", names))
+
+
+def test_the_daemon_drops_lost_talk_keys_and_waits_for_accessibility_again():
+    import asyncio
+    stopped = []
+
+    async def go():
+        d = _KeysDaemon(types.SimpleNamespace(stop=lambda: stopped.append(1)))
+        d._keys_lost()
+        await asyncio.sleep(0)
+        return d
+    d = asyncio.run(go())
+    assert stopped == [1] and d._hotkeys is None and d.calls == [("watch", ("accessibility",)), "wait"]
+
+
+def test_the_watchdog_drops_the_keys_only_when_a_new_process_agrees_accessibility_is_gone(monkeypatch):
+    import asyncio
+
+    from auren.mac import permissions
+    live, fresh = [True, False, False], [{"accessibility": True}, {"accessibility": False}]
+    monkeypatch.setattr(permissions, "accessibility", lambda: live.pop(0) if live else True)
+    monkeypatch.setattr(permissions, "fresh", lambda: fresh.pop(0))
+    stopped = []
+
+    async def go():
+        d = _KeysDaemon(types.SimpleNamespace(stop=lambda: stopped.append(1)))
+        task = asyncio.create_task(d._keys_watchdog(every=0.0))
+        for _ in range(200):                   # the checks run on worker threads
+            if d._hotkeys is None:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        return d
+    d = asyncio.run(go())
+    assert stopped == [1] and d._hotkeys is None and not fresh     # a stale no alone (the first) kept them
