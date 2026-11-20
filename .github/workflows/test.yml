@@ -78,6 +78,11 @@ jobs:
           done
           test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/install-macos.sh"
           test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/README.md"   # Homebrew moves it out of libexec itself
+          # What auren setup builds first: Auren's environment from Homebrew's copy of the source (not the
+          # rest of the setup: Auren.app and the launch agents are the user's)
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/brew-venv" uv sync --project "$(brew --prefix local/auren-ci/auren)/libexec/source" \
+            --frozen --no-dev --no-editable
+          "$RUNNER_TEMP/brew-venv/bin/python" -I -c 'import auren.cli, auren.daemon, auren.phone_server'
       - name: Check the formula's style
         run: brew style --formula local/auren-ci/auren
         env:
