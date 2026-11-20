@@ -7,6 +7,7 @@
 - [Talking to Auren](daemon.md): keys, interruptions, voice settings, and logs.
 - [Safety](safety.md): approval levels, bound confirmations, the send judge, and limitations.
 - [Privacy](privacy.md): what leaves the laptop and what stays on disk.
+- [Phone remote](phone.md): the Android app: pairing, Wi-Fi and Tailscale, the inbox, sharing, and the protocol.
 - [Mascots](mascot.md): controls, preferences, animation, and adding characters.
 - [Bar plugin](bar-plugin.md): pages, keyboard navigation, and settings.
 - [Updates and releases](releases.md): release-only updates and the maintainer publishing procedure.

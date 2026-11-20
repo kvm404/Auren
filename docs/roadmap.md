@@ -12,9 +12,13 @@ Auren targets voice-driven tasks on an Omarchy desktop. The first release is v0.
 - Desktop, browser, screen, shell, herdr-agent, and Excalidraw tools.
 - Approval levels, bound confirmations, batch answers, cancellation, and the full-access send judge.
 - Press-to-start and press-to-send controls, fresh conversations, and typed terminal conversations.
-- Auren and Veyra mascots and a six-page Omarchy bar panel.
+- Auren and Veyra mascots and a seven-page Omarchy bar panel.
 - XDG settings, detection of optional integrations, diagnostics, and portable installation.
 - Published-release updates, service state preservation, and installation rollback.
+- An Arch package (`yay -S auren`) with `auren setup` and `auren setup --remove`.
+- A preview on Apple Silicon Macs.
+- An Android phone remote over Wi-Fi or Tailscale: hold-to-talk and hands-free conversation, typed
+  requests, answers and Stop, brain settings, an inbox for what Auren sends, and the share sheet.
 
 ## Planned
 
@@ -27,7 +31,7 @@ These are ideas for future work, not promises for a particular release:
 - User-installed mascots without edits to the shipped QML.
 - History retention controls and a more restrictive read-only approval mode.
 - Browser control in standalone web-app windows.
-- Packaged distribution and an uninstall command.
+- The phone remote on macOS, and a Homebrew tap for the Mac.
 
 ## Provider decisions
 

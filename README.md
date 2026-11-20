@@ -2,12 +2,15 @@
 
 <p align="center">
   A voice assistant for Omarchy, and for macOS in preview.<br>
-  Talk to it, and it opens apps, plays music, messages friends and runs coding agents in herdr.
+  Talk to it, and it opens apps, plays music, messages friends and runs coding agents in herdr.<br>
+  Talk to it from your Android phone too, at home or anywhere over Tailscale.
 </p>
 
 <p align="center">
+  <a href="#whats-new">What's new</a> ·
   <a href="#install">Install</a> ·
   <a href="#using-it">Using it</a> ·
+  <a href="#from-your-phone">Phone</a> ·
   <a href="docs/README.md">Docs</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -19,6 +22,24 @@
 Press **Super+A** and say what you want. A tiny robot on your desktop shows what it's doing and
 answers out loud. When an app has no command for something, Auren looks at the screen and uses the
 mouse and keyboard.
+
+## What's new
+
+**Auren on your phone.** The Auren Android app is a remote for the Auren on your PC. Hold to talk, or turn
+on hands-free and just keep talking, back and forth, until you go quiet. Type a request, watch what Auren
+is doing, answer its yes/no questions, stop it, and switch who answers and how hard it thinks. Links,
+images and files it finds land in the app's inbox. Share anything from another app to Auren, to the PC's
+clipboard or to the PC's browser. It works on your Wi-Fi, and away from home over Tailscale.
+[From your phone](#from-your-phone) shows how to set it up.
+
+**A new voice.** Auren now speaks with Gradium's Phonon, in four voices: Everly, Juniper, Hugh and
+Trevor. It starts talking sooner, and the model is a quarter of the old one's size. Updating downloads it
+for you and deletes the old one.
+
+**A Phone page in the bar panel** pairs a phone with a QR code, shows which phone is connected and over
+which network, and unpairs one.
+
+Everything else is in the [changelog](CHANGELOG.md).
 
 ## Install
 
@@ -77,7 +98,7 @@ key and the brain. Then press **Control+Option+A** to talk. `auren update` insta
 | **Super+A** (Mac: Control+Option+A) | Start talking. Press again to send, or while it works to stop it. |
 | **Super+Shift+A** (Mac: Control+Option+Shift+A) | Start a fresh conversation. |
 | **Mascot** | Click to talk. Drag to move it, scroll to resize it. |
-| **Bar icon** (Mac: menu bar icon) | Change the mascot, voice, brain and vocabulary, and install updates. |
+| **Bar icon** (Mac: menu bar icon) | Change the mascot, voice, brain and vocabulary, pair a phone, and install updates. |
 
 Things to try:
 
@@ -87,10 +108,40 @@ Things to try:
 - "Find the cheapest flight to Goa next Friday." (with the browser tools)
 - "Ask Codex to fix the failing tests in my project."
 
-From your phone: the Android app in `android/` is a remote over Tailscale (talk, type, answer, stop, and
-get links and files from Auren). Pair it with `auren phone pair`; see [Phone remote](docs/phone.md).
-
 If something doesn't work, run `auren doctor`.
+
+## From your phone
+
+<img src="docs/images/bar-panel-phone.png" alt="The bar panel's Phone page showing a pairing QR code and two paired phones" width="380" align="right">
+
+The Auren app for Android talks to the Auren on your PC. Your phone is the microphone and the screen;
+the PC does the work, with the same brain, tools and safety level as at the desk.
+
+1. Download `auren-phone-X.Y.Z.apk` from the [latest release](https://github.com/kvm404/Auren/releases/latest)
+   on your phone and open it. Android asks once to allow installs from your browser.
+2. On the PC, open the bar panel's **Phone** page and click **Pair a phone**.
+3. In the app, tap **Pair** and scan the QR code.
+
+The phone reaches the PC on the same Wi-Fi. To use it away from home, install
+[Tailscale](https://tailscale.com) on both and turn it on on the PC *before* you pair, so the code
+carries the Tailscale address too.
+
+In the app:
+
+- **Hold to talk**, or tap **Hands-free** for a live conversation that keeps listening after each reply.
+  It turns off when you tap it again or go quiet for a while.
+- **Type** a request instead, and **Stop** Auren from either side.
+- Answer Auren's **Yes / No** questions, by tapping or by voice.
+- **Fresh** (the circular arrow) starts a new conversation and clears the chat.
+- **Settings** picks who answers (Auto, Claude or Codex), the effort, the voice, and whether the phone
+  reads replies aloud. The phone speaks in the same voice as the PC, on its own CPU.
+- The **inbox** keeps what Auren sends you: links, text, images and files.
+
+Auren handles one request at a time, from the desk or the phone. The phone remote works with Auren on
+Omarchy; the Mac gets it in a later release. [Phone remote](docs/phone.md) has the details, including
+the firewall, the commands and the protocol.
+
+<br clear="right">
 
 ## Under the hood
 
@@ -101,6 +152,7 @@ If something doesn't work, run `auren doctor`.
 | **Voice** (text to speech) | Gradium's Phonon, running on your own CPU, in four voices. |
 | **Coding agents** | herdr (optional) |
 | **Browser** | Open Browser Use (optional) |
+| **Phone** | The Auren Android app, over your Wi-Fi or Tailscale, with TLS pinned to your PC's own certificate (optional) |
 
 Haiku is quick because Auren's tools do the heavy lifting. A simple answer comes back in about two
 seconds.

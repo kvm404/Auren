@@ -320,7 +320,7 @@ Panel {
   }
   readonly property int pairLeft: Math.max(0, Math.round((root.pairing.expires || 0) - root.now))
   Timer { interval: 1000; running: root.pairStage === "showing"; repeat: true; onTriggered: root.now = Date.now() / 1000 }
-  readonly property var pairActions: pairProc.running
+  readonly property var pairActions: pairProc.running || pairStage === "starting" || pairStage === "showing"
     ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }]
     : [{ label: root.phones.length ? "Pair another phone" : "Pair a phone", icon: "󰄜",
          tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing }]

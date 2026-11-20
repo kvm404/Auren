@@ -15,15 +15,16 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    bridge over one), never on `0.0.0.0`, a public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
    home and Tailscale away. It listens only while a phone is paired or a pairing is open: until you run
    `auren phone pair`, nothing on the network can reach it.
-2. Let the phone in through the firewall. Omarchy turns on `ufw`, which drops incoming connections, so the
-   app says it can't reach the PC until port 8735 is allowed, from your LAN and over Tailscale only:
+2. Check the firewall: run `auren doctor` and look at its **Phone** section. Omarchy turns on `ufw`,
+   which drops incoming connections, so if nothing lets port 8735 in, the app can't reach the PC. Often
+   something already does: Tailscale lets its own traffic past ufw, and a rule that allows everything from
+   your LAN covers the port too. Doctor knows both. If it warns, it prints the commands for your own
+   addresses, which look like this (LAN and Tailscale only):
 
    ```sh
    sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
    sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
    ```
-
-   `auren doctor` checks this and prints the commands for your own addresses.
 3. Install the app: download `auren-phone-X.Y.Z.apk` from the
    [latest release](https://github.com/kvm404/Auren/releases/latest) on the phone and open it (Android asks
    you to allow installing from your browser once). A newer release's APK installs over it, keeping the

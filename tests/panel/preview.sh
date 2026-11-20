@@ -3,8 +3,9 @@
 #
 #   tests/panel/preview.sh [out-dir] [shots]
 #
-# shots: a comma list of page[:state], pages 0-5 (Home, Mascot, Voice, Brain, Vocabulary, Updates), states:
-# available, confirm, updating, failed (Updates page), refused (Vocabulary page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
+# shots: a comma list of page[:state], pages 0-6 (Home, Mascot, Voice, Brain, Vocabulary, Phone, Updates), states:
+# available, confirm, updating, failed (Updates page), refused (Vocabulary page), pairing (a QR code up),
+# tsoff (Tailscale off on the PC), nophone (none paired, not listening) (Phone page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
 # awaiting (Auren is asking two yes/no questions: every page of that run shows it), autosend (auto-send is on,
 # after 5 s: every page of that run too).
 # PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does. PANEL_PACKAGED=1 shows an install
@@ -17,7 +18,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="$(realpath -m "${1:-$repo/.panel-preview}")"
-shots="${2:-0,1,2,3,4,4:refused,5,5:available,5:confirm,5:updating,5:failed,1:cursor}"
+shots="${2:-0,1,2,3,4,4:refused,5,5:pairing,5:tsoff,5:nophone,6,6:available,6:confirm,6:updating,6:failed,1:cursor}"
 omarchy=/usr/share/omarchy/shell
 [[ -d $omarchy/Ui ]] || { echo "needs the Omarchy shell ($omarchy)" >&2; exit 1; }
 
@@ -50,10 +51,19 @@ autosend=false
 [[ ,$shots, != *:autosend,* ]] || autosend=true
 printf '{"state":"idle","detail":"","since":%s,"pid":%s,"voice":true,"voiceName":"Everly","mode":"auto","effort":"low","codexModel":"gpt-6-luna","codexEffort":"low","safety":"ask","tts":{"speed":1.0,"volume":1.0,"pause":0.1},"autosend":%s,"autosendAfter":5%s}' \
   "$now" "$keeper" "$autosend" "$asking" >"$tmp/run/auren/state.json"
-# A stand-in for `auren vocab`, with a few words of the user's own.
+# The phone server, listening on both paths with one of the two paired phones connected, and a sample QR code.
+printf '{"on":true,"idle":false,"port":8735,"addrs":[{"ip":"100.101.102.103","via":"tailscale","ok":true},{"ip":"192.168.1.20","via":"lan","ok":true}],"fp":"ab","why":"","missing":{},"connected":[{"id":"a1b2c3","name":"Pixel 9","via":"tailscale"}],"pid":%s,"at":%s}' \
+  "$keeper" "$now" >"$tmp/run/auren/phone.json"
+uv run --quiet --project "$repo" python -c 'import segno, sys; segno.make("auren://pair?v=1&hosts=192.168.1.20&port=8735&code=sample&fp=ab", error="m").save(sys.argv[1], kind="png", scale=10, border=2)' \
+  "$tmp/run/auren/phone-pair.png"
+# A stand-in for `auren vocab` (a few words of the user's own) and `auren phone devices`.
 mkdir -p "$tmp/data/auren/bin"
-cat >"$tmp/data/auren/bin/auren" <<'SH'
+cat >"$tmp/data/auren/bin/auren" <<SH
 #!/bin/sh
+if [ "\$1 \$2" = "phone devices" ]; then
+  echo '[{"id":"a1b2c3","name":"Pixel 9","created":$((now - 86400 * 3)),"lastSeen":$now},{"id":"d4e5f6","name":"Galaxy Tab","created":$((now - 86400 * 20)),"lastSeen":$((now - 7200))}]'
+  exit 0
+fi
 echo '{"ok": true, "message": "", "limit": 80, "mine": ["Zorblax", "Kaushal", "pull request", "Tensaku"], "defaults": ["herdr", "Codex", "Claude", "OpenCode", "Antigravity", "Grok", "Omarchy", "Hyprland", "systemctl", "subagent", "window", "tab", "browser", "Quickshell", "Auren", "Veyra", "npm", "bun", "PR", "plugin"]}'
 SH
 chmod +x "$tmp/data/auren/bin/auren"
