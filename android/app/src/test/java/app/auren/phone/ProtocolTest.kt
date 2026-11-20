@@ -162,4 +162,51 @@ class ProtocolTest {
         assertEquals("v1", set.getString("id"))
         assertEquals("Trevor", set.getString("name"))
     }
+
+    @Test
+    fun `the brain settings are in the state, and an older pc sends none`() {
+        val s = (Incoming.parse(
+            """{"type":"state","state":"idle","mode":"auto","brain":"codex","effort":"high","codexEffort":"minimal","codexModel":"gpt-6-luna"}"""
+        ) as Incoming.State).state
+        assertEquals("auto", s.mode)
+        assertEquals("high", s.effort)
+        assertEquals("minimal", s.codexEffort)
+        assertEquals("gpt-6-luna", s.codexModel)
+        assertTrue(s.codexAnswers)                                      // Auto after Claude's limit: Codex's effort
+        assertEquals("auto", s.setting("brain"))
+        assertEquals("high", s.setting("effort"))
+        assertEquals("minimal", s.setting("codex-effort"))
+        assertNull(s.setting("voice"))
+        assertFalse(s.copy(brain = "claude").codexAnswers)
+        assertTrue(s.copy(mode = "codex", brain = "claude").codexAnswers)
+
+        val old = AurenState.from(JSONObject("""{"state":"idle","brain":"claude"}"""))
+        assertEquals("", old.mode)                                      // the phone hides the Brain controls
+        assertEquals("", old.effort)
+        assertEquals("", old.codexEffort)
+        assertEquals("", old.codexModel)
+        assertFalse(old.codexAnswers)
+    }
+
+    @Test
+    fun `codex's model as people say it`() {
+        assertEquals("GPT-6 Luna", codexName("gpt-6-luna"))
+        assertEquals("GPT-5.6 Luna", codexName("gpt-5.6-luna"))
+        assertEquals("GPT-6 Luna Mini", codexName("gpt-6-luna-mini"))
+        assertEquals("gpt-6", codexName("gpt-6"))                        // not the usual shape: as it is
+        assertEquals("o4-mini-high", codexName("o4-mini-high"))
+        assertEquals("", codexName(""))
+    }
+
+    @Test
+    fun `forget and setting requests`() {
+        val forget = JSONObject(Outgoing.forget("f1"))
+        assertEquals("forget", forget.getString("type"))
+        assertEquals("f1", forget.getString("id"))
+        val set = JSONObject(Outgoing.setting("s1", "codex-effort", "high"))
+        assertEquals("setting", set.getString("type"))
+        assertEquals("s1", set.getString("id"))
+        assertEquals("codex-effort", set.getString("name"))
+        assertEquals("high", set.getString("value"))
+    }
 }

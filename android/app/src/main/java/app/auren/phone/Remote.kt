@@ -106,6 +106,11 @@ object Remote {
     private val _pendingVoice = MutableStateFlow<String?>(null)
     val pendingVoice: StateFlow<String?> = _pendingVoice
     private var voiceSetId: String? = null
+    /** Brain settings picked here that the PC hasn't confirmed yet: brain, effort or codex-effort to the value. */
+    private val _pendingSettings = MutableStateFlow<Map<String, String>>(emptyMap())
+    val pendingSettings: StateFlow<Map<String, String>> = _pendingSettings
+    private val settingIds = HashMap<String, String>()     // request id -> the setting it changes
+    private var forgetId: String? = null
 
     private var ws: WebSocket? = null
     private var connected = false
@@ -313,6 +318,7 @@ object Remote {
         if (hosts != pc.hosts || pc.last != to) store.pc = pc.copy(hosts = hosts, last = to)
         _pendingVoice.value = null          // a pick sent on the old link: the PC's state says what took
         voiceSetId = null
+        clearBrainRequests()
         setState(m.state)
         if (m.inboxLast < inboxLast) {      // the PC's inbox was reset: its new items reuse the old ids
             inboxLast = 0
@@ -370,6 +376,27 @@ object Remote {
                     }
                     return
                 }
+                if (m.id == forgetId) {
+                    forgetId = null
+                    if (m.ok) addLine(Line("fresh-${m.id}", Who.NOTE, "Fresh conversation"))
+                    else _notices.tryEmit("Couldn't start fresh: " + m.status.removePrefix("error: "))
+                    return
+                }
+                val setting = settingIds.remove(m.id)
+                if (setting != null) {
+                    val want = _pendingSettings.value[setting]
+                    // A later pick of the same setting may still be on its way: only this one's pending goes.
+                    val newer = setting in settingIds.values
+                    if (!m.ok) {
+                        if (!newer) _pendingSettings.value = _pendingSettings.value - setting
+                        _notices.tryEmit(
+                            (if (setting == "brain") "Couldn't change who answers: " else "Couldn't change the effort: ") +
+                                m.status.removePrefix("error: "))
+                    } else if (!newer && want == _state.value.setting(setting)) {
+                        _pendingSettings.value = _pendingSettings.value - setting     // no change, so no new state
+                    }
+                    return
+                }
                 val talk = _talk.value
                 when {
                     m.busy -> {                     // the Busy message before it said who has the turn
@@ -385,7 +412,14 @@ object Remote {
                 }
             }
             is Incoming.Busy -> _notices.tryEmit(if (m.owner == "desk") "Auren is busy at the desk" else "Auren is busy")
-            is Incoming.Error -> _notices.tryEmit(m.error)
+            is Incoming.Error -> {
+                // A PC too old to know forget or setting answers with an error: nothing stays pending.
+                if (m.id == forgetId) forgetId = null
+                settingIds.remove(m.id)?.let { name ->
+                    if (name !in settingIds.values) _pendingSettings.value = _pendingSettings.value - name
+                }
+                _notices.tryEmit(m.error)
+            }
             is Incoming.Revoked, is Incoming.Pong -> Unit
         }
     }
@@ -394,6 +428,8 @@ object Remote {
         val before = _state.value
         _state.value = s
         if (Voices.byName(s.voiceName) == Voices.byName(_pendingVoice.value)) _pendingVoice.value = null
+        val picked = _pendingSettings.value
+        if (picked.isNotEmpty()) _pendingSettings.value = picked.filterNot { (name, v) -> s.setting(name) == v }
         // The words the PC heard become this turn's line, once it starts thinking about them.
         val voice = voiceTurn
         if (voice != null && s.origin == "phone" && s.transcript.isNotBlank() && before.state == "listening" &&
@@ -537,6 +573,38 @@ object Remote {
         _pendingVoice.value = v.name
     }
 
+    /** Start a fresh conversation on the PC, like the bar panel's Fresh. Needs the link: it isn't queued. */
+    fun forget() {
+        val id = newId()
+        if (!send(Outgoing.forget(id))) {
+            _notices.tryEmit("Not connected to the PC")
+            return
+        }
+        forgetId = id
+    }
+
+    /**
+     * Who answers ("brain": auto, claude, codex) and how hard it thinks ("effort" for Claude, "codex-effort"):
+     * kept on the PC, like the voice. Shown as pending until a state carries [value].
+     */
+    fun setSetting(name: String, value: String) {
+        if (value == _state.value.setting(name) && _pendingSettings.value[name] == null) return
+        val id = newId()
+        if (!send(Outgoing.setting(id, name, value))) {
+            _notices.tryEmit("Not connected to the PC")
+            return
+        }
+        settingIds[id] = name
+        _pendingSettings.value = _pendingSettings.value + (name to value)
+    }
+
+    /** Requests sent on a link that is gone: the PC's next state says what took. */
+    private fun clearBrainRequests() {
+        _pendingSettings.value = emptyMap()
+        settingIds.clear()
+        forgetId = null
+    }
+
     // --- pairing, sharing and files (HTTPS, pinned) -----------------------------------------------------
 
     /** Trade the pairing code for a token. Returns null when paired, or what went wrong. */
@@ -600,6 +668,7 @@ object Remote {
         speaker.stop()
         _pendingVoice.value = null
         voiceSetId = null
+        clearBrainRequests()
         pending.clear()
         voiceTurn = null
         talkWhenConnected = false

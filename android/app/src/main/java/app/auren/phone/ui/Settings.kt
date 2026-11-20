@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.auren.phone.LinkKind
+import app.auren.phone.codexName
 import app.auren.phone.pathOf
 import app.auren.phone.Remote
 import app.auren.phone.VoiceStatus
@@ -91,6 +92,9 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
 
         Section("Voice")
         VoiceCard(readAloud)
+
+        Section("Brain")
+        BrainCard(link.kind == LinkKind.CONNECTED)
 
         Section("Quick settings")
         Card {
@@ -151,6 +155,104 @@ private fun VoiceCard(readAloud: Boolean) {
             }
         }
         VoiceStatusLine(status, readAloud)
+    }
+}
+
+private class Pick(val value: String, val label: String, val tip: String)
+
+// The bar panel's wording (omarchy-plugin/Panel.qml), so the desk and the phone describe the same choices alike.
+private val CLAUDE_EFFORTS = listOf(
+    Pick("low", "Low", "Fastest; fine for most requests (the default)"),
+    Pick("medium", "Medium", "A bit more care, a bit slower"),
+    Pick("high", "High", "Harder requests; noticeably slower"),
+    Pick("xhigh", "XHigh", "Much slower; uses more of the Claude allowance"),
+    Pick("max", "Max", "Slowest and most expensive"),
+)
+private val CODEX_EFFORTS = listOf(
+    Pick("minimal", "Minimal", "Fastest; barely thinks"),
+    Pick("low", "Low", "Quick; fine for most requests (the default)"),
+    Pick("medium", "Medium", "A bit more care, a bit slower"),
+    Pick("high", "High", "Harder requests; noticeably slower"),
+    Pick("xhigh", "XHigh", "Much slower; uses more of the ChatGPT allowance"),
+)
+
+/**
+ * Who answers and how hard it thinks, like the bar panel's Brain page. The values are the PC's: a pick shows
+ * as switching until the PC's state carries it.
+ */
+@Composable
+private fun BrainCard(connected: Boolean) {
+    val st by Remote.state.collectAsStateWithLifecycle()
+    val pending by Remote.pendingSettings.collectAsStateWithLifecycle()
+    Card {
+        if (st.mode.isEmpty()) {
+            // An older PC doesn't send these (or this phone hasn't heard from the PC yet).
+            Text(if (connected) "Update Auren on the PC to choose who answers from this phone."
+                else "Connect to the PC to choose who answers.",
+                color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp)
+        } else {
+            val name = codexName(st.codexModel)
+            val modes = listOf(
+                Pick("auto", "Auto", "Claude Haiku; Codex when Claude's limit is hit"),
+                Pick("claude", "Claude", "Claude Haiku only"),
+                Pick("codex", "Codex", (if (name.isNotEmpty()) "$name via Codex" else "Codex") + " (saves Claude's allowance)"),
+            )
+            // Codex's own levels while it answers, as on the panel; which one is the PC's call, not a pending pick.
+            val codex = st.codexAnswers
+            val effortName = if (codex) "codex-effort" else "effort"
+            val effort = if (codex) st.codexEffort else st.effort
+            val now = when {
+                st.mode == "codex" -> if (name.isNotEmpty()) "Codex ($name)" else "Codex"
+                st.mode == "claude" -> "Claude Haiku only"
+                st.brain == "codex" -> "Codex for now (Claude's limit)"
+                else -> "Claude Haiku"
+            } + if (effort.isNotEmpty()) ", $effort effort" else ""
+
+            Caps("Who answers", Au.Faint, Modifier.padding(bottom = 6.dp), size = 10)
+            Picks(modes, pending["brain"] ?: st.mode, pending["brain"] != null, connected) { Remote.setSetting("brain", it) }
+            Text("Now: $now", color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp))
+
+            Caps(if (codex) "Codex effort" else "Claude effort", Au.Faint, Modifier.padding(top = 16.dp, bottom = 6.dp), size = 10)
+            Picks(if (codex) CODEX_EFFORTS else CLAUDE_EFFORTS, pending[effortName] ?: effort, pending[effortName] != null,
+                connected) { Remote.setSetting(effortName, it) }
+            Text(
+                when {
+                    st.mode == "codex" -> "Codex only: Claude isn't used. Higher thinks harder but answers slower."
+                    codex -> "Codex answers until Claude's limit resets. Higher thinks harder but answers slower."
+                    else -> "Higher thinks harder but answers slower. Changing it starts a fresh conversation."
+                },
+                color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        // Also on Home's top bar; here it sits by the settings that start fresh too.
+        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Start a fresh conversation on the PC.", color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp,
+                modifier = Modifier.weight(1f))
+            QuietButton("Fresh", Modifier.padding(start = 8.dp), enabled = connected) { Remote.forget() }
+        }
+    }
+}
+
+/** One choice of a few, like the voice picker. Disabled while not connected: the values live on the PC. */
+@Composable
+private fun Picks(options: List<Pick>, chosen: String, switching: Boolean, enabled: Boolean, onPick: (String) -> Unit) {
+    Column(Modifier.selectableGroup()) {
+        options.forEach { p ->
+            val on = p.value == chosen
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (on) Au.Raised else Au.Glass)
+                    .selectable(selected = on, enabled = enabled, role = Role.RadioButton) { onPick(p.value) }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(if (on) (if (enabled) Au.Gold else Au.Dim) else Au.Edge))
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(p.label, color = if (on && enabled) Au.Text else Au.Dim, fontSize = 15.sp)
+                    Text(p.tip, color = Au.Faint, fontSize = 12.sp)
+                }
+                if (on && switching) Caps("Switching", Au.Faint, size = 10)
+            }
+        }
     }
 }
 

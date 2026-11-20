@@ -121,9 +121,24 @@ data class AurenState(
     val tool: String = "",
     val remind: Boolean = false,
     val voiceName: String = "",          // the voice Auren speaks in, on the PC and on this phone (Voices.ALL)
+    // Who answers and how hard it thinks. "" from an older PC, which can't change them from here.
+    val mode: String = "",               // the setting: auto, claude or codex ([brain] is who answers right now)
+    val effort: String = "",             // Claude's: low, medium, high, xhigh, max
+    val codexEffort: String = "",        // Codex's: minimal, low, medium, high, xhigh
+    val codexModel: String = "",         // e.g. gpt-6-luna; "" when the PC doesn't say
 ) {
     val active get() = state in ACTIVE
     val busyAtDesk get() = origin == "desk"
+    /** Codex answers now (Codex only, or Auto after Claude's limit): the effort to show and set is Codex's. */
+    val codexAnswers get() = mode == "codex" || brain == "codex"
+
+    /** The PC's value of a setting the phone can change (Outgoing.setting's names); null for any other name. */
+    fun setting(name: String): String? = when (name) {
+        "brain" -> mode
+        "effort" -> effort
+        "codex-effort" -> codexEffort
+        else -> null
+    }
 
     companion object {
         val ACTIVE = setOf("listening", "thinking", "working", "speaking")
@@ -145,8 +160,19 @@ data class AurenState(
             tool = o.optString("tool"),
             remind = o.optBoolean("remind"),
             voiceName = o.optString("voiceName"),
+            mode = o.optString("mode"),
+            effort = o.optString("effort"),
+            codexEffort = o.optString("codexEffort"),
+            codexModel = o.optString("codexModel"),
         )
     }
+}
+
+/** Codex's model as people say it, like the bar panel: gpt-6-luna is GPT-6 Luna; other names stay as they are. */
+fun codexName(model: String): String {
+    val parts = model.split("-")
+    if (parts.size < 3 || parts[0] != "gpt") return model
+    return "GPT-" + parts[1] + " " + parts.drop(2).joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 }
 
 data class InboxFile(val name: String, val size: Long, val mime: String)
@@ -252,6 +278,11 @@ object Outgoing {
     fun ping(id: String) = obj("ping").put("id", id).toString()
     /** Speak in [name] from now on, on the PC and on this phone. Acked; the next state carries it. */
     fun voiceSet(id: String, name: String) = obj("voice.set").put("id", id).put("name", name).toString()
+    /** Start a fresh conversation on the PC. Acked; the next state follows. */
+    fun forget(id: String) = obj("forget").put("id", id).toString()
+    /** [name] is brain, effort or codex-effort. Acked "ok" or "error: why"; the next state carries the value. */
+    fun setting(id: String, name: String, value: String) =
+        obj("setting").put("id", id).put("name", name).put("value", value).toString()
 
     /** POST /v1/share. `data` is base64, for an image. */
     fun share(id: String, kind: String, action: String, text: String, note: String, data: String? = null, mime: String? = null) =

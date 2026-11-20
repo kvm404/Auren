@@ -37,6 +37,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -93,8 +94,12 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Caps("Auren", Au.Gold, size = 13)
             Spacer(Modifier.width(12.dp))
-            LinkPill(link)
-            Spacer(Modifier.weight(1f))
+            Box(Modifier.weight(1f)) { LinkPill(link) }      // shrinks on a narrow phone, so the three buttons fit
+            // The bar panel's Fresh: one tap away, since a new topic is the usual reason. The PC forgets the
+            // conversation; the lines here stay, with a note where the fresh one starts.
+            IconButton(onClick = { Remote.forget() }, enabled = connected) {
+                Icon(Icons.Filled.Refresh, "Fresh conversation", tint = if (connected) Au.Dim else Au.Faint)
+            }
             IconButton(onClick = onInbox) {
                 BadgedBox(badge = { if (unread > 0) Badge(containerColor = Au.Gold, contentColor = Au.Ink) { Text("$unread") } }) {
                     Icon(Icons.Filled.Email, "Inbox", tint = Au.Dim)
@@ -379,8 +384,9 @@ fun GoldButton(label: String, modifier: Modifier = Modifier, enabled: Boolean = 
 }
 
 @Composable
-fun QuietButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Au.Edge)) {
-        Text(label, color = Au.Text)
+fun QuietButton(label: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = modifier, enabled = enabled, shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, Au.Edge)) {
+        Text(label, color = if (enabled) Au.Text else Au.Faint)
     }
 }
