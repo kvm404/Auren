@@ -771,6 +771,15 @@ def test_a_permission_a_new_process_has_is_waiting_for_a_restart(tmp_path):
     assert len(asked) == 3
 
 
+def test_accessibility_the_daemon_still_sees_as_off_waits_for_a_restart(tmp_path):
+    """Turned off (or reset) and on again, Accessibility can stay off for the running daemon: a new process
+    sees it, so the window shows it allowed and the daemon restarts for it."""
+    g, asked = _grants(tmp_path, {"microphone": "granted", "accessibility": False, "screen": True},
+                       {"microphone": "granted", "accessibility": True, "screen": True})
+    s = g.check()
+    assert s["waiting"] == ["accessibility"] and s["accessibility"] is True and len(asked) == 1
+
+
 def test_a_restart_is_remembered_until_it_worked_or_the_grant_is_gone(tmp_path):
     from auren.mac import permissions
     live = {"microphone": "granted", "accessibility": True, "screen": False}
@@ -816,6 +825,12 @@ def test_setup_says_turning_on_while_the_daemon_restarts_for_a_grant(monkeypatch
     old = _setup_check(monkeypatch, None, found=("codex",), restarted={"for": ["screen"], "at": time.time() - 300})
     assert not old["starting"] and old["turningOn"] == []
     assert setup.needs(back) == "Turning on Screen Recording…"
+
+
+def test_setup_says_turning_on_accessibility_while_the_daemon_restarts_for_it(monkeypatch):
+    s = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False, "keys_waiting": True, "waiting": ["accessibility"],
+                                   "restarting": ["accessibility"]}, found=("codex",))
+    assert s["accessibility"] and s["turningText"] == "Turning on Accessibility…" and not s["restart"]
 
 
 def test_setup_offers_restart_only_when_the_daemons_own_restart_didnt_help(monkeypatch):
@@ -921,6 +936,35 @@ def test_the_daemon_restarts_once_it_is_idle_for_a_new_grant(monkeypatch, tmp_pa
     assert restarting == ["screen"] and stuck == []
     assert d.stopped and d.exit_code == daemon.RESTART_EXIT and g.tried() == ["screen"]
     assert next(d.quiets, "none") == "none"                               # all five checks were needed
+
+
+def test_a_start_without_accessibility_watches_for_it_even_with_the_window_closed(monkeypatch):
+    """macOS shows its own Accessibility prompt when the daemon starts without it: a grant made there is
+    noticed (and restarted for) without the setup window; Screen Recording left off doesn't keep it going."""
+    import asyncio
+
+    from auren import daemon
+    src = (ROOT / "src/auren/daemon.py").read_text()
+    assert 'self._watch_grants(names=("accessibility",))' in src
+    checks = iter([{"accessibility": False, "waiting": []}, {"accessibility": True, "screen": False,
+                                                            "waiting": ["accessibility"]}])
+    planned = []
+
+    class D:
+        _watch_grants = daemon.Daemon._watch_grants
+
+        def _grants(self):
+            return type("G", (), {"check": lambda _self: next(checks)})()
+
+        def _plan_restart(self, waiting):
+            planned.append(list(waiting))
+
+    async def go():
+        d = D()
+        d._watch_grants(every=0.0, names=("accessibility",))
+        await asyncio.wait_for(d._grant_watch, 5)
+    asyncio.run(go())
+    assert planned == [[], ["accessibility"]]
 
 
 def test_a_restart_that_didnt_help_is_not_tried_again(monkeypatch, tmp_path):

@@ -26,12 +26,12 @@
 
 ### Changed
 
-- **macOS setup notices permissions by itself.** Allow the microphone or Screen Recording in System
-  Settings and Auren turns it on without a restart by hand: it checks with a new process (a running one
+- **macOS setup notices permissions by itself.** Allow the microphone, Accessibility or Screen Recording
+  in System Settings (or in macOS's own prompt) and Auren turns it on without a restart by hand: it checks with a new process (a running one
   sees those only from its next start) and restarts itself once it isn't busy, while the setup window
   says **Turning on Screen Recording…**. It restarts once per permission; if that didn't help, the window
-  offers **Restart Auren**. The talk keys start by themselves once Accessibility is allowed, without the
-  window asking for a restart meanwhile. The window checks again when it comes back to the front, and
+  offers **Restart Auren**. The talk keys start by themselves once Accessibility is allowed (with a restart
+  when macOS still tells the running Auren no, as after a reset), without the window asking for one. The window checks again when it comes back to the front, and
   finds Claude Code or Codex installed after Auren (in `~/.local/bin` or `~/.claude/local`).
   `auren doctor` says the same as the window.
 - **A tidier menu bar menu on macOS**: what Auren is doing at the top, Talk and Fresh conversation with

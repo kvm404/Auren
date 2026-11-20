@@ -126,9 +126,11 @@ Window {
         }
         Step {
           title: "Accessibility"
-          readonly property bool later: w.s.keysTurningOn === true
+          readonly property bool restarting: w.turning.indexOf("accessibility") >= 0
+          readonly property bool later: restarting || w.s.keysTurningOn === true
           mark: later ? "busy" : w.s.accessibility ? "done" : "todo"
-          detail: later ? "Allowed. Turning on the talk key…"
+          detail: restarting ? "Allowed. Auren restarts by itself to turn it on, once it isn't busy."
+                  : later ? "Allowed. Turning on the talk key…"
                   : w.s.accessibility ? "The talk key works, and Auren can click and type for you."
                   : "For the talk key, and to click and type for you. Turn Auren on in the list."
           Pill { visible: !w.s.accessibility; primary: true; label: "Allow"; onClicked: auren.allow("accessibility") }

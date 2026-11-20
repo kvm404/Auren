@@ -1085,9 +1085,10 @@ class Daemon:
         self.exit_code = RESTART_EXIT
         self.loop.stop()
 
-    def _watch_grants(self, every: float = 3.0, for_s: float = 600) -> None:
-        """After an Allow for the microphone or Screen Recording: check for a while even with the setup
-        window closed, so a grant made in System Settings is noticed by itself."""
+    def _watch_grants(self, every: float = 3.0, for_s: float = 600, names: tuple[str, ...] | None = None) -> None:
+        """After an Allow (or a start without Accessibility, whose prompt macOS shows by itself): check for a
+        while even with the setup window closed, so a grant made in System Settings or macOS's prompt is
+        noticed by itself. names: what to wait for (all of permissions.LATER by default)."""
         old = getattr(self, "_grant_watch", None)
         if old and not old.done():
             return
@@ -1100,7 +1101,7 @@ class Daemon:
                 await asyncio.sleep(every)
                 now = await loop.run_in_executor(None, self._grants().check)
                 self._plan_restart(now.get("waiting", []))
-                if all(permissions.allowed(n, now.get(n)) for n in permissions.LATER) or getattr(
+                if all(permissions.allowed(n, now.get(n)) for n in names or permissions.LATER) or getattr(
                         self, "_restart_task", None):
                     return
         self._grant_watch = asyncio.create_task(watch())
@@ -1134,6 +1135,7 @@ class Daemon:
             self._listen_for_keys()
             if not self._hotkeys:
                 self._keys_task = asyncio.create_task(self._keys_once_allowed())
+                self._watch_grants(names=("accessibility",))
         async with server:
             await server.serve_forever()
 

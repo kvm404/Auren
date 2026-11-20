@@ -46,11 +46,13 @@ Then it opens Auren, and Auren's setup window takes over: each step has one butt
 | Brain | Shows Claude Code or Codex; if neither is installed, copies the install command |
 
 Each step notices by itself when you allow something in System Settings: there's nothing to restart.
-macOS lets a running program use the microphone or Screen Recording only from its next start, so for
-those Auren checks with a new process, and when that one has the permission, Auren restarts itself as
+macOS lets a running program use the microphone or Screen Recording only from its next start (and can
+keep saying no to Accessibility after it was turned off and on again), so for those Auren checks with a
+new process, and when that one has the permission, Auren restarts itself as
 soon as it isn't busy. The window says **Turning on Screen Recording…** meanwhile. It restarts once per
 permission you allow; if that didn't turn it on, the window offers **Restart Auren** instead. The talk
-keys start by themselves once Accessibility is allowed.
+keys start by themselves once Accessibility is allowed, also when you allow it in the prompt macOS
+shows when Auren starts, with the setup window closed.
 
 The window comes back from the menu bar icon (**Set up Auren…**, marked while something needs you), or
 from opening Auren.app in Finder or Spotlight (or `auren open`) while setup isn't finished; once it is,

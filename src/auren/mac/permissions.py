@@ -70,11 +70,14 @@ def status() -> dict[str, bool | str]:
 
 # --- what a restart would turn on -------------------------------------------------------------------
 
-LATER = ("microphone", "screen")   # what a running process may not see until it starts again
+# What a running process may not see until it starts again. Accessibility too: after it was turned off
+# (or reset) and on again, macOS can keep telling the running daemon no.
+LATER = ("microphone", "accessibility", "screen")
 FRESH_TTL = 2.0                    # seconds a new process's answer is used for (the window asks every second)
 RESTARTED = STATE_DIR / "permissions-restart.json"   # {"for": [names], "at": time}: what the daemon restarted for
 TURNING_ON = 30                    # seconds after that restart the setup window still says "Turning on …"
-NAMES = {"microphone": "the microphone", "screen": "Screen Recording", "keys": "the talk keys"}
+NAMES = {"microphone": "the microphone", "accessibility": "Accessibility", "screen": "Screen Recording",
+         "keys": "the talk keys"}
 
 
 def allowed(name: str, value) -> bool:
@@ -82,7 +85,7 @@ def allowed(name: str, value) -> bool:
 
 
 def fresh() -> dict[str, bool | str]:
-    """The microphone and Screen Recording as a new process sees them ({} if it couldn't tell)."""
+    """The microphone, Accessibility and Screen Recording as a new process sees them ({} if it couldn't tell)."""
     try:
         p = subprocess.run([sys.executable, "-m", "auren.mac.permissions"], capture_output=True, text=True,
                            timeout=15, stdin=subprocess.DEVNULL)
@@ -230,4 +233,4 @@ def request() -> dict[str, bool | str]:
 
 
 if __name__ == "__main__":          # fresh(): this process is new, so it sees what macOS allows Auren now
-    print(json.dumps({"microphone": microphone(), "screen": screen_recording()}))
+    print(json.dumps({"microphone": microphone(), "accessibility": accessibility(), "screen": screen_recording()}))
