@@ -940,30 +940,38 @@ def test_the_daemon_restarts_once_it_is_idle_for_a_new_grant(monkeypatch, tmp_pa
     assert next(d.quiets, "none") == "none"                               # all five checks were needed
 
 
-def test_the_keys_waiter_restarts_for_accessibility_the_daemon_still_sees_as_off(monkeypatch):
+def test_the_keys_waiter_restarts_for_accessibility_the_daemon_still_sees_as_off(monkeypatch, tmp_path):
     """After a reset, the daemon can keep seeing Accessibility as off once it's allowed again (in macOS's own
-    prompt, with the setup window closed): the waiter asks a new process every 10 s and restarts for it."""
+    prompt, with the setup window closed): the waiter asks a new process every 10 s and restarts for it,
+    also when it restarted for an earlier grant that was taken away since."""
     import asyncio
 
     from auren import daemon
     from auren.mac import permissions
     monkeypatch.setattr(permissions, "accessibility", lambda: False)
-    asked = []
-    monkeypatch.setattr(permissions, "fresh", lambda: asked.append(1) or {"accessibility": len(asked) > 1})
+    live = {"microphone": "granted", "accessibility": False, "screen": True}
+    answers = iter([{"accessibility": False}, {"accessibility": True}])
+    g, asked = _grants(tmp_path, live, {})
+    g._ask = lambda: (asked.append(1), next(answers))[1]
+    g.mark(["accessibility"])                  # the restart for the first grant
     planned = []
 
     class D:
         _keys_once_allowed = daemon.Daemon._keys_once_allowed
         _hotkeys = None
 
+        def _grants(self):
+            return g
+
         def _plan_restart(self, waiting):
-            planned.append(list(waiting))
+            planned.append((list(waiting), g.tried()))
             self._hotkeys = "restarting"       # stands in for the restart: the waiter is done
 
     async def go():
         await asyncio.wait_for(D()._keys_once_allowed(every=0.0), 5)
     asyncio.run(go())
-    assert len(asked) == 2 and planned == [["accessibility"]]     # every fifth round: the 5th and the 10th
+    # the 5th round: taken away (the old restart is forgotten); the 10th: allowed again, a new grant
+    assert len(asked) == 2 and planned == [(["accessibility"], [])]
 
 
 def test_a_restart_that_didnt_help_is_not_tried_again(monkeypatch, tmp_path):

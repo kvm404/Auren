@@ -1044,11 +1044,14 @@ class Daemon:
             if not await loop.run_in_executor(None, permissions.accessibility):
                 # This process can keep saying no after Accessibility was allowed again (after a reset): ask a
                 # new one now and then (every 10 s for ten minutes, then every minute), and restart for it.
+                # Through the setup window's check, which also forgets a restart made for an earlier grant.
                 rounds += 1
                 if rounds % (5 if rounds <= 300 else 30) == 0:
-                    fresh = await loop.run_in_executor(None, permissions.fresh)
-                    if fresh.get("accessibility") is True and not getattr(self, "_hotkeys", None):
-                        self._plan_restart(["accessibility"])
+                    grants = self._grants()
+                    grants.forget_fresh()
+                    now = await loop.run_in_executor(None, grants.check)
+                    if "accessibility" in now.get("waiting", []) and not getattr(self, "_hotkeys", None):
+                        self._plan_restart(now["waiting"])
             else:
                 await loop.run_in_executor(None, self._listen_for_keys)
                 if self._hotkeys:
