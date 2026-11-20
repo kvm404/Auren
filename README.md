@@ -123,8 +123,8 @@ the PC does the work, with the same brain, tools and safety level as at the desk
 3. In the app, tap **Pair** and scan the QR code.
 
 The phone reaches the PC on the same Wi-Fi. To use it away from home, install
-[Tailscale](https://tailscale.com) on both and turn it on on the PC *before* you pair, so the code
-carries the Tailscale address too.
+[Tailscale](https://tailscale.com) on both. The app moves between Wi-Fi and Tailscale by itself, and
+you never need to pair again when Tailscale comes or goes.
 
 In the app:
 

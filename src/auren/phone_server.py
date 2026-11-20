@@ -473,7 +473,8 @@ def app(hub: Hub) -> Starlette:
         return request.client.host if request.client else "?"
 
     def where() -> dict:
-        return {"app": "auren", "api": phone.API, "pc": socket.gethostname(), "addrs": hub.addrs, "fp": hub.fp}
+        return {"app": "auren", "api": phone.API, "pc": socket.gethostname(), "addrs": phone.reach(hub.addrs),
+                "fp": hub.fp}
 
     async def hello(request: Request) -> Response:
         out = where()
@@ -508,7 +509,7 @@ def app(hub: Hub) -> Starlette:
         log.info("phone paired from %s: %s (%s)", peer(request), dev["name"], dev["id"])
         hub.check()        # what changed in the devices, a revoke just before included, not only this pairing
         return JSONResponse({"token": token, "device": dev, "pc": socket.gethostname(), "api": phone.API,
-                             "addrs": hub.addrs, "fp": hub.fp})
+                             "addrs": phone.reach(hub.addrs), "fp": hub.fp})
 
     async def inbox(request: Request) -> Response:
         if not device_of(request):

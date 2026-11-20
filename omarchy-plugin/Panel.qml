@@ -278,8 +278,8 @@ Panel {
   readonly property string tailscaleWarn: {
     var why = (root.phoneSt.missing || {}).tailscale || ""
     return why && why.indexOf("isn't installed") < 0
-           ? "Tailscale is off on this PC: phones reach it only on this Wi-Fi. Turn it on (tailscale up) to use"
-             + " the phone from anywhere, then pair again if this phone was paired while it was off."
+           ? "Tailscale is off on this PC: phones reach it only on this Wi-Fi for now. Turn it on (tailscale up)"
+             + " to use the phone from anywhere; phones find the PC there by themselves."
            : ""
   }
 

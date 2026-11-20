@@ -32,9 +32,10 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    release one: uninstall that first), with `android/native/build-phonon.sh` first for the phone's own voice.
 4. On the PC, open the bar panel's **Phone** page and click **Pair a phone** (or run `auren phone pair` in a
    terminal). It shows a QR code; the terminal also prints the same thing as text (`auren://pair?...`), and
-   waits. Scan the QR with the app, or paste the text. Turn Tailscale on on the PC first if you want the
-   phone to reach it away from this Wi-Fi: a phone paired while it's off gets only the Wi-Fi's address
-   (both say so). The code works once, for 5 minutes, and 5 wrong
+   waits. Scan the QR with the app, or paste the text. You don't need to pair again when Tailscale comes or
+   goes: the PC remembers its Tailscale address from whenever Tailscale was last up, and the code (and each
+   hello) carries it even while Tailscale is off. On a PC whose Tailscale has never been up, the phone picks
+   the address up the first time it connects after Tailscale is on. The code works once, for 5 minutes, and 5 wrong
    codes cancel it. The QR also carries every address the server listens on and the fingerprint of the
    PC's certificate, which is what the app trusts from then on.
 5. The panel's Phone page also shows where the server listens, which phone is connected and over which
@@ -176,7 +177,7 @@ address they came from.
 
 | Call | Body / query | Answer |
 |---|---|---|
-| `GET /v1/hello` | | `{app, api, pc, addrs: [{ip, via: tailscale\|lan}], fp}`, plus `device` with a valid token |
+| `GET /v1/hello` | | `{app, api, pc, addrs: [{ip, via: tailscale\|lan, later?}], fp}`, plus `device` with a valid token. `later: true` marks the PC's Tailscale address from before, given while Tailscale is off |
 | `POST /v1/pair` | `{code, name}` | `{token, device, pc, api, addrs, fp}`; 403 `{error}` for a wrong, used or expired code |
 | `GET /v1/inbox` | `after`, `limit` (≤ 200) | `{items, next, last}` |
 | `GET /v1/inbox/{id}/file` | | the image or file (404 if gone) |
@@ -189,8 +190,10 @@ An inbox item: `{id, kind, title, at, text?, url?, file?: {name, size, mime}}`.
 listen this phone started (frames from any other phone are dropped). On connect the PC sends
 `{"type":"hello", api, pc, addrs, fp, device, inboxLast, state}`; the app takes its address list from
 `addrs`, so a PC whose LAN address changed is found again the next time it says hello (over Tailscale, if
-the old LAN address no longer answers; with Wi-Fi alone, pair again). A hello without a Tailscale address
-keeps the saved one, so a moment without Tailscale on the PC doesn't cost the phone its way back from away.
+the old LAN address no longer answers; with Wi-Fi alone, pair again). While the PC's Tailscale is off, its
+`addrs` (and the pairing code) still list its Tailscale address from when it was last up, marked `later`, so
+a phone that connected only on the Wi-Fi still finds the PC from away once Tailscale is on. A hello without
+any Tailscale address keeps the saved one.
 
 Phone to PC:
 
@@ -250,6 +253,7 @@ close code 4401), `error`. When the server stops or moves, open connections are 
 | `pairing.json` (600) | The open pairing: the code's hash, expiry, wrong tries |
 | `inbox.jsonl`, `files/` (600) | What Auren sent to the phone |
 | `cert.pem`, `key.pem` (600) | The server's self-signed certificate and its private key, made once |
+| `tailscale.json` (600) | This PC's Tailscale address from when Tailscale was last up, for while it's off |
 | `$XDG_RUNTIME_DIR/auren/phone.json` | The server: `on`, `idle`, `port`, `addrs` (`[{ip, via, ok, why}]`), `fp`, `why`, `missing`, `connected` (`[{id, name, via}]`) |
 
 On the phone, the PC's addresses, its certificate fingerprint and the device token are kept in the app's

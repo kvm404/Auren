@@ -25,7 +25,8 @@ def phone_dir(tmp_path, monkeypatch):
     d = tmp_path / "phone"
     for name, value in {"PHONE_DIR": d, "DEVICES": d / "devices.json", "PAIRING": d / "pairing.json",
                         "INBOX": d / "inbox.jsonl", "FILES": d / "files", "STATUS": tmp_path / "phone.json",
-                        "CERT": d / "cert.pem", "KEY": d / "key.pem", "PAIR_QR": tmp_path / "phone-pair.png"}.items():
+                        "CERT": d / "cert.pem", "KEY": d / "key.pem", "PAIR_QR": tmp_path / "phone-pair.png",
+                        "TAILSCALE_SEEN": d / "tailscale.json"}.items():
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
     return d
@@ -1563,3 +1564,46 @@ def test_pair_json_says_why_it_cant(monkeypatch, capsys):
     monkeypatch.setattr(phone, "SERVE_WAIT", 0.1)
     assert phone.main(["pair", "--json"]) == 1
     assert "isn't running" in json.loads(capsys.readouterr().out)["error"] and not phone.pairing_open()
+
+
+def test_the_pc_remembers_its_tailscale_address_for_while_tailscale_is_off(monkeypatch):
+    """Paired on the Wi-Fi with Tailscale off, a phone used to know only the Wi-Fi's address, so with the
+    phone on mobile data it couldn't find the PC even once Tailscale was on (only pairing again helped)."""
+    lan = [{"ip": "192.168.1.20", "via": "lan"}]
+    assert phone.known_tailscale() is None and phone.reach(lan) == lan          # never up here: nothing to add
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: ("100.92.1.2", ""))
+    monkeypatch.setattr(phone, "lan_addresses", lambda: (["192.168.1.20"], ""))
+    phone.addresses()                                                           # the server sees Tailscale up
+    assert phone.known_tailscale() == "100.92.1.2"
+    up = [{"ip": "100.92.1.2", "via": "tailscale"}] + lan
+    assert phone.reach(up) == up                                                # up: only where it listens
+    assert phone.reach(lan) == lan + [{"ip": "100.92.1.2", "via": "tailscale", "later": True}]
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: ("100.92.7.7", ""))       # left and rejoined the tailnet
+    phone.addresses()
+    assert phone.reach(lan)[-1]["ip"] == "100.92.7.7"
+    phone.TAILSCALE_SEEN.write_text('{"ip": "8.8.8.8"}')                        # never a non-tailnet address
+    assert phone.known_tailscale() is None and phone.reach(lan) == lan
+    phone.TAILSCALE_SEEN.write_text("not json")
+    assert phone.known_tailscale() is None
+
+
+def test_pairing_with_tailscale_off_still_gives_the_phone_the_tailscale_address(monkeypatch, capsys):
+    from urllib.parse import parse_qs, urlparse
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": [
+            {"ip": "192.168.1.20", "via": "lan", "ok": True}], "missing": {"tailscale": "Tailscale is off or logged out"}})
+    monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+    phone.remember_tailscale("100.92.1.2")
+    assert phone.main(["pair", "--json"]) == 130                                 # cancelled while it waits
+    line = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert parse_qs(urlparse(line["uri"]).query)["hosts"] == ["192.168.1.20,100.92.1.2"]
+    assert "still carries its Tailscale address" in line["warn"] and "pair again" not in line["warn"]
+    assert line["where"] == [{"ip": "192.168.1.20", "via": "lan"}]              # where it listens now: Wi-Fi only
+
+
+def test_a_hello_gives_the_phone_the_remembered_tailscale_address(server):
+    client, _, hub = server
+    phone.remember_tailscale("100.92.1.2")
+    hub.addrs, hub.fp = [{"ip": "192.168.1.20", "via": "lan"}], "ab" * 32
+    addrs = client.get("/v1/hello").json()["addrs"]
+    assert [a["ip"] for a in addrs] == ["192.168.1.20", "100.92.1.2"] and addrs[1]["later"] is True

@@ -50,6 +50,7 @@ CERT = PHONE_DIR / "cert.pem"
 KEY = PHONE_DIR / "key.pem"
 STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, why not, and who's connected
 PAIR_QR = RUNTIME_DIR / "phone-pair.png"    # auren phone pair --json's QR code, for the bar panel (gone after)
+TAILSCALE_SEEN = PHONE_DIR / "tailscale.json"   # this PC's Tailscale address, from when Tailscale was last up
 PAIR_TTL = 300                      # seconds a pairing code works
 PAIR_TRIES = 5                      # wrong codes before the pairing is dropped
 MAX_FILE = 50 * 1024 * 1024         # biggest file send_to_phone sends
@@ -340,6 +341,35 @@ def tailscale_ip() -> tuple[str | None, str]:
     return None, "Tailscale is off or logged out" + (f" ({why[0][:80]})" if why else "") + ": tailscale up"
 
 
+def remember_tailscale(ip: str) -> None:
+    """Keep this PC's Tailscale address for while Tailscale is off ([reach]). It stays the same across
+    tailscale down/up; only leaving the tailnet changes it, and the next time it's up this catches that."""
+    if known_tailscale() == ip:
+        return
+    try:
+        _write(TAILSCALE_SEEN, json.dumps({"ip": ip, "at": int(time.time())}))
+    except OSError as e:
+        log.warning("phone: couldn't keep the Tailscale address: %s", e)
+
+
+def known_tailscale() -> str | None:
+    """This PC's Tailscale address from when Tailscale was last up, or None if it never was."""
+    ip = _read(TAILSCALE_SEEN, {})
+    ip = ip.get("ip") if isinstance(ip, dict) else None
+    return ip if isinstance(ip, str) and is_tailnet(ip) else None
+
+
+def reach(addrs: list[dict]) -> list[dict]:
+    """The addresses a phone is given (the pairing code, each hello): where the server listens, and while
+    Tailscale is off, this PC's Tailscale address from before, marked "later". So a phone paired on the Wi-Fi
+    with Tailscale off, or that only ever connected then, still finds the PC from elsewhere once Tailscale is
+    on, without pairing again. (The phone keeps a Tailscale address that a later hello doesn't list.)"""
+    if any(a.get("via") == "tailscale" for a in addrs):
+        return addrs
+    ip = known_tailscale()
+    return addrs + [{"ip": ip, "via": "tailscale", "later": True}] if ip else addrs
+
+
 def is_tailnet(ip: str) -> bool:
     try:
         return ipaddress.ip_address(ip) in TAILNET
@@ -404,7 +434,9 @@ def addresses(lan: bool = True) -> tuple[list[tuple[str, str]], dict]:
     why = {}
     ts, why_ts = tailscale_ip()
     out = [(ts, "tailscale")] if ts else []
-    if not ts:
+    if ts:
+        remember_tailscale(ts)
+    else:
         why["tailscale"] = why_ts
     if lan:
         ips, why_lan = lan_addresses()
@@ -526,13 +558,18 @@ def _ago(t: float) -> str:
 
 
 def tailscale_off(st: dict) -> str:
-    """Why pairing now leaves the phone without Tailscale, or "": installed here, but not up. A phone paired
-    then learns only this Wi-Fi's address, so it can't reach the PC away from it (pair again once it's up)."""
+    """What pairing now means for reaching the PC from elsewhere, or "": Tailscale is installed here, but not up.
+    The code carries the Tailscale address from before if there is one ([reach]); if not, the phone learns it
+    the first time it connects on this Wi-Fi after Tailscale is up. Never "pair again"."""
     why = (st.get("missing") or {}).get("tailscale", "")
     if not why or why.startswith("Tailscale isn't installed"):
         return ""
-    return ("Tailscale is off on this PC, so the phone gets only this Wi-Fi's address and can't reach the PC from"
-            " elsewhere. For that, turn Tailscale on (tailscale up) and pair again.")
+    if known_tailscale():
+        return ("Tailscale is off on this PC. The code still carries its Tailscale address, so the phone reaches"
+                " the PC from elsewhere once Tailscale is on again (tailscale up).")
+    return ("Tailscale is off on this PC, so for now the phone works only on this Wi-Fi. To use it from"
+            " elsewhere, turn Tailscale on (tailscale up): the phone picks up the address the next time it"
+            " connects here.")
 
 
 def _qr(text: str) -> str:
@@ -579,7 +616,7 @@ def _pair_json() -> int:
             return 1
         st, code, expires = opened
         bound = listening(st)
-        uri = pair_uri([x["ip"] for x in bound], int(st["port"]), code, st["fp"])
+        uri = pair_uri([x["ip"] for x in reach(bound)], int(st["port"]), code, st["fp"])
         import segno
         PAIR_QR.parent.mkdir(parents=True, exist_ok=True)
         tmp = PAIR_QR.with_name(f".{PAIR_QR.name}.{os.getpid()}.tmp")
@@ -650,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     st, code, expires = opened
     bound = listening(st)
-    uri = pair_uri([a["ip"] for a in bound], int(st["port"]), code, st["fp"])
+    uri = pair_uri([a["ip"] for a in reach(bound)], int(st["port"]), code, st["fp"])
     before = {d["id"] for d in devices()}
     if not a.no_qr:
         print(_qr(uri))

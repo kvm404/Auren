@@ -15,7 +15,8 @@
   `auren phone devices` and `auren phone revoke`. One turn at a time across the desk and the
   phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same
   Phonon voices. The server listens only on the Tailscale address and private LAN addresses, over TLS
-  pinned to the PC's own certificate; `[phone]` in `config.toml` turns it off, and `auren doctor`
+  pinned to the PC's own certificate, and the phone moves between them by itself (the PC hands out its
+  Tailscale address even while Tailscale is off, so pairing on the Wi-Fi is enough); `[phone]` in `config.toml` turns it off, and `auren doctor`
   checks it, the firewall included. Omarchy only for now. The app comes with each release, as
   `auren-phone-X.Y.Z.apk`. See [docs/phone.md](docs/phone.md).
 

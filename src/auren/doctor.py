@@ -293,7 +293,8 @@ def phone_checks() -> list[Check]:
     why_ts = missing.get("tailscale", "")
     out.append(Check(g, "Tailscale", OK, ts) if ts else Check(
         g, "Tailscale", WARN, f"{why_ts}: the phone works only on the same Wi-Fi"
-        + ("" if "installed" in why_ts else " (and a phone paired now can't reach this PC from elsewhere)"),
+        + ("" if "installed" in why_ts or phone.known_tailscale() else " for now (phones learn the Tailscale address"
+           " the next time they connect after it's on)"),
         "install Tailscale (omarchy install tailscale) and run: tailscale up" if "installed" in why_ts else "tailscale up"))
     lan_ips = [ip for ip, via in addrs if via == "lan"]
     if not lan:
