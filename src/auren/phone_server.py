@@ -100,6 +100,8 @@ class Conn:
         self.out: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=1000)
         self.audio: asyncio.Queue | None = None      # the listen this phone feeds, if any
         self.close_code = 1000
+        self.control = False                        # its accessibility service is on: Auren can use the phone
+        self.since = time.monotonic()
 
     def send(self, msg: dict) -> None:
         try:
@@ -136,6 +138,7 @@ class Hub:
         self._devices_stamp = self._stamp(phone.DEVICES)
         self._inbox_stamp = self._stamp(phone.INBOX)
         self._flush = False
+        self._controls: dict[str, asyncio.Future] = {}     # phone actions waiting for their result, by id
 
     # --- what the daemon calls ----------------------------------------------------------------
 
@@ -194,6 +197,33 @@ class Hub:
                 conn.send(self.replies[key][1])
             elif key not in self.inflight and not self.daemon.open_turn(dev, rid):
                 conn.send({"type": "lost", "id": rid})
+
+    async def control(self, action: dict, timeout: float) -> dict:
+        """One phone action (hands/android.py) on the phone that can take it: the newest connected one whose
+        accessibility service is on. Its answer: {ok, screen, items} or {ok: false, error}."""
+        able = sorted((c for c in self.conns if c.control), key=lambda c: c.since)
+        if not able:
+            if self.conns:
+                return {"ok": False, "error": "phone control is off: on the phone, open Auren's Settings and turn on "
+                                              "Phone control (Android's Accessibility settings, Auren)"}
+            return {"ok": False, "error": "the phone isn't connected: turn on Phone control in the Auren app (it then stays "
+                                          "connected), or open the app, and check it reaches the PC"}
+        conn = able[-1]
+        rid = uuid.uuid4().hex[:12]
+        fut = asyncio.get_running_loop().create_future()
+        self._controls[rid] = fut
+        conn.send({"type": "control", "id": rid, **action})
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except TimeoutError:
+            return {"ok": False, "error": f"the phone didn't answer in {timeout:.0f} s"}
+        finally:
+            self._controls.pop(rid, None)
+
+    def _control_result(self, msg: dict) -> None:
+        fut = self._controls.get(str(msg.get("id") or ""))
+        if fut and not fut.done():
+            fut.set_result(msg)
 
     def broadcast(self, msg: dict) -> None:
         for c in list(self.conns):
@@ -295,6 +325,13 @@ class Hub:
             after = int(msg.get("after") or 0)
             for it in phone.items(after, 2 * phone.KEEP):
                 conn.send({"type": "inbox", "item": phone.shown(it)})
+            return None
+        elif kind == "control.ready":
+            conn.control = bool(msg.get("on"))
+            log.info("phone %s: phone control %s", dev["id"], "on" if conn.control else "off")
+            return None
+        elif kind == "control.result":
+            self._control_result(msg)
             return None
         elif kind == "ping":
             return {"type": "pong", "id": rid}

@@ -24,6 +24,13 @@
   other changed. The separate Phone window is gone: **Phone…** opens this window's Phone page. See
   [docs/macos.md](docs/macos.md#using-it).
 
+### Added
+
+- Phone control: Auren can use your Android phone for you. It opens apps, reads the screen, taps, types,
+  scrolls and presses system keys, so "open WhatsApp and tell Mom I'm late" works from the desk. Turn it
+  on in the app's Settings (Phone control, then Android's Accessibility settings). Risky taps and sends
+  follow the PC's safety level. See [docs/phone.md](docs/phone.md#phone-control).
+
 ### Changed
 
 - **macOS setup notices permissions by itself.** Allow the microphone, Accessibility or Screen Recording

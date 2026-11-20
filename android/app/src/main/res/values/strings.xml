@@ -8,4 +8,6 @@
     <string name="handsfree_on">Hands-free on</string>
     <string name="handsfree_on_about">Auren listens after each reply. It ends when you go quiet.</string>
     <string name="handsfree_end">End</string>
+    <string name="hands_label">Auren phone control</string>
+    <string name="hands_about">Lets Auren on your paired PC use this phone for you: read what\'s on the screen, open apps, tap, type and scroll. It works only when you ask Auren to do something on the phone, and risky taps and sends follow your PC\'s safety level. While it\'s on, the app stays connected to your PC.</string>
 </resources>

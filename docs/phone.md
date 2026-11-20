@@ -189,6 +189,36 @@ Share text, a link or an image from any Android app to Auren, then pick:
 | PC clipboard | Copied with `wl-copy` (on a Mac, the pasteboard; an image as PNG) |
 | Open on PC | A link opens in the browser, an image in the viewer, text shows as a notification |
 
+## Phone control
+
+Auren on the PC can use the phone the way you do: open apps, read what's on the screen, tap, type, scroll
+and press Back, Home and the other system keys. "Open WhatsApp and tell Mom I'm late" works from the desk.
+
+**Turning it on.** In the app, open Settings, then Phone control, then *Turn on in Accessibility*, and turn
+on **Auren phone control**. Android greys it out for an app that wasn't installed from a store: open App
+info for Auren, tap ⋮, choose *Allow restricted settings*, and try again. While it's on, the app stays
+connected to the PC with no screen showing, so the PC can reach the phone at any time. The microphone
+still stops when the app leaves.
+
+**How it reads.** The accessibility service (`HandsService`) reads the app in front (and the notification
+shade or a system dialog when one is open) into text plus numbered items: what can be tapped, typed into,
+switched or scrolled. A row with no words of its own (a chat in a list) is named by what it holds. The
+brain's tools are `phone_screen`, `phone_open_app`, `phone_apps`, `phone_tap`, `phone_type`,
+`phone_scroll` and `phone_key`; each action returns the screen after it, marked untrusted.
+
+**Safety.** Phone control follows the PC's safety level. A tap on something that sends, buys, deletes or
+posts asks first, and so does pressing the keyboard's action key in a field that isn't a search; Full
+access asks nothing. Every tap and type names the label it was read with; the PC checks it before a
+confirmed action runs, and the phone checks it again before acting, so a screen that changed meanwhile
+refuses instead of tapping something else.
+
+**Messages.** The phone sends `control.ready` (`{on}`) after each hello and whenever the service is turned
+on or off. The PC sends `control` (`{id, action, ...}`) to the newest connection that has it on, one at a
+time; `action` is `screen`, `tap` (`n, long, expect`), `type` (`n, text, submit, expect`), `scroll`
+(`direction, n?`), `key` (`back, home, recents, notifications, quick_settings, lock`), `open` (`app`) or
+`apps` (`query`). The phone answers `control.result` with `{id, ok, screen, items:[{n, label, field,
+search}]}` or `{id, ok: false, error}`. The PC gives up after 20 s.
+
 ## Protocol (API v1)
 
 Base URL `https://<address>:<port>`, any address from the QR code or the last hello. HTTPS and WSS only:

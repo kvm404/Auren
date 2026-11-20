@@ -231,6 +231,8 @@ sealed interface Incoming {
     data object Revoked : Incoming
     data class Error(val id: String, val error: String) : Incoming
     data class Pong(val id: String) : Incoming
+    /** Phone control: one action for [HandsService] to do here; answered with [Outgoing.controlResult]. */
+    data class Control(val id: String, val body: JSONObject) : Incoming
 
     companion object {
         /** null for anything this version doesn't know (a newer PC may send more). */
@@ -255,6 +257,7 @@ sealed interface Incoming {
                 "revoked" -> Revoked
                 "error" -> Error(o.optString("id"), o.optString("error"))
                 "pong" -> Pong(o.optString("id"))
+                "control" -> Control(o.optString("id"), o)
                 else -> null
             }
         }
@@ -289,6 +292,11 @@ object Outgoing {
         JSONObject().put("id", id).put("kind", kind).put("action", action).put("text", text).put("note", note).apply {
             if (data != null) { put("data", data); put("mime", mime ?: "image/png") }
         }.toString()
+
+    /** Phone control is on (the accessibility service runs) or off: the PC sends actions only while on. */
+    fun controlReady(on: Boolean) = obj("control.ready").put("on", on).toString()
+    /** The answer to a control action: [out] holds ok and the screen, or ok=false and the error. */
+    fun controlResult(id: String, out: JSONObject) = out.put("type", "control.result").put("id", id).toString()
 
     private fun obj(type: String) = JSONObject().put("type", type)
 }
