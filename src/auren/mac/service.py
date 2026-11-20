@@ -6,9 +6,12 @@
 Both run through Auren.app when it's installed (mac/app.py), so macOS gives the permissions to Auren.
 Both start at login and are started again if they crash (KeepAlive on a failed exit). `stop` unloads one
 until it's started again or the next login; `auren-ctl quit` and the menu's Quit end the daemon cleanly.
+The daemon restarts itself the same way, by exiting with daemon.RESTART_EXIT, to turn on a permission
+given while it ran (mac/permissions.py).
 
 The PATH the services get is written into the plists when they're installed (the installer passes the
-login shell's), so the brains (`claude`, `codex`), herdr and Homebrew's tools are found.
+login shell's), so the brains (`claude`, `codex`), herdr and Homebrew's tools are found. It also has the
+folders Claude Code and Homebrew install into, so a brain installed later is found without a reinstall.
 """
 
 from __future__ import annotations
@@ -46,7 +49,9 @@ HF_VARS = ("HF_HOME", "HF_HUB_CACHE", "XDG_CACHE_HOME")      # where the voice m
 def plist(name: str, path: str | None = None) -> dict:
     """The launch agent for `auren <name>`, run from the installed venv."""
     home = str(Path.home())
-    extra = [f"{home}/.local/bin", str(DATA_HOME / "bin")]
+    # Where Claude Code puts `claude` (its installer: ~/.local/bin; an older local install: ~/.claude/local),
+    # there even when it's installed after Auren
+    extra = [f"{home}/.local/bin", str(DATA_HOME / "bin"), f"{home}/.claude/local"]
     parts = [*extra, *(path or os.environ.get("PATH") or DEFAULT_PATH).split(":"), *DEFAULT_PATH.split(":")]
     seen: list[str] = []
     for p in parts:
@@ -93,6 +98,12 @@ def loaded(name: str) -> bool:
 def running(name: str) -> bool:
     p = _launchctl("print", _target(name))
     return p.returncode == 0 and "state = running" in p.stdout
+
+
+def managed(name: str) -> bool:
+    """This process is the launch agent's (launchd names the job in XPC_SERVICE_NAME), so exiting with a
+    failure has launchd start it again: how the daemon restarts itself. Not when run in a terminal."""
+    return os.environ.get("XPC_SERVICE_NAME") == LABELS[name]
 
 
 def start(name: str) -> bool:

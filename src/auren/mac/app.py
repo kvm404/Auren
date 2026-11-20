@@ -6,7 +6,7 @@
 
 The launch agents run Auren through it (`Auren daemon`, `Auren mascot`), so macOS asks for, and lists, the
 permissions as Auren's. Opening it from Finder, Spotlight or Launchpad runs `auren open`: Auren starts if
-it isn't running, and its setup window comes up.
+it isn't running, and its setup window comes up (the Auren window, once setup is done).
 
 The bundle is ad-hoc signed. macOS ties a permission to that signature, so `install()` rebuilds only when
 the launcher's sources change (a hash of them is kept in DATA_HOME/app.sha256); updating Auren's Python
@@ -32,7 +32,7 @@ SOURCE = Path(__file__).parent / "app"
 FILES = ("launcher.c", "Info.plist", "Auren.icns")
 BUNDLE_ID = "com.auren.app"
 STAMP = DATA_HOME / "app.sha256"
-SETUP_REQUEST = RUNTIME_DIR / "setup.request"     # the mascot's process opens the setup window when it appears
+SETUP_REQUEST = RUNTIME_DIR / "setup.request"     # the mascot's process opens setup (or the Auren window) when it appears
 SETUP_REQUEST_TTL = 60                            # seconds: older requests (the mascot wasn't running) are dropped
 
 
@@ -133,7 +133,8 @@ def uninstall(app: Path = APP, stamp: Path = STAMP) -> None:
 
 
 def open_app() -> int:
-    """`auren open`, what opening Auren.app does: start Auren if it isn't running, then show its setup."""
+    """`auren open`, what opening Auren.app does: start Auren if it isn't running, then show its setup (the Auren
+    window once setup is done)."""
     from . import service
     for name in service.LABELS:
         if service.plist_path(name).exists() and not service.running(name):

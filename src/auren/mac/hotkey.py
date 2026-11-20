@@ -32,6 +32,17 @@ def parse(combo: str) -> tuple[frozenset[str], int]:
     return frozenset(_HOLD[p] for p in parts[:-1]), KEYS[parts[-1]]
 
 
+def valid(bindings: dict[str, str]) -> bool:
+    """Every key set is a shortcut this can listen for (a restart can't fix one that isn't)."""
+    try:
+        for combo in bindings.values():
+            if combo:
+                parse(str(combo))
+    except ValueError:
+        return False
+    return True
+
+
 def _mods(flags: int) -> frozenset[str]:
     import Quartz as Q
     masks = {"cmd": Q.kCGEventFlagMaskCommand, "shift": Q.kCGEventFlagMaskShift, "alt": Q.kCGEventFlagMaskAlternate,

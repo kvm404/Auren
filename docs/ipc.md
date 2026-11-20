@@ -85,7 +85,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `yes` / `no` | Answer the question(s) it is waiting on (the bubble's and the panel's buttons send these; bind them to keys if you like). The reply says how many were approved or dropped, or that nothing is waiting |
 | `status` | JSON: state, brain, mode, effort, voice, safety |
 | `reload` | Re-read `config.toml` and the vocabulary and apply what changed (`auren config` and `auren vocab` send it) |
-| `permissions` / `permissions microphone\|accessibility\|screen` / `permissions status` | macOS only: ask for all the permissions, or one, or just report them, as JSON with `program` (Auren.app, or the Python macOS asks about without it) and `talk_keys` (the key listener is running). The setup window and `auren permissions` send it |
+| `permissions` / `permissions microphone\|accessibility\|screen` / `permissions status` | macOS only: ask for all the permissions, or one, or just report them, as JSON with `program` (Auren.app, or the Python macOS asks about without it), `talk_keys` (the key listener is running), `keys_waiting` (it starts by itself once Accessibility is allowed), `waiting` (allowed, as a new process sees it, but this one can use it only from its next start), `restarting` (what the daemon restarts itself for once it's idle, exiting with 75 so its launch agent starts it again) and `restart` (what that restart was already tried for and didn't turn on: the user's Restart). The setup window, `auren doctor` and `auren permissions` send it |
 | `quit` | Stop the daemon |
 
 ## Files
@@ -93,7 +93,7 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | Path | Writer | Content |
 |---|---|---|
 | `~/.config/auren/config.toml` | user, `auren config`, daemon | Settings: `[voice]` (on, name, tuning), `[listen]` (auto-send), `[brain]` (mode, effort), `[safety]` (level), `[phone]` (enabled, port, lan). The daemon rewrites only the values it changes, keeping comments. Replaces `settings.json`, which is moved in once and kept as `settings.json.bak` |
-| `~/.config/auren/mascot.json` | bar plugin (read by the mascot) | Mascot preferences |
+| `~/.config/auren/mascot.json` | bar plugin, the Mac's Auren window and menu (read by the mascot) | Mascot preferences |
 | `~/.config/auren/secrets.env` | user | API keys (mode 600) |
 | `~/.config/auren/routines/*.md` | user | Saved workflows for the brain |
 | `~/.config/auren/instructions.md` | user | Extra instructions for the brain (after the laptop facts) |
@@ -114,7 +114,8 @@ while Auren thinks or works stops the answer as always; `cancel` stops it at any
 | `~/.cache/auren/source/` | `auren update` | Auren's own clone of the repo, what updates install from |
 | `$XDG_RUNTIME_DIR/auren/update.json` | `auren update` | The last check or update: `state` (current, available, updating, done, failed, error, unknown), `channel` (`releases`), `installed`, `step`, `message`, `latest` (commit, short, date, subject, release tag, name, url), `commits`, `count`, `checked_at`, `started_at`, `finished_at`, `note`, `log` (read by the bar plugin) |
 | `~/.local/state/auren/update.log` | `auren update` | The last update's steps and install output |
-| `~/.config/auren/panel.json` | bar plugin | The panel's own settings (`notifyUpdates`) |
+| `~/.config/auren/panel.json` | bar plugin, the Mac's Auren window | The panel's own settings (`notifyUpdates`) |
+| `~/.local/state/auren/permissions-restart.json` | daemon (macOS) | What it last restarted itself for, to turn on a permission: `{"for": [names], "at": time}`. One restart per permission allowed; removed once it's on |
 
 ## Phone remote
 

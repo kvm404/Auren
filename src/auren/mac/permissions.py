@@ -6,12 +6,27 @@
 
 macOS asks once per program; `auren permissions` makes the daemon ask (so the dialogs name the program the
 daemon runs as, not the terminal), then opens the right Settings pages. status() is what `auren doctor` shows.
+
+A running process doesn't always see a permission it's given later: Screen Recording counts only from the
+process's next start, and the microphone may be the same. So Grants also asks a new process (fresh(), this
+module run as a program), which answers for Auren too: a child stays the responsibility of the app that
+started it (Auren.app). Allowed there but not here means a restart turns it on; the daemon then restarts
+itself once it's idle, once for each grant (RESTARTED says which), and the setup window says so meanwhile.
 """
 
 from __future__ import annotations
 
+import json
+import math
+import os
 import subprocess
 import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+from ..config import STATE_DIR
 
 PANES = {
     "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
@@ -49,12 +64,121 @@ def screen_recording(prompt: bool = False) -> bool:
 
 
 def status() -> dict[str, bool | str]:
+    """The permissions as this process has them now."""
     return {"microphone": microphone(), "accessibility": accessibility(), "screen": screen_recording()}
+
+
+# --- what a restart would turn on -------------------------------------------------------------------
+
+LATER = ("microphone", "screen")   # what a running process may not see until it starts again
+FRESH_TTL = 2.0                    # seconds a new process's answer is used for (the window asks every second)
+RESTARTED = STATE_DIR / "permissions-restart.json"   # {"for": [names], "at": time}: what the daemon restarted for
+TURNING_ON = 30                    # seconds after that restart the setup window still says "Turning on …"
+NAMES = {"microphone": "the microphone", "screen": "Screen Recording", "keys": "the talk keys"}
+
+
+def allowed(name: str, value) -> bool:
+    return value == "granted" if name == "microphone" else value is True
+
+
+def fresh() -> dict[str, bool | str]:
+    """The microphone and Screen Recording as a new process sees them ({} if it couldn't tell)."""
+    try:
+        p = subprocess.run([sys.executable, "-m", "auren.mac.permissions"], capture_output=True, text=True,
+                           timeout=15, stdin=subprocess.DEVNULL)
+        data = json.loads((p.stdout.strip().splitlines() or ["{}"])[-1])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    return {k: data[k] for k in LATER if isinstance(data, dict) and k in data}
+
+
+def restarted(path: Path = RESTARTED) -> dict:
+    """What the daemon last restarted itself for: {"for": [names], "at": time} ({} if nothing)."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and isinstance(data.get("for"), list) else {}
+
+
+def turning_on(names) -> str:
+    """What the setup window says while a restart turns these on ("" for none)."""
+    said = [NAMES.get(n, n) for n in dict.fromkeys(names)]
+    if not said:
+        return ""
+    text = said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]
+    return "Turning on " + text + "…"
+
+
+class Grants:
+    """The permissions for the setup window: this process's, plus what a new process already has (a restart
+    turns those on). The new process is asked only while something is missing here, and at most every
+    FRESH_TTL seconds. Remembers what a restart was already tried for, so it's tried once per grant."""
+
+    def __init__(self, ask=fresh, live=None, path: Path = RESTARTED, ttl: float = FRESH_TTL, clock=time.monotonic):
+        self._ask, self._live, self.path, self.ttl, self._clock = ask, live or status, path, ttl, clock
+        self._fresh: dict = {}
+        self._at = -math.inf
+        self._lock = threading.Lock()      # check, mark and done run on different threads: one at a time
+
+    def forget_fresh(self) -> None:
+        """Ask a new process next time (the user just clicked Allow)."""
+        self._at = -math.inf
+
+    def _fresh_now(self) -> dict:
+        if self._clock() - self._at >= self.ttl:
+            self._fresh, self._at = self._ask(), self._clock()
+        return self._fresh
+
+    def check(self) -> dict:
+        """status(), with "waiting": what's allowed for Auren but not live in this process yet (a granted value
+        for it, then)."""
+        live = self._live()
+        missing = [n for n in LATER if not allowed(n, live.get(n))]
+        new = self._fresh_now() if missing else {}
+        waiting = [n for n in missing if allowed(n, new.get(n))]
+        # A restart that was tried: done once it's live here, or forgotten if it's no longer allowed at all
+        # (allowed again later, it's a new grant and gets its own restart).
+        with self._lock:
+            tried = self.tried()
+            keep = [n for n in tried if n == "keys" or (n in missing and (n not in new or n in waiting))]
+            if keep != tried:
+                self._save(keep)
+        return {**live, **{n: new[n] for n in waiting}, "waiting": waiting}
+
+    def tried(self) -> list[str]:
+        return [str(n) for n in restarted(self.path).get("for", [])]
+
+    def mark(self, names) -> None:
+        """A restart for these is starting now."""
+        with self._lock:
+            self._save(list(dict.fromkeys([*self.tried(), *names])), time.time())
+
+    def done(self, name: str) -> None:
+        """It's live now (the talk keys started)."""
+        with self._lock:
+            tried = self.tried()
+            if name in tried:
+                self._save([n for n in tried if n != name])
+
+    def _save(self, names: list[str], at: float | None = None) -> None:
+        if not names:
+            self.path.unlink(missing_ok=True)
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        data = json.dumps({"for": names, "at": at if at is not None else restarted(self.path).get("at", 0)})
+        fd, tmp = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(data)
+            os.replace(tmp, self.path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def program() -> str:
     """The program macOS asks about, as Settings lists it: Auren.app when Auren runs through it, else Python."""
-    import os
     return os.environ.get("AUREN_APP") or os.path.realpath(sys.executable)
 
 
@@ -103,3 +227,7 @@ def request() -> dict[str, bool | str]:
         if ok is not True and ok != "granted" and ok != "not asked":
             subprocess.Popen(["open", PANES[name]])
     return now
+
+
+if __name__ == "__main__":          # fresh(): this process is new, so it sees what macOS allows Auren now
+    print(json.dumps({"microphone": microphone(), "screen": screen_recording()}))

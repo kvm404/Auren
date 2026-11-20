@@ -2,7 +2,8 @@
 
 It imports every module (so each Linux module's switch to its mac/ counterpart runs, with the Mac
 dependencies), checks the switches took, builds Auren.app and runs Python through its launcher, and starts
-the mascot's host for a few seconds to see mac.qml, mac-setup.qml and mac-phone.qml load. All in throwaway folders.
+the mascot's host for a few seconds to see mac.qml, mac-setup.qml and mac-window.qml load, then opens every
+page of the Auren window (and the setup window) offscreen with the real bridges. All in throwaway folders.
 Nothing needs a permission: no microphone, keys or screen.
 """
 
@@ -78,8 +79,64 @@ def mascot() -> None:
     print("mascot: ok")
 
 
+# Every page of the Auren window, then the setup window, with the real bridges (no daemon: the setup check
+# says it isn't running). Fails on any QML warning: they name file:line.
+PAGES = r"""
+import sys, time
+from pathlib import Path
+from PySide6.QtCore import QtMsgType, QUrl, qInstallMessageHandler
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication
+problems = []
+qInstallMessageHandler(lambda kind, ctx, msg: kind != QtMsgType.QtDebugMsg and ".qml" in f"{ctx.file}{msg}"
+                       and problems.append(f"{ctx.file}:{ctx.line}: {msg}"))
+app = QApplication([])
+from auren.mac import mascot, phone_window, settings_window
+bridge = mascot.make_bridge()
+phone_ui = phone_window.bridge(lambda: bridge._alive)
+window_ui = settings_window.bridge(bridge, phone_ui, lambda command: None, bridge.write_prefs)
+engine = QQmlApplicationEngine()
+for name, obj in (("auren", bridge), ("phone", phone_ui), ("settings", window_ui)):
+    engine.rootContext().setContextProperty(name, obj)
+phone_ui.setParent(engine)
+window_ui.setParent(engine)
+root = Path(sys.argv[1])
+for qml in ("mac-window.qml", "mac-setup.qml"):
+    engine.load(QUrl.fromLocalFile(str(root / qml)))
+assert len(engine.rootObjects()) == 2, "a window didn't load"
+def settle(secs):
+    end = time.time() + secs
+    while time.time() < end:
+        app.processEvents()
+        time.sleep(0.02)
+for page in settings_window.PAGES:
+    window_ui.openPage(page)
+    settle(0.8)
+    assert window_ui.page == page
+bridge.openSetup()
+settle(1.5)
+window_ui.close()
+bridge.closeSetup()
+phone_ui.stop()
+settle(0.3)
+print("\n".join(problems) or "no QML warnings")
+sys.exit(1 if problems else 0)
+"""
+
+
+def window() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**_env(tmp), "QT_QPA_PLATFORM": "offscreen"}
+        p = subprocess.run([sys.executable, "-c", PAGES, str(ROOT / "mascot")], env=env, capture_output=True,
+                           text=True, timeout=120)
+        print(p.stdout + p.stderr)
+        assert p.returncode == 0, "the Auren window's pages have QML warnings"
+    print("window: ok")
+
+
 if __name__ == "__main__":
     assert sys.platform == "darwin", "this checks the macOS port: run it on a Mac"
     imports()
     app()
     mascot()
+    window()

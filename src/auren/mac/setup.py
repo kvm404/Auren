@@ -1,7 +1,12 @@
 """What Auren's setup window shows and does (the window is mascot/mac-setup.qml, in the mascot's process).
 
 check() gathers the steps: the three permissions as the daemon has them, the AssemblyAI key, and a brain.
-It's plain Python, so tests run it anywhere; the window polls it about once a second while it's open.
+It's plain Python, so tests run it anywhere; the window polls it about once a second while it's open, and
+again whenever it comes to the front (the user is back from System Settings).
+
+Nothing needs a restart by hand: the daemon starts the talk keys once Accessibility is allowed, and restarts
+itself (once it's idle) for a permission it can only use from its next start (mac/permissions.py). The
+window says "Turning on …" meanwhile, and offers Restart only when that restart didn't turn it on.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import time
 from pathlib import Path
 
 from ..config import SECRETS, STATE_DIR
@@ -27,10 +33,19 @@ def _daemon_status() -> dict | None:
         return None
 
 
-def check(status: dict | None = None, which=shutil.which) -> dict:
-    """Every step's state, for the window. status: the daemon's `permissions status` (asked when None)."""
+def _brain_path() -> str | None:
+    """The PATH the daemon's launch agent gives the brains, as `auren doctor` checks it (None: not installed
+    as a launch agent, so this process's own PATH)."""
+    from . import service
+    return service.installed_path("daemon")
+
+
+def check(status: dict | None = None, which=shutil.which, restarted: dict | None = None) -> dict:
+    """Every step's state, for the window. status: the daemon's `permissions status` (asked when None).
+    restarted: what the daemon last restarted itself for (permissions.restarted(), read when None)."""
     from ..config import secret
     from ..settings import current
+    from . import permissions
     st = _daemon_status() if status is None else status
     running = st is not None
     st = st or {}
@@ -39,10 +54,19 @@ def check(status: dict | None = None, which=shutil.which) -> dict:
         mode = str(cfg["brain"])
     except Exception:  # noqa: BLE001 - a broken config.toml: the window still works
         cfg, mode = {}, "auto"
-    claude, codex = bool(which("claude")), bool(which("codex"))
+    path = _brain_path()
+    claude, codex = bool(which("claude", path=path)), bool(which("codex", path=path))
     mic = str(st.get("microphone", "unknown"))
+    # Turning on: what the daemon restarts for once it's idle, or, while it isn't answering, what it just
+    # restarted for (it's on its way back).
+    turning = list(st.get("restarting") or [])
+    last = permissions.restarted() if restarted is None else restarted
+    starting = not running and time.time() - float(last.get("at") or 0) < permissions.TURNING_ON
+    if starting:
+        turning = list(last.get("for") or [])
     out = {
         "running": running,
+        "starting": starting,
         "microphone": mic,
         "accessibility": bool(st.get("accessibility")),
         "screen": bool(st.get("screen")),
@@ -52,23 +76,39 @@ def check(status: dict | None = None, which=shutil.which) -> dict:
         "codex": codex,
         "brain": mode,
         "brainReady": (mode == "claude" and claude) or (mode == "codex" and codex) or (mode == "auto" and (claude or codex)),
+        "turningOn": turning,
+        "turningText": permissions.turning_on(turning),
     }
     out["ready"] = (running and mic == "granted" and out["accessibility"] and out["key"] and out["brainReady"])
-    # The keys are off after Accessibility was allowed: a restart turns them on. Not when a key in
-    # config.toml isn't a shortcut, which no restart fixes (auren doctor says which).
-    out["restart"] = running and out["accessibility"] and not out["talkKeys"] and _keys_valid(cfg)
+    # Restart by hand only when the daemon's own restart can't help: it was tried for that grant already, or
+    # Auren runs outside its launch agent. The talk keys: not while they're about to start by themselves,
+    # nor when a key in config.toml isn't a shortcut, which no restart fixes (auren doctor says which).
+    stuck = [n for n in st.get("restart") or [] if n != "keys"]
+    out["keysTurningOn"] = (running and out["accessibility"] and not out["talkKeys"]
+                            and (bool(st.get("keys_waiting")) or "keys" in turning))
+    keys_off = out["accessibility"] and not out["talkKeys"] and not out["keysTurningOn"]
+    out["restart"] = running and (bool(stuck) or (keys_off and _keys_valid(cfg)))
     return out
 
 
 def _keys_valid(cfg: dict) -> bool:
-    from .hotkey import parse
-    try:
-        for name in ("keys.talk", "keys.talk_fresh"):
-            if cfg.get(name):
-                parse(str(cfg[name]))
-    except ValueError:
-        return False
-    return True
+    from .hotkey import valid
+    return valid({name: cfg.get(name) for name in ("keys.talk", "keys.talk_fresh")})
+
+
+def needs(s: dict) -> str:
+    """What the setup still needs, in a line (the Auren window's Home and the menu), or "" if nothing."""
+    if s.get("turningText"):
+        return s["turningText"]
+    if not s.get("running"):
+        return "Auren isn't running."
+    missing = [name for name, ok in (("the microphone", s.get("microphone") == "granted"),
+                                     ("Accessibility", s.get("accessibility")),
+                                     ("a speech-to-text key", s.get("key")),
+                                     ("a brain", s.get("brainReady"))) if not ok]
+    if missing:
+        return "Needs " + (missing[0] if len(missing) == 1 else ", ".join(missing[:-1]) + " and " + missing[-1]) + "."
+    return "Restart Auren to turn on what you allowed." if s.get("restart") else ""
 
 
 def brain_text(s: dict) -> tuple[str, str]:

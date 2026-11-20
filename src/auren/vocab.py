@@ -120,13 +120,9 @@ def _tell_daemon() -> str:
     return " Auren didn't confirm it; restart Auren to be sure." if reply.startswith("error") else ""
 
 
-def main(args: list[str]) -> int:
-    as_json = "--json" in args
-    args = [a for a in args if a != "--json"]
-    cmd, word = (args[0] if args else "list"), " ".join(args[1:])
-    if cmd not in ("list", "add", "remove") or (cmd == "list") != (not word):
-        print("usage: auren vocab list | add <word> | remove <word>   (--json for the panel)", file=sys.stderr)
-        return 2
+def run(cmd: str, word: str = "") -> dict:
+    """list, add or remove, as `auren vocab ... --json` answers: {ok, message, mine, defaults, limit} (the Mac's
+    Auren window calls this directly)."""
     ok, message = True, ""
     if cmd != "list":
         try:
@@ -136,8 +132,20 @@ def main(args: list[str]) -> int:
             ok, message = False, f"Couldn't save your words: {e.strerror or e}."
         if ok:
             message += _tell_daemon()
+    return {"ok": ok, "message": message, "mine": mine(), "defaults": defaults(), "limit": capacity()}
+
+
+def main(args: list[str]) -> int:
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
+    cmd, word = (args[0] if args else "list"), " ".join(args[1:])
+    if cmd not in ("list", "add", "remove") or (cmd == "list") != (not word):
+        print("usage: auren vocab list | add <word> | remove <word>   (--json for the panel)", file=sys.stderr)
+        return 2
+    result = run(cmd, word)
+    ok, message = result["ok"], result["message"]
     if as_json:
-        print(json.dumps({"ok": ok, "message": message, "mine": mine(), "defaults": defaults(), "limit": capacity()}))
+        print(json.dumps(result))
     elif cmd == "list":
         print(f"yours ({len(_unique(mine()))} of {capacity()}):", ", ".join(mine()) or "(none yet)")
         print("built in:", ", ".join(defaults()))
