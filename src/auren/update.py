@@ -372,8 +372,8 @@ def _brew_bin(info: dict) -> Path:
 
 
 def _brew_libexec(brew: Path) -> Path:
-    """Homebrew's current copy of Auren's source: <prefix>/opt/auren/libexec, for <prefix>/bin/brew."""
-    return brew.parent.parent / "opt" / BREW_FORMULA / "libexec"
+    """Homebrew's current copy of Auren's source: <prefix>/opt/auren/libexec/source, for <prefix>/bin/brew."""
+    return brew.parent.parent / "opt" / BREW_FORMULA / "libexec" / "source"
 
 
 def _keg_version(brew: Path) -> str:

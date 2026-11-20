@@ -19,12 +19,14 @@ class Auren < Formula
   depends_on "uv"
 
   def install
-    libexec.install Dir["*"]
-    wrapper = (libexec/"packaging/homebrew/wrapper.sh").read
+    # In a folder of its own: Homebrew moves README, LICENSE and CHANGELOG out of libexec itself (as the
+    # keg's metadata), and building Auren's environment needs them next to pyproject.toml.
+    (libexec/"source").install Dir["*"]
+    wrapper = (libexec/"source/packaging/homebrew/wrapper.sh").read
     %w[auren auren-ctl].each do |cmd|
       (bin/cmd).write wrapper.gsub("@COMMAND@", cmd)
                              .gsub("@VERSION@", version.to_s)
-                             .gsub("@LIBEXEC@", opt_libexec.to_s)
+                             .gsub("@LIBEXEC@", (opt_libexec/"source").to_s)
                              .gsub("@BREW_BIN@", "#{HOMEBREW_PREFIX}/bin")
       (bin/cmd).chmod 0755
     end
@@ -43,7 +45,8 @@ class Auren < Formula
   end
 
   test do
-    assert_path_exists libexec/"install-macos.sh"
+    assert_path_exists libexec/"source/install-macos.sh"
+    assert_path_exists libexec/"source/README.md"
     assert_match "isn't set up yet", shell_output("#{bin}/auren 2>&1", 1)
     assert_match "isn't set up yet", shell_output("#{bin}/auren-ctl status 2>&1", 1)
     # setup reaches the installer, which refuses an unknown option before doing anything

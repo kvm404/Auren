@@ -61,7 +61,7 @@ fi
 macos=$(sw_vers -productVersion)
 (( ${macos%%.*} >= 14 )) || { warn "Auren needs macOS 14 or newer (this is $macos)"; exit 1; }
 if $brew; then
-  # The keg's own folder (Cellar/auren/X.Y.Z/libexec, not opt/auren), and the brew that installed it,
+  # The keg's own folder (Cellar/auren/X.Y.Z/libexec/source, not opt/auren), and the brew that installed it,
   # which auren update runs. Run from auren update's copy of an older version, brew is on PATH.
   source=$(cd "$repo" && pwd -P)
   # >>> brew

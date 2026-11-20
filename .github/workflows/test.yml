@@ -76,7 +76,8 @@ jobs:
             fi
             [[ $out == "Auren isn't set up yet: run auren setup" ]] || { echo "$cmd said: $out"; exit 1; }
           done
-          test -f "$(brew --prefix local/auren-ci/auren)/libexec/install-macos.sh"
+          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/install-macos.sh"
+          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/README.md"   # Homebrew moves it out of libexec itself
       - name: Check the formula's style
         run: brew style --formula local/auren-ci/auren
         env:
