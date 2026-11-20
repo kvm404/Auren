@@ -64,7 +64,7 @@ jobs:
           AUREN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           AUREN_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           AUREN_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon testReleaseUnitTest assembleRelease
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease   # the unit tests run on the debug variant only
       - name: Check it
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
