@@ -16,6 +16,7 @@ from starlette.testclient import TestClient, WebSocketDenialResponse
 from auren import daemon, ears, integrations, phone, phone_server, tools
 from auren.daemon import Turn
 
+REAL_TAILSCALE_IP = phone.tailscale_ip         # before the fixture stubs it (tests never ask this machine's)
 REAL_INSTALLED = integrations._installed       # before conftest replaces it with "everything is installed"
 SESSION = daemon.SESSION
 
@@ -1642,3 +1643,24 @@ def test_an_idle_server_still_keeps_the_tailscale_address(monkeypatch):
                 await task
 
     assert asyncio.run(go()).get("on") is not True
+
+
+def test_a_stopped_tailscale_isnt_listened_on_but_its_address_is_kept(monkeypatch):
+    """`tailscale ip` prints the address while Tailscale is stopped too, so the server tried to listen on it
+    (and failed, blaming the port). The status's BackendState says whether it runs."""
+    import subprocess
+    status = {}
+    monkeypatch.setattr(phone.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(phone.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=json.dumps(status), stderr=""))
+    status.update(BackendState="Stopped", TailscaleIPs=["100.120.250.39", "fd7a:115c:a1e0::4a39:fa27"])
+    ip, why = REAL_TAILSCALE_IP()
+    assert ip is None and why == "Tailscale is off: tailscale up"
+    assert phone.known_tailscale() == "100.120.250.39"                 # the same address once it's up
+    status.update(BackendState="Running")
+    assert REAL_TAILSCALE_IP() == ("100.120.250.39", "")
+    status.clear()
+    status.update(BackendState="NeedsLogin", TailscaleIPs=None)
+    assert REAL_TAILSCALE_IP()[1].startswith("Tailscale is logged out")
+    monkeypatch.setattr(phone.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "failed to connect"))
+    assert "failed to connect" in REAL_TAILSCALE_IP()[1]

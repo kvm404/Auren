@@ -324,23 +324,43 @@ def shown(it: dict) -> dict:
 
 # --- the network --------------------------------------------------------------------------------
 
+TAILSCALE_DOWN = {"Stopped": "Tailscale is off", "NeedsLogin": "Tailscale is logged out",
+                  "NeedsMachineAuth": "Tailscale is waiting for this machine to be approved",
+                  "Starting": "Tailscale is starting", "NoState": "Tailscale is starting"}
+
+
 def tailscale_ip() -> tuple[str | None, str]:
-    """This machine's Tailscale IPv4 address, or (None, why not)."""
+    """This machine's Tailscale IPv4 address while Tailscale runs, or (None, why not). From `tailscale status
+    --json`: `tailscale ip` prints the address even while Tailscale is stopped, when nothing can bind it. A
+    stopped Tailscale's address is still kept ([remember_tailscale]): it's the same once it's up again."""
     if not shutil.which("tailscale"):
         return None, "Tailscale isn't installed"
     try:
-        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"tailscale didn't answer ({type(e).__name__})"
-    for line in out.stdout.split():
-        try:
-            ip = ipaddress.ip_address(line.strip())
-        except ValueError:
-            continue
-        if ip.version == 4 and ip in TAILNET:
-            return str(ip), ""
-    why = (out.stderr or out.stdout).strip().splitlines()
-    return None, "Tailscale is off or logged out" + (f" ({why[0][:80]})" if why else "") + ": tailscale up"
+    try:
+        st = json.loads(out.stdout)
+    except ValueError:
+        st = None
+    if not isinstance(st, dict):
+        why = (out.stderr or out.stdout).strip().splitlines()
+        return None, "tailscale didn't say how it is" + (f" ({why[0][:80]})" if why else "") + ": tailscale up"
+    ip = next((a for a in st.get("TailscaleIPs") or [] if isinstance(a, str) and _tailnet4(a)), None)
+    state = str(st.get("BackendState") or "")
+    if ip:
+        remember_tailscale(ip)
+    if state == "Running" and ip:
+        return ip, ""
+    return None, TAILSCALE_DOWN.get(state, f"Tailscale isn't running ({state or 'unknown'})") + ": tailscale up"
+
+
+def _tailnet4(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and a in TAILNET
 
 
 def remember_tailscale(ip: str) -> None:
