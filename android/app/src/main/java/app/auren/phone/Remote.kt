@@ -196,6 +196,37 @@ object Remote {
         users.release()
     }
 
+    private var keepers = 0
+
+    /**
+     * Stay connected with no screen showing: phone control is on, so the PC can use the phone from the desk.
+     * Separate from the screens, so the microphone still stops when the app leaves. Main thread only.
+     */
+    fun keep() {
+        keepers++
+        if (loop?.isActive != true) loop = scope.launch { run() }
+        else wake.trySend(Unit)
+    }
+
+    fun unkeep() {
+        if (keepers == 0) return
+        keepers--
+        if (keepers == 0 && users.count == 0) idle()
+    }
+
+    /** Tell the PC whether it can use this phone now (after a hello, and whenever the service toggles). */
+    fun controlChanged() {
+        send(Outgoing.controlReady(HandsService.instance != null))
+    }
+
+    private fun control(m: Incoming.Control) {
+        scope.launch {
+            val out = HandsService.instance?.run(m.body)
+                ?: JSONObject().put("ok", false).put("error", "phone control is off on the phone")
+            send(Outgoing.controlResult(m.id, out))
+        }
+    }
+
     /**
      * The last screen closed: the microphone stops now, and the PC stops listening. A tile tap still waiting
      * for the link is dropped too, so a later hello can't start recording nobody asked for then.
@@ -210,6 +241,7 @@ object Remote {
 
     /** Nobody came back: close the connection. */
     private fun idle() {
+        if (keepers > 0) return             // phone control keeps the link for the PC
         loop?.cancel()
         loop = null
         close()
@@ -369,6 +401,7 @@ object Remote {
         // What the PC took but hadn't answered when the link dropped: its reply, or "lost", comes back.
         val waiting = _lines.value.filter { it.waiting && it.id !in pending }.map { it.id } + stale + listOfNotNull(voiceTurn)
         if (waiting.isNotEmpty()) send(Outgoing.resume(waiting.distinct()))
+        controlChanged()
         if (talkWhenConnected) {
             talkWhenConnected = false
             startConversation()
@@ -476,6 +509,7 @@ object Remote {
                 if (_conversation.value && m.id.isNotEmpty() && m.id == lastListen) endConversation(m.error)
                 else _notices.tryEmit(m.error)
             }
+            is Incoming.Control -> control(m)
             is Incoming.Revoked, is Incoming.Pong -> Unit
         }
     }
