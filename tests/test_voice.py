@@ -583,13 +583,21 @@ def test_after_an_update_the_daemon_downloads_the_new_voice_itself(monkeypatch):
         def set_voice(self, name):
             self.name = name
 
+    import threading
+    let_go = threading.Event()               # the download waits until the test has seen the text-only start
+
+    def download_model(log=print):
+        let_go.wait(5)
+        fetched.append(1)
+        return "ok"
     monkeypatch.setattr(voice, "Voice", FakeVoice)
-    monkeypatch.setattr(voice, "download_model", lambda log=print: fetched.append(1) or "ok")
+    monkeypatch.setattr(voice, "download_model", download_model)
 
     async def go():
         d = _starting()
         await d.warm_up()
         ready = (d.state, d.detail, d.voice)
+        let_go.set()
         await d._voice_task
         return d, ready
 
