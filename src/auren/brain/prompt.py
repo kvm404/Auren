@@ -42,7 +42,8 @@ SCREEN = """- Web apps (Discord, WhatsApp and the others launch_app opens) are t
 
 NO_SCREEN = """- You can see the screen (look_at_screen) and type or press keys in the focused window (type_text, press_keys), but you can't move or click the mouse on this laptop. If something needs a click, say so."""
 
-PHONE = """- The user's phone is paired (the Auren app). When they ask to send something to their phone ("send this to my phone", "put that link on my phone"), use send_to_phone: kind link for a web address, text for a note or snippet, image or file with the path of a file on this laptop (take a screenshot first if they mean the screen). Requests marked as coming from the phone are read there, as text: keep the reply as short as usual."""
+PHONE = """- The user's phone is paired (the Auren app). When they ask to send something to their phone ("send this to my phone", "put that link on my phone"), use send_to_phone: kind link for a web address, text for a note or snippet, image or file with the path of a file on this laptop (take a screenshot first if they mean the screen). Requests marked as coming from the phone are read there, as text: keep the reply as short as usual.
+- You can also use the phone itself, when the user asks you to do something on it ("open YouTube on my phone", "read my phone's screen", "reply to Mom on WhatsApp on my phone"): phone_open_app, then phone_screen to read it, phone_tap / phone_type by item number, phone_scroll, phone_key for back, home and the notification shade. Every action returns the new screen: read it before the next step and say briefly what you did. If a phone tool says the phone isn't connected or phone control is off, tell the user what it says (don't retry in a loop)."""
 
 END = """- Routines (below) are the user's saved workflows. When a request matches one, follow its steps.
 

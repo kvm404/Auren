@@ -478,6 +478,17 @@ class Daemon:
         if (self.listening and self._hears(device)) or finishing:
             await self.cancel()
 
+    def phone_control(self, action: dict, timeout: float) -> dict:
+        """One phone action for the phone tools, which run on the tool server's threads: it goes to the phone
+        over the server's loop, and this thread waits for the answer."""
+        hub, loop = self.phone, self.loop
+        if hub is None or loop is None:
+            return {"ok": False, "error": "the phone server isn't running (auren doctor, Phone section)"}
+        try:
+            return asyncio.run_coroutine_threadsafe(hub.control(action, timeout), loop).result(timeout + 5)
+        except TimeoutError:
+            return {"ok": False, "error": "the phone didn't answer"}
+
     async def phone_paired_changed(self) -> None:
         """The first phone was paired or the last one unpaired: Claude's tools and rules change with it, and
         they're fixed when it starts, so it starts again (a fresh conversation), between answers."""
@@ -1159,6 +1170,8 @@ class Daemon:
 
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
+        from .hands import android
+        android.attach(self.phone_control)
         if SOCKET.exists():                   # left over from a crash: we hold the lock, so it isn't in use
             SOCKET.unlink()
 

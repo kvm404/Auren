@@ -43,8 +43,8 @@ from typing import Any
 
 from . import integrations, safety
 from .brain.judge import Judge
+from .hands import android, desktop, excalidraw, herdr, screen, shell, spotify
 from .hands import browser as web
-from .hands import desktop, excalidraw, herdr, screen, shell, spotify
 from .integrations import active, hidden_tools
 from .profile import Profile
 
@@ -70,6 +70,7 @@ TOOLS: dict[str, Tool] = {}
 # parallel). A confirmation is checked and run holding the same lock, so what it checked is what it acts on.
 BROWSER = threading.RLock()
 SCREEN = threading.RLock()
+PHONE = threading.RLock()             # the phone's screen: one action at a time, like the desktop's
 
 
 def tool(repeatable: bool = False, lock: Any = None):
@@ -356,7 +357,7 @@ def _run(fn, *args, **kwargs) -> str:
     try:
         out = fn(*args, **kwargs)
     except (herdr.HerdrError, desktop.DesktopError, web.BrowserError, screen.ScreenError, shell.ShellError,
-            excalidraw.ExcalidrawError, spotify.SpotifyError, PermissionError, ValueError) as e:
+            excalidraw.ExcalidrawError, spotify.SpotifyError, android.PhoneError, PermissionError, ValueError) as e:
         return f"error: {e}"
     except Exception as e:  # noqa: BLE001 - report, never crash the runtime
         log.exception("%s failed", getattr(fn, "__name__", fn))
@@ -372,7 +373,7 @@ def _loggable(args: dict) -> str:
 
 # What a check (is the target still what was asked about?) can raise.
 _TARGET_ERRORS = (PermissionError, web.BrowserError, screen.ScreenError, desktop.DesktopError,
-                  excalidraw.ExcalidrawError)
+                  excalidraw.ExcalidrawError, android.PhoneError)
 
 
 def _failed(result: str) -> bool:
@@ -621,6 +622,89 @@ def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "")
                      lambda: send(secret_ok=True),
                      say=lambda result: "Sent it to your phone." if not result.startswith("error:") else None)
     return _run(send)
+
+
+# --- the phone's own screen (the app's accessibility service) -----------------------------------------
+
+def _phone(out: str) -> str:
+    return out if out.startswith("error:") else safety.untrusted(out, "phone screen")
+
+
+@tool(repeatable=True, lock=PHONE)
+def phone_screen() -> str:
+    """Read what the user's phone shows now: the app in front, its text, and numbered items to tap, type
+    into or scroll. Use the phone tools when the user asks you to do something on their phone ("open
+    WhatsApp on my phone", "what's on my phone's screen", "turn on wifi on my phone")."""
+    return _phone(_run(android.screen))
+
+
+@tool(lock=PHONE)
+def phone_tap(target: str, long_press: bool = False) -> str:
+    """Tap an item on the phone: its number from the last phone screen, or words from its label. Returns the
+    screen after the tap. long_press=True holds it. Taps that buy, pay, send, post or delete make the tool
+    ask the user itself: just tap, don't ask in words first."""
+    try:
+        n, it = android.resolve(target)
+    except android.PhoneError as e:
+        return f"error: {e}"
+    label = it["label"]
+    if label and web.RISKY_CLICK.search(label):
+        def check() -> None:
+            now = android.item(n)
+            if not now or now[1]["label"] != label:
+                raise PermissionError(f"“{label}” isn't item {n} any more: read the phone again and ask the user again")
+        return _gate({safety.click_kind(label)}, f"Tap “{label}” on your phone? That could buy, send, post or delete something.",
+                     lambda: _phone(android.tap(n, long_press, label)), check)
+    return _phone(_run(android.tap, n, long_press))
+
+
+@tool(lock=PHONE)
+def phone_type(target: str, text: str, submit: bool = False) -> str:
+    """Type text into a numbered text field on the phone, replacing what it holds. submit=True presses the
+    keyboard's action key (search, go, send) afterwards. Submitting a search box runs straight away;
+    submitting any other field (a chat message, a form) makes the tool ask the user itself: just call it."""
+    try:
+        n, it = android.resolve(target)
+    except android.PhoneError as e:
+        return f"error: {e}"
+    if submit and it["field"] and not it["search"]:
+        label = it["label"]
+
+        def check() -> None:
+            now = android.item(n)
+            if not now or now[1]["label"] != label:
+                raise PermissionError("that field isn't there any more: read the phone again and ask the user again")
+        short = text if len(text) <= 60 else text[:57] + "…"
+        return _gate({safety.SEND}, f"Type “{short}” into “{label or 'the field'}” on your phone and send it?",
+                     lambda: _phone(android.type_text(n, text, True, label)), check)
+    return _phone(_run(android.type_text, n, text, submit))
+
+
+@tool(repeatable=True, lock=PHONE)
+def phone_scroll(direction: str = "down", target: str = "") -> str:
+    """Scroll the phone's screen (down, up, left or right) and read it again. target: a numbered scrollable
+    item, when the screen has more than one list."""
+    return _phone(_run(android.scroll, direction, target))
+
+
+@tool(lock=PHONE)
+def phone_key(key: str) -> str:
+    """Press one of the phone's system keys: back, home, recents, notifications (pull down the shade),
+    quick_settings or lock. Returns the screen after it."""
+    return _phone(_run(android.key, key))
+
+
+@tool(lock=PHONE)
+def phone_open_app(app: str) -> str:
+    """Open an app on the phone by name (WhatsApp, Settings, Camera, YouTube...). Returns its screen. If
+    the name doesn't match, the error lists close matches; phone_apps lists them all."""
+    return _phone(_run(android.open_app, app))
+
+
+@tool(repeatable=True)
+def phone_apps(query: str = "") -> str:
+    """The apps installed on the phone (names you can open), optionally only those matching words."""
+    return _run(android.apps, query)
 
 
 @tool()
