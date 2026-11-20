@@ -1,5 +1,6 @@
 package app.auren.phone.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,8 +17,22 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -28,7 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -99,7 +117,7 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
         Section("Quick settings")
         Card {
             Text("Add the Auren tile", color = Au.Text, fontSize = 15.sp)
-            Text("Pull down quick settings, tap the pencil, and drag Auren in. The tile starts a hands-free turn.",
+            Text("Pull down quick settings, tap the pencil, and drag Auren in. The tile starts a hands-free conversation.",
                 color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
         }
 
@@ -208,13 +226,17 @@ private fun BrainCard(connected: Boolean) {
                 else -> "Claude Haiku"
             } + if (effort.isNotEmpty()) ", $effort effort" else ""
 
-            Caps("Who answers", Au.Faint, Modifier.padding(bottom = 6.dp), size = 10)
-            Picks(modes, pending["brain"] ?: st.mode, pending["brain"] != null, connected) { Remote.setSetting("brain", it) }
-            Text("Now: $now", color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp))
+            val mode = pending["brain"] ?: st.mode
+            Title("Who answers", pending["brain"] != null)
+            Segments(modes, mode, connected) { Remote.setSetting("brain", it) }
+            Text(modes.firstOrNull { it.value == mode }?.tip.orEmpty(), color = Au.Dim, fontSize = 12.sp, lineHeight = 16.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+            Text("Now: $now", color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 2.dp))
 
-            Caps(if (codex) "Codex effort" else "Claude effort", Au.Faint, Modifier.padding(top = 16.dp, bottom = 6.dp), size = 10)
-            Picks(if (codex) CODEX_EFFORTS else CLAUDE_EFFORTS, pending[effortName] ?: effort, pending[effortName] != null,
-                connected) { Remote.setSetting(effortName, it) }
+            Title(if (codex) "Codex effort" else "Claude effort", pending[effortName] != null, Modifier.padding(top = 16.dp))
+            Dropdown(if (codex) CODEX_EFFORTS else CLAUDE_EFFORTS, pending[effortName] ?: effort, connected) {
+                Remote.setSetting(effortName, it)
+            }
             Text(
                 when {
                     st.mode == "codex" -> "Codex only: Claude isn't used. Higher thinks harder but answers slower."
@@ -233,24 +255,92 @@ private fun BrainCard(connected: Boolean) {
     }
 }
 
-/** One choice of a few, like the voice picker. Disabled while not connected: the values live on the PC. */
+/** A Brain setting's name, with "Switching…" beside it while a pick waits for the PC's state to carry it. */
 @Composable
-private fun Picks(options: List<Pick>, chosen: String, switching: Boolean, enabled: Boolean, onPick: (String) -> Unit) {
-    Column(Modifier.selectableGroup()) {
-        options.forEach { p ->
-            val on = p.value == chosen
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (on) Au.Raised else Au.Glass)
-                    .selectable(selected = on, enabled = enabled, role = Role.RadioButton) { onPick(p.value) }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(10.dp).clip(CircleShape).background(if (on) (if (enabled) Au.Gold else Au.Dim) else Au.Edge))
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(p.label, color = if (on && enabled) Au.Text else Au.Dim, fontSize = 15.sp)
-                    Text(p.tip, color = Au.Faint, fontSize = 12.sp)
-                }
-                if (on && switching) Caps("Switching", Au.Faint, size = 10)
+private fun Title(text: String, switching: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().padding(bottom = 8.dp).height(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Caps(text, Au.Faint, Modifier.weight(1f), size = 10)
+        if (switching) {
+            CircularProgressIndicator(Modifier.size(10.dp), color = Au.Gold, strokeWidth = 1.5.dp, trackColor = Au.Edge)
+            Caps("Switching…", Au.Dim, Modifier.padding(start = 6.dp), size = 9)
+        }
+    }
+}
+
+/** One of a few, side by side (Material's segmented buttons). Disabled while not connected: the values live on the PC. */
+@Composable
+private fun Segments(options: List<Pick>, chosen: String, enabled: Boolean, onPick: (String) -> Unit) {
+    val colors = SegmentedButtonDefaults.colors(
+        activeContainerColor = Au.Gold.copy(alpha = 0.16f), activeContentColor = Au.Gold, activeBorderColor = Au.Gold.copy(alpha = 0.7f),
+        inactiveContainerColor = Au.Glass, inactiveContentColor = Au.Dim, inactiveBorderColor = Au.Edge,
+        disabledActiveContainerColor = Au.Raised, disabledActiveContentColor = Au.Dim, disabledActiveBorderColor = Au.Edge,
+        disabledInactiveContainerColor = Au.Glass, disabledInactiveContentColor = Au.Faint, disabledInactiveBorderColor = Au.Edge,
+    )
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        options.forEachIndexed { i, p ->
+            SegmentedButton(
+                selected = p.value == chosen,
+                onClick = { onPick(p.value) },
+                shape = SegmentedButtonDefaults.itemShape(index = i, count = options.size),
+                enabled = enabled,
+                colors = colors,
+                icon = {},                      // no check mark: the fill says which, and the labels keep their room
+                label = { Text(p.label, fontSize = 14.sp, maxLines = 1) },
+            )
+        }
+    }
+}
+
+/**
+ * One of a longer list, as a menu under a read-only field showing the current one (Material's exposed
+ * dropdown); each level's tip is under its name in the menu. Disabled while not connected.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Dropdown(options: List<Pick>, chosen: String, enabled: Boolean, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val shown = open && enabled
+    ExposedDropdownMenuBox(expanded = shown, onExpandedChange = { if (enabled) open = it }) {
+        OutlinedTextField(
+            value = options.firstOrNull { it.value == chosen }?.label ?: chosen.ifEmpty { "—" },
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            singleLine = true,
+            textStyle = TextStyle(fontSize = 15.sp),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = shown) },
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Au.Text, unfocusedTextColor = Au.Text, disabledTextColor = Au.Dim,
+                focusedContainerColor = Au.Glass, unfocusedContainerColor = Au.Glass, disabledContainerColor = Au.Glass,
+                focusedBorderColor = Au.Gold.copy(alpha = 0.7f), unfocusedBorderColor = Au.Edge, disabledBorderColor = Au.Edge,
+                focusedTrailingIconColor = Au.Gold, unfocusedTrailingIconColor = Au.Dim, disabledTrailingIconColor = Au.Faint,
+                cursorColor = Au.Gold,
+            ),
+            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled).fillMaxWidth(),
+        )
+        ExposedDropdownMenu(
+            expanded = shown,
+            onDismissRequest = { open = false },
+            containerColor = Au.Raised,
+            border = BorderStroke(1.dp, Au.Edge),
+        ) {
+            options.forEach { p ->
+                val on = p.value == chosen
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(p.label, color = if (on) Au.Gold else Au.Text, fontSize = 15.sp)
+                            Text(p.tip, color = Au.Dim, fontSize = 12.sp, lineHeight = 16.sp)
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onPick(p.value)
+                    },
+                    trailingIcon = { if (on) Icon(Icons.Filled.Check, null, tint = Au.Gold) },
+                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+                )
             }
         }
     }

@@ -78,6 +78,14 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
 - **Voice:** the phone records 16 kHz mono 16-bit PCM and streams it over the WebSocket into the same
   speech pipeline as the PC's microphone (AssemblyAI). Hold to talk, or hands-free: it sends when you stop
   talking, like auto-send.
+- **Hands-free is a conversation.** After Auren's reply (once the phone has finished reading it aloud, and
+  the PC is idle), the app opens the microphone again by itself, so you can keep talking back and forth. A
+  yes/no question doesn't stop it: say "yes" or "no". It turns off when you tap Hands-free again or Stop,
+  when a listen hears nothing for 12 s, when the PC is busy at the desk, on an error, or when the link
+  drops or the app leaves the screen. The app says why ("Hands-free off: you went quiet"). The decision
+  is `listenNext` in `android/.../Conversation.kt`.
+- **Fresh** (Home's top bar, or Settings) starts a fresh conversation on the PC and clears the phone's
+  chat. A request still waiting is dropped: its reply isn't shown or read aloud. The inbox stays.
 - The brain is told the request came from the phone, so it keeps replies short and uses `send_to_phone`
   for links, files and images.
 

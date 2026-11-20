@@ -5,10 +5,12 @@
 ### Added
 
 - A phone remote: an Android app (`android/`) that talks to Auren on your PC over the same Wi-Fi or
-  Tailscale. Hold to talk, hands-free or typed requests; see what Auren is doing and its replies (read
+  Tailscale. Hold to talk, type, or turn on hands-free for a live conversation (after each reply it
+  listens again, until you go quiet for 12 s or tap it off); see what Auren is doing and its replies (read
   aloud on the phone if you like); answer its questions and stop it; get the links, text, images and
   files it sends with the new `send_to_phone` tool; share from any app to Auren, the PC's clipboard or
-  the PC's browser; start a fresh conversation, pick who answers and the effort; a Quick Settings tile.
+  the PC's browser; start a fresh conversation (which clears the phone's chat), pick who answers (Auto, Claude, Codex)
+  and the effort; a Quick Settings tile.
   Pair, see and unpair phones on the bar panel's new Phone page, or with `auren phone pair` (a QR code),
   `auren phone devices` and `auren phone revoke`. One turn at a time across the desk and the
   phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same

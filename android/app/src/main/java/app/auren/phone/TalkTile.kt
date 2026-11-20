@@ -7,7 +7,7 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
-/** A Quick Settings tile: one tap opens Auren and starts a hands-free turn (through [TalkActivity]). */
+/** A Quick Settings tile: one tap opens Auren and starts a hands-free conversation (through [TalkActivity]). */
 class TalkTile : TileService() {
     override fun onStartListening() {
         super.onStartListening()

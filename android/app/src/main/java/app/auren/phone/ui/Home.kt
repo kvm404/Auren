@@ -96,7 +96,7 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
             Spacer(Modifier.width(12.dp))
             Box(Modifier.weight(1f)) { LinkPill(link) }      // shrinks on a narrow phone, so the three buttons fit
             // The bar panel's Fresh: one tap away, since a new topic is the usual reason. The PC forgets the
-            // conversation; the lines here stay, with a note where the fresh one starts.
+            // conversation, and the chat here starts empty, like a new one.
             IconButton(onClick = { Remote.forget() }, enabled = connected) {
                 Icon(Icons.Filled.Refresh, "Fresh conversation", tint = if (connected) Au.Dim else Au.Faint)
             }
@@ -278,6 +278,7 @@ private fun Dock(connected: Boolean, st: AurenState, talk: app.auren.phone.Talk?
     val busy = connected && st.active && st.origin == "desk"
     val stoppable = connected && (talk != null || (st.active && st.origin != "desk") || st.state in setOf("thinking", "working"))
     val speaking by Remote.speaker.speaking.collectAsStateWithLifecycle()     // a reply being read on this phone
+    val conversation by Remote.conversation.collectAsStateWithLifecycle()     // hands-free, turn after turn
     Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -297,12 +298,21 @@ private fun Dock(connected: Boolean, st: AurenState, talk: app.auren.phone.Talk?
         }
         Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceEvenly) {
-            SideButton("Hands-free", enabled = connected && talk == null && !busy && !st.active, active = talk?.handsFree == true) {
-                askMic { Remote.talkStart(handsFree = true) }
+            // A toggle: on, it listens after every reply until tapped again (or Stop, or a turn that hears nothing).
+            SideButton("Hands-free", enabled = connected && (conversation || (talk == null && !busy && !st.active)),
+                active = talk?.handsFree == true, on = conversation,
+                description = if (conversation) "Hands-free conversation on. Tap to end it." else "Start a hands-free conversation") {
+                if (conversation) Remote.stopConversation() else askMic { Remote.startConversation() }
             }
             TalkPad(enabled = connected && !busy && (talk != null || !st.active), talk = talk, level = level, askMic = askMic)
-            SideButton("Stop", enabled = stoppable || speaking, danger = true) {
-                if (stoppable) Remote.cancel() else Remote.speaker.stop()
+            SideButton("Stop", enabled = stoppable || speaking || conversation, danger = true) {
+                if (stoppable) Remote.cancel() else Remote.hush()
+            }
+        }
+        AnimatedVisibility(conversation, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            // Between turns too: the mic opens again by itself once the reply is done.
+            Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+                Caps("hands-free on · tap it again to end", Au.Holo, size = 9)
             }
         }
     }
@@ -367,12 +377,16 @@ private fun MicGlyph(color: Color) {
     }
 }
 
+/** [on] marks a toggle that is on: filled, with a full border, so it reads as switched on. */
 @Composable
-private fun SideButton(label: String, enabled: Boolean, active: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
-    val tint = when { !enabled -> Au.Faint; danger -> Au.Red; active -> Au.Holo; else -> Au.Text }
+private fun SideButton(label: String, enabled: Boolean, active: Boolean = false, danger: Boolean = false,
+                       on: Boolean = false, description: String? = null, onClick: () -> Unit) {
+    val tint = when { !enabled -> Au.Faint; danger -> Au.Red; active || on -> Au.Holo; else -> Au.Text }
     OutlinedButton(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, if (enabled) tint.copy(alpha = 0.6f) else Au.Edge),
-        modifier = Modifier.width(104.dp).height(42.dp)) {
+        border = BorderStroke(if (on) 1.5.dp else 1.dp, if (!enabled) Au.Edge else if (on) tint else tint.copy(alpha = 0.6f)),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (on) Au.Holo.copy(alpha = 0.16f) else Color.Transparent),
+        modifier = Modifier.width(104.dp).height(42.dp)
+            .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)) {
         Caps(label, tint, size = 10)
     }
 }

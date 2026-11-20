@@ -11,10 +11,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -111,6 +117,16 @@ object Remote {
     val pendingSettings: StateFlow<Map<String, String>> = _pendingSettings
     private val settingIds = HashMap<String, String>()     // request id -> the setting it changes
     private var forgetId: String? = null
+    /** Hands-free as a live conversation: on until the user ends it, or a listen hears nothing (see [listenNext]). */
+    private val _conversation = MutableStateFlow(false)
+    val conversation: StateFlow<Boolean> = _conversation
+    /** A reply handed to the speaker that it hasn't finished (or started) reading: the next listen waits for it. */
+    private val _speechDue = MutableStateFlow(false)
+    private var speechWatch: Job? = null
+    private var lastListen: String? = null          // the newest listen's id: its turn ending without a reply ends the mode
+    private var conversationOffAt = 0L
+    /** Turns a fresh conversation dropped while they waited: their replies, when they come, aren't shown. */
+    private val dropped = LinkedHashSet<String>()
 
     private var ws: WebSocket? = null
     private var connected = false
@@ -124,11 +140,14 @@ object Remote {
     private val users = Users(scope, GRACE_MS, onLast = ::leftScreen, onIdle = ::idle)
     private val pending = LinkedHashMap<String, Pair<String, Long>>()     // id -> (message, when queued)
     private var mic: Mic? = null
-    private var voiceTurn: String? = null          // the last listen's id, until its words come back
+    private val _voiceTurn = MutableStateFlow<String?>(null)
+    private var voiceTurn: String?                  // the last listen's id, until its words come back
+        get() = _voiceTurn.value
+        set(v) { _voiceTurn.value = v }
     /** Reads replies aloud on this phone: Phonon once downloaded, Android's own voice until then. */
     lateinit var speaker: Speaker
         private set
-    /** Start a hands-free turn once connected (the Quick Settings tile). */
+    /** Start a hands-free conversation once connected (the Quick Settings tile). */
     var talkWhenConnected = false
 
     fun init(application: Application) {
@@ -151,6 +170,18 @@ object Remote {
         // One writer, always the newest state: an older save can't land after a newer one. Each save is taken
         // whole on the main thread, so items, cursor and pairing always belong together.
         scope.launch(Dispatchers.IO) { for (x in saves) store.inbox.save(x.owner, x.last, x.items) }
+        // Conversation mode: whenever what it waits on changes, decide again; once the turn is over, pause, look
+        // again, and open the next listen. A new change during the pause starts the decision over.
+        scope.launch {
+            combine(listOf<Flow<Any?>>(_conversation, _link, _talk, _state, _lines, _voiceTurn, speaker.speaking, _speechDue)) {
+                nextListen()
+            }.distinctUntilChanged().collectLatest { ready ->
+                if (!ready) return@collectLatest
+                delay(LISTEN_PAUSE_MS)
+                // talkStart says why it couldn't (the mic is busy, the link went): no retry, so no loop.
+                if (nextListen() && !talkStart(handsFree = true)) endConversation(null)
+            }
+        }
     }
 
     // --- lifecycle: connected while something shows ----------------------------------------------
@@ -171,6 +202,7 @@ object Remote {
      */
     private fun leftScreen() {
         talkWhenConnected = false
+        endConversation(null)
         if (_talk.value == null) return
         stopMic()
         send(Outgoing.cancel())
@@ -281,6 +313,7 @@ object Remote {
                 ws = null
                 host = null
                 stopMic()
+                endConversation("lost the PC")
             }
             socket.cancel()
         }
@@ -290,6 +323,7 @@ object Remote {
     private fun lost(why: String) = Link(if (why.startsWith(REFUSED)) LinkKind.SERVER_OFF else LinkKind.UNREACHABLE, why)
 
     private fun revoked(): Link {
+        endConversation(null)                   // the screen says this phone was unpaired
         stopMic()
         return Link(LinkKind.REVOKED)
     }
@@ -337,7 +371,7 @@ object Remote {
         if (waiting.isNotEmpty()) send(Outgoing.resume(waiting.distinct()))
         if (talkWhenConnected) {
             talkWhenConnected = false
-            talkStart(handsFree = true)
+            startConversation()
         }
     }
 
@@ -355,15 +389,24 @@ object Remote {
             }
             is Incoming.Ended -> {
                 pending.remove(m.id)
+                // The newest listen's turn ended with no reply: it heard nothing (no words came back), or it was
+                // stopped or failed after them. Either way the conversation stops rather than listen again.
+                if (_conversation.value && m.id == lastListen && m.id !in dropped) {
+                    endConversation(if (_lines.value.none { it.id == m.id }) "you went quiet" else "that turn ended without a reply")
+                }
                 if (voiceTurn == m.id) voiceTurn = null
                 done(m.id)
             }
             is Incoming.Reply -> {
                 if (voiceTurn == m.id) voiceTurn = null
+                if (m.id in dropped) return         // asked before a fresh start: not shown, not read
                 done(m.id)
                 val text = m.text.ifBlank { "Done." }
                 addLine(Line("r-${m.id}-${m.at}", Who.AUREN, text))
-                if (_readAloud.value) speaker.speak(text, Voices.forState(_state.value.voiceName).name)
+                if (_readAloud.value) {
+                    speaker.speak(text, Voices.forState(_state.value.voiceName).name)
+                    expectSpeech()
+                }
             }
             is Incoming.Inbox -> addInbox(m.item)
             is Incoming.Ack -> {
@@ -378,7 +421,7 @@ object Remote {
                 }
                 if (m.id == forgetId) {
                     forgetId = null
-                    if (m.ok) addLine(Line("fresh-${m.id}", Who.NOTE, "Fresh conversation"))
+                    if (m.ok) freshStart()
                     else _notices.tryEmit("Couldn't start fresh: " + m.status.removePrefix("error: "))
                     return
                 }
@@ -398,27 +441,40 @@ object Remote {
                     return
                 }
                 val talk = _talk.value
+                val listen = m.id.isNotEmpty() && m.id == lastListen
                 when {
                     m.busy -> {                     // the Busy message before it said who has the turn
                         if (talk?.id == m.id) stopMic()
                         done(m.id)
+                        if (listen) endConversation(null)
                     }
-                    m.status == "heard nothing" || m.status == "too short" -> _notices.tryEmit("Didn't catch that")
+                    // In conversation mode, "Hands-free off: you went quiet" says it (the turn's end comes first).
+                    m.status == "heard nothing" || m.status == "too short" ->
+                        if (!_conversation.value && System.currentTimeMillis() - conversationOffAt > 3_000) {
+                            _notices.tryEmit("Didn't catch that")
+                        }
                     !m.ok && m.status.isNotEmpty() && m.status !in QUIET -> {
                         if (talk?.id == m.id) stopMic()
                         done(m.id)
-                        _notices.tryEmit(m.status.removePrefix("error: ").replaceFirstChar { it.uppercase() })
+                        val why = m.status.removePrefix("error: ")
+                        if (listen && _conversation.value) endConversation(why)
+                        else _notices.tryEmit(why.replaceFirstChar { it.uppercase() })
                     }
                 }
             }
-            is Incoming.Busy -> _notices.tryEmit(if (m.owner == "desk") "Auren is busy at the desk" else "Auren is busy")
+            is Incoming.Busy -> {
+                val why = if (m.owner == "desk") "Auren is busy at the desk" else "Auren is busy"
+                if (_conversation.value && m.id.isNotEmpty() && m.id == lastListen) endConversation(why)
+                else _notices.tryEmit(why)
+            }
             is Incoming.Error -> {
                 // A PC too old to know forget or setting answers with an error: nothing stays pending.
                 if (m.id == forgetId) forgetId = null
                 settingIds.remove(m.id)?.let { name ->
                     if (name !in settingIds.values) _pendingSettings.value = _pendingSettings.value - name
                 }
-                _notices.tryEmit(m.error)
+                if (_conversation.value && m.id.isNotEmpty() && m.id == lastListen) endConversation(m.error)
+                else _notices.tryEmit(m.error)
             }
             is Incoming.Revoked, is Incoming.Pong -> Unit
         }
@@ -436,6 +492,14 @@ object Remote {
             s.state in setOf("thinking", "working")) {
             voiceTurn = null
             addLine(Line(voice, Who.YOU, s.transcript, waiting = true))
+        }
+        if (_conversation.value) {
+            // Backups for the turn's end message: the PC's own word that the listen heard nothing, or failed.
+            if (voiceTurn != null && heardNothing(before, s)) endConversation("you went quiet")
+            else if (s.state == "error" && before.state != "error" &&
+                (_talk.value != null || voiceTurn != null || _lines.value.any { it.waiting })) {
+                endConversation(s.detail.ifBlank { "Auren hit an error" }.take(80))
+            }
         }
         val talk = _talk.value ?: return
         if (s.state == "listening" && s.origin == "phone") {
@@ -472,6 +536,7 @@ object Remote {
     }
 
     fun cancel() {
+        endConversation(null)
         stopMic()
         speaker.stop()
         if (!send(Outgoing.cancel())) _notices.tryEmit("Not connected to the PC")
@@ -500,8 +565,72 @@ object Remote {
         }
         mic = m
         voiceTurn = id
+        lastListen = id
         _talk.value = Talk(id, handsFree)
         return true
+    }
+
+    /**
+     * Hands-free (Home, the tile): a live conversation. It listens now, and after each reply (once this phone
+     * has read it aloud, and the PC is idle) it listens again by itself, until [stopConversation], Stop, a
+     * listen that hears nothing, a busy PC, an error or the link going. The caller has RECORD_AUDIO.
+     */
+    fun startConversation(): Boolean {
+        if (_conversation.value) return false
+        if (!talkStart(handsFree = true)) return false
+        _conversation.value = true
+        return true
+    }
+
+    /** Hands-free tapped again: the conversation ends, and a listen still open is dropped, not sent. */
+    fun stopConversation() {
+        endConversation(null)
+        if (_talk.value == null) return
+        stopMic()
+        send(Outgoing.cancel())
+    }
+
+    /** Stop with nothing running on the PC: just stop reading aloud, and end the conversation. */
+    fun hush() {
+        endConversation(null)
+        speaker.stop()
+    }
+
+    /** Conversation mode goes off; [why] (when it went off by itself) is shown as "Hands-free off: why". */
+    private fun endConversation(why: String?) {
+        if (!_conversation.value) return
+        _conversation.value = false
+        conversationOffAt = System.currentTimeMillis()
+        if (why != null) _notices.tryEmit("Hands-free off: $why")
+    }
+
+    private fun nextListen() = listenNext(Between(
+        on = _conversation.value,
+        connected = connected,
+        talkOpen = _talk.value != null,
+        replyPending = voiceTurn != null || _lines.value.any { it.waiting },
+        speaking = speaker.speaking.value,
+        speechDue = _speechDue.value,
+        state = _state.value,
+    ))
+
+    /**
+     * The speaker was just given a reply: until it has read it, the next listen waits. Android's own voice
+     * starts a moment later, so this waits for the start too, but not forever (a voice that never starts).
+     */
+    private fun expectSpeech() {
+        speechWatch?.cancel()
+        _speechDue.value = true
+        speechWatch = scope.launch {
+            if (withTimeoutOrNull(SPEECH_START_MS) { speaker.speaking.first { it } } != null) speaker.speaking.first { !it }
+            _speechDue.value = false
+        }
+    }
+
+    private fun clearSpeech() {
+        speechWatch?.cancel()
+        speechWatch = null
+        _speechDue.value = false
     }
 
     /** Release: send what was said. */
@@ -522,6 +651,26 @@ object Remote {
 
     private fun addLine(line: Line) {
         _lines.value = (_lines.value.filterNot { it.id == line.id } + line).takeLast(60)
+    }
+
+    /**
+     * The PC started a fresh conversation: so does the chat here, empty like a new one. A turn still waiting is
+     * dropped (the PC's forget waits for it, and a fresh start means the user is done with it): its reply isn't
+     * shown or read when it comes, and an ask not acked yet isn't sent again. Reading aloud stops. A listen
+     * still open stays: its words are the new conversation's first turn.
+     */
+    private fun freshStart() {
+        val talking = _talk.value != null
+        val drop = _lines.value.filter { it.waiting }.map { it.id } + listOfNotNull(voiceTurn.takeIf { !talking })
+        drop.forEach {
+            pending.remove(it)
+            dropped.add(it)
+        }
+        while (dropped.size > 32) dropped.remove(dropped.first())
+        if (!talking) voiceTurn = null
+        _lines.value = emptyList()
+        clearSpeech()
+        speaker.stop()
     }
 
     private fun done(id: String) {
@@ -664,8 +813,12 @@ object Remote {
         ws = null
         host = null
         connected = false
+        endConversation(null)
         stopMic()
         speaker.stop()
+        clearSpeech()
+        dropped.clear()
+        lastListen = null
         _pendingVoice.value = null
         voiceSetId = null
         clearBrainRequests()
@@ -799,6 +952,7 @@ object Remote {
     private const val REFUSED = "refused"
     private const val PIN = "tls"
     private const val GRACE_MS = 4_000L                // a quick app switch keeps the link
+    private const val SPEECH_START_MS = 8_000L        // Android's voice starting up; Phonon starts at once
     private const val STALE_MS = 2 * 60_000L          // an ask older than this isn't resent: it would surprise
     private val QUIET = setOf("not listening", "cancelled", "nothing is waiting for an answer", "in progress")
 }
