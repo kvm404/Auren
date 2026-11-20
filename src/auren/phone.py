@@ -50,6 +50,8 @@ CERT = PHONE_DIR / "cert.pem"
 KEY = PHONE_DIR / "key.pem"
 STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, why not, and who's connected
 PAIR_QR = RUNTIME_DIR / "phone-pair.png"    # auren phone pair --json's QR code, for the bar panel (gone after)
+APP_QR = RUNTIME_DIR / "phone-app.png"      # auren phone app --json's QR code: where to download the app
+RELEASES = "https://github.com/kvm404/Auren/releases"
 TAILSCALE_SEEN = PHONE_DIR / "tailscale.json"   # this PC's Tailscale address, from when Tailscale was last up
 PAIR_TTL = 300                      # seconds a pairing code works
 PAIR_TRIES = 5                      # wrong codes before the pairing is dropped
@@ -572,6 +574,40 @@ def tailscale_off(st: dict) -> str:
             " connects here.")
 
 
+def app_link(version: str | None = None) -> tuple[str, str]:
+    """Where to download the phone app that goes with this Auren: (url, version). A release (X.Y.Z) has it
+    attached as auren-phone-X.Y.Z.apk, so the link downloads it straight away; a build that isn't one (a
+    checkout, a dev version) gets the newest release's page instead. ("" for the version then.)"""
+    if version is None:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as installed
+        try:
+            version = installed("auren")
+        except PackageNotFoundError:
+            version = ""
+    if re.fullmatch(r"\d+\.\d+\.\d+", version or ""):
+        return f"{RELEASES}/download/v{version}/auren-phone-{version}.apk", version
+    return f"{RELEASES}/latest", ""
+
+
+def _app(as_json: bool) -> int:
+    """auren phone app: a QR code to download the app on the phone (the panel's Get the app)."""
+    url, version = app_link()
+    if not as_json:
+        print("Scan this with your phone's camera to download the Auren app" + (f" {version}" if version else "") + ":")
+        print(_qr(url))
+        print(url)
+        print("Open the download, and allow installing from your browser when Android asks. Then pair: auren phone pair")
+        return 0
+    import segno
+    APP_QR.parent.mkdir(parents=True, exist_ok=True)
+    tmp = APP_QR.with_name(f".{APP_QR.name}.{os.getpid()}.tmp")
+    segno.make(url, error="m").save(str(tmp), kind="png", scale=10, border=2, dark="#000", light="#fff")
+    os.replace(tmp, APP_QR)
+    print(json.dumps({"url": url, "qr": str(APP_QR), "version": version}))
+    return 0
+
+
 def _qr(text: str) -> str:
     import io
 
@@ -654,10 +690,14 @@ def main(argv: list[str] | None = None) -> int:
     dv.add_argument("--json", action="store_true", help="as JSON")
     r = sub.add_parser("revoke", help="unpair a phone (its id from auren phone devices)")
     r.add_argument("id")
+    g = sub.add_parser("app", help="a QR code to download the phone app (scan it with the phone's camera)")
+    g.add_argument("--json", action="store_true", help="for the bar panel: the link and a PNG of its QR code")
     a = ap.parse_args(argv)
     if sys.platform == "darwin":
         print(MAC_LATER, file=sys.stderr)
         return 2
+    if a.cmd == "app":
+        return _app(a.json)
 
     if a.cmd == "devices":
         found = devices()

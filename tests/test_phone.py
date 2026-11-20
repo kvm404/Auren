@@ -26,6 +26,7 @@ def phone_dir(tmp_path, monkeypatch):
     for name, value in {"PHONE_DIR": d, "DEVICES": d / "devices.json", "PAIRING": d / "pairing.json",
                         "INBOX": d / "inbox.jsonl", "FILES": d / "files", "STATUS": tmp_path / "phone.json",
                         "CERT": d / "cert.pem", "KEY": d / "key.pem", "PAIR_QR": tmp_path / "phone-pair.png",
+                        "APP_QR": tmp_path / "phone-app.png",
                         "TAILSCALE_SEEN": d / "tailscale.json"}.items():
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
@@ -1607,3 +1608,17 @@ def test_a_hello_gives_the_phone_the_remembered_tailscale_address(server):
     hub.addrs, hub.fp = [{"ip": "192.168.1.20", "via": "lan"}], "ab" * 32
     addrs = client.get("/v1/hello").json()["addrs"]
     assert [a["ip"] for a in addrs] == ["192.168.1.20", "100.92.1.2"] and addrs[1]["later"] is True
+
+
+def test_get_the_app_links_to_this_versions_apk(monkeypatch, capsys):
+    """The panel's Get the app: a QR code the phone's camera opens, downloading the app of this release."""
+    url, v = phone.app_link("0.1.7")
+    assert url == "https://github.com/kvm404/Auren/releases/download/v0.1.7/auren-phone-0.1.7.apk" and v == "0.1.7"
+    for dev in ("0.1.7.dev3", "", "0.2.0rc1"):                       # no APK of its own: the newest release
+        assert phone.app_link(dev) == ("https://github.com/kvm404/Auren/releases/latest", "")
+    monkeypatch.setattr(phone, "app_link", lambda: ("https://example.org/auren-phone-9.9.9.apk", "9.9.9"))
+    assert phone.main(["app", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"url": "https://example.org/auren-phone-9.9.9.apk", "qr": str(phone.APP_QR), "version": "9.9.9"}
+    assert phone.APP_QR.read_bytes().startswith(b"\x89PNG")
+    assert phone.main(["app"]) == 0 and "auren-phone-9.9.9.apk" in capsys.readouterr().out

@@ -55,7 +55,9 @@ ShellRoot {
       if (kind === "failed") p.upd = { state: "failed", installed: installed,
         message: "install.sh failed (exit 3): see ~/.local/state/auren/update.log. Auren is back on 54ebe81." }
       var run = Quickshell.env("XDG_RUNTIME_DIR") + "/auren"
-      p.pairStage = ""; p.pairing = ({})
+      p.pairStage = ""; p.pairing = ({}); p.appShown = false
+      if (kind === "app") { p.appLink = { qr: run + "/phone-app.png", version: "0.1.7",
+        url: "https://github.com/kvm404/Auren/releases/download/v0.1.7/auren-phone-0.1.7.apk" }; p.appShown = true }
       if (kind === "pairing") { p.pairStage = "showing"; p.pairing = { qr: run + "/phone-pair.png", expires: now + 263,
         where: [{ ip: "100.101.102.103", via: "tailscale" }, { ip: "192.168.1.20", via: "lan" }], warn: "" } }
       if (kind === "tsoff") p.phoneSt = { on: true, port: 8735, addrs: [{ ip: "192.168.1.20", via: "lan", ok: true }],

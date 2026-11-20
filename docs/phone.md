@@ -25,8 +25,10 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
    sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
    ```
-3. Install the app: download `auren-phone-X.Y.Z.apk` from the
-   [latest release](https://github.com/kvm404/Auren/releases/latest) on the phone and open it (Android asks
+3. Install the app: on the bar panel's **Phone** page, click **Get the app** and scan the QR code with the
+   phone's camera (or run `auren phone app` in a terminal). It downloads `auren-phone-X.Y.Z.apk` for the
+   Auren you have, from its GitHub release; a build that isn't a release links to the
+   [latest release](https://github.com/kvm404/Auren/releases/latest) instead. Open the download (Android asks
    you to allow installing from your browser once). A newer release's APK installs over it, keeping the
    pairing. To build it yourself: `cd android && ./gradlew installDebug` (a debug build can't update a
    release one: uninstall that first), with `android/native/build-phonon.sh` first for the phone's own voice.
@@ -46,6 +48,7 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
 | Command | Does |
 |---|---|
 | `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn}` (`qr` a PNG, deleted after), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
+| `auren phone app [--json]` | A QR code to download the app for this version (`--json`, the bar panel: `{url, qr, version}`, `qr` a PNG) |
 | `auren phone devices [--json]` | The paired phones: id, name, when paired, last seen |
 | `auren phone revoke <id>` | Unpair one. Its token stops working at once and its open connection is closed |
 

@@ -11,7 +11,7 @@
   files it sends with the new `send_to_phone` tool; share from any app to Auren, the PC's clipboard or
   the PC's browser; start a fresh conversation (which clears the phone's chat), pick who answers (Auto, Claude, Codex)
   and the effort; a Quick Settings tile.
-  Pair, see and unpair phones on the bar panel's new Phone page, or with `auren phone pair` (a QR code),
+  Get the app (a QR code to its download), pair, see and unpair phones on the bar panel's new Phone page, or with `auren phone pair` (a QR code),
   `auren phone devices` and `auren phone revoke`. One turn at a time across the desk and the
   phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same
   Phonon voices. The server listens only on the Tailscale address and private LAN addresses, over TLS

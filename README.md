@@ -117,9 +117,10 @@ If something doesn't work, run `auren doctor`.
 The Auren app for Android talks to the Auren on your PC. Your phone is the microphone and the screen;
 the PC does the work, with the same brain, tools and safety level as at the desk.
 
-1. Download `auren-phone-X.Y.Z.apk` from the [latest release](https://github.com/kvm404/Auren/releases/latest)
-   on your phone and open it. Android asks once to allow installs from your browser.
-2. On the PC, open the bar panel's **Phone** page and click **Pair a phone**.
+1. On the PC, open the bar panel's **Phone** page, click **Get the app** and scan the QR code with your
+   phone's camera. Open the download. Android asks once to allow installs from your browser. (Or get
+   `auren-phone-X.Y.Z.apk` from the [latest release](https://github.com/kvm404/Auren/releases/latest).)
+2. On the same page, click **Pair a phone**.
 3. In the app, tap **Pair** and scan the QR code.
 
 The phone reaches the PC on the same Wi-Fi. To use it away from home, install

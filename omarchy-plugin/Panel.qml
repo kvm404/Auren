@@ -221,7 +221,7 @@ Panel {
     }
   }
   onOpenedChanged: {
-    if (!opened) { confirmingUpdate = false; unpairAsk = ""; cancelPairing(); return }
+    if (!opened) { confirmingUpdate = false; unpairAsk = ""; appShown = false; cancelPairing(); return }
     historyProc.running = false; historyProc.running = true
     cursorActive = false
     now = Date.now() / 1000
@@ -311,6 +311,7 @@ Panel {
   }
   function startPairing() {
     if (pairProc.running) return
+    appShown = false
     pairing = ({}); pairNote = ""; pairStage = "starting"
     pairProc.running = true
   }
@@ -323,7 +324,30 @@ Panel {
   readonly property var pairActions: pairProc.running || pairStage === "starting" || pairStage === "showing"
     ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }]
     : [{ label: root.phones.length ? "Pair another phone" : "Pair a phone", icon: "󰄜",
-         tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing }]
+         tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing },
+       { label: root.appShown ? "Hide the app code" : "Get the app", icon: "󰀲",
+         tip: "A QR code to download the Auren app: scan it with the phone's camera", run: root.toggleApp }]
+
+  // Get the app: auren phone app --json gives the download link (this version's APK on its GitHub release)
+  // and a PNG of its QR code, for a phone without the app yet.
+  property var appLink: ({})          // { url, qr, version }
+  property bool appShown: false
+  Process {
+    id: appProc
+    command: [root.aurenBin, "phone", "app", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.appLink = JSON.parse(String(text || "").trim()) } catch (e) { root.appLink = ({}) }
+        root.appShown = !!root.appLink.qr
+      }
+    }
+  }
+  function toggleApp() {
+    if (appShown) { appShown = false; return }
+    if (appLink.qr) { appShown = true; return }
+    appProc.running = true
+  }
 
   // Unpair asks once more (the phone has to pair again), then runs auren phone revoke.
   property string unpairAsk: ""
@@ -1580,6 +1604,49 @@ Panel {
                 }
               }
             }
+            Row {         // Get the app: the download's QR code, for the phone's camera
+              width: parent.width
+              spacing: Style.space(14)
+              visible: root.appShown && !!root.appLink.qr
+              Rectangle {
+                id: appQrBox
+                width: Style.space(176)
+                height: width
+                radius: Style.cornerRadius
+                color: "white"
+                Image {
+                  anchors.fill: parent
+                  anchors.margins: Style.space(4)
+                  source: root.appLink.qr ? "file://" + root.appLink.qr : ""
+                  cache: false
+                  smooth: false
+                  fillMode: Image.PreserveAspectFit
+                }
+              }
+              Column {
+                width: parent.width - appQrBox.width - parent.spacing
+                spacing: Style.space(6)
+                Text {
+                  width: parent.width
+                  text: "Scan it with your phone's camera."
+                  color: root.fg
+                  font.family: root.font
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  wrapMode: Text.Wrap
+                }
+                Caption {
+                  text: (root.appLink.version ? "It downloads the Auren app " + root.appLink.version + " for Android."
+                                              : "It opens Auren's latest release: download the auren-phone APK there.")
+                        + " Open the download and allow installing from your browser when Android asks. Then pair it here."
+                }
+                Caption {
+                  text: root.appLink.url || ""
+                  elide: Text.ElideMiddle
+                  wrapMode: Text.NoWrap
+                }
+              }
+            }
             Text {
               width: parent.width
               visible: root.pairNote !== "" && root.pairStage !== "showing" && root.pairStage !== "starting"
@@ -1597,7 +1664,7 @@ Panel {
             }
             Caption {
               visible: root.phones.length === 0
-              text: "None yet. Install the Auren app on your phone, then pair it here."
+              text: "None yet. Get the app on your phone (scan its code with the camera), then pair it here."
             }
             Repeater {
               model: root.phones
