@@ -98,3 +98,54 @@ jobs:
           java-version: "17"
           cache: gradle
       - run: ./gradlew --no-daemon assembleDebug testDebugUnitTest
+
+  # The full phone app, to try a PR on a real phone: Phonon's library (Auren's own voice), signed with the
+  # release key, so the real release later installs over it. A download on the run (auren-phone-test),
+  # kept 14 days. Only for PRs from this repository: a fork's PR gets no secrets (and no key).
+  android-apk:
+    needs: android
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/cache@v4      # the same cache the release workflow uses
+        with:
+          path: |
+            ~/.cache/auren-build
+            ~/.cargo/bin/cargo-ndk
+          key: phonon-${{ hashFiles('android/native/build-phonon.sh') }}
+      - name: Build Phonon's library
+        run: android/native/build-phonon.sh
+      - name: The release key
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: |
+          [ -n "$ANDROID_KEYSTORE" ] || { echo "The ANDROID_KEYSTORE secret isn't set: see docs/releases.md"; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE" | base64 -d >"$RUNNER_TEMP/release.jks"
+      - name: Build the app
+        working-directory: android
+        env:
+          AUREN_KEYSTORE: ${{ runner.temp }}/release.jks
+          AUREN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          AUREN_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          AUREN_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Check it
+        run: |
+          rm -f "$RUNNER_TEMP/release.jks"
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libptts_ffi.so' || { echo "the APK has no Phonon library"; exit 1; }
+          "$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)" verify --print-certs "$apk"
+          mkdir out && cp "$apk" out/auren-phone-test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auren-phone-test
+          path: out/auren-phone-test.apk
+          retention-days: 14
