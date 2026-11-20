@@ -940,33 +940,30 @@ def test_the_daemon_restarts_once_it_is_idle_for_a_new_grant(monkeypatch, tmp_pa
     assert next(d.quiets, "none") == "none"                               # all five checks were needed
 
 
-def test_a_start_without_accessibility_watches_for_it_even_with_the_window_closed(monkeypatch):
-    """macOS shows its own Accessibility prompt when the daemon starts without it: a grant made there is
-    noticed (and restarted for) without the setup window; Screen Recording left off doesn't keep it going."""
+def test_the_keys_waiter_restarts_for_accessibility_the_daemon_still_sees_as_off(monkeypatch):
+    """After a reset, the daemon can keep seeing Accessibility as off once it's allowed again (in macOS's own
+    prompt, with the setup window closed): the waiter asks a new process every 10 s and restarts for it."""
     import asyncio
 
     from auren import daemon
-    src = (ROOT / "src/auren/daemon.py").read_text()
-    assert 'self._watch_grants(names=("accessibility",))' in src
-    checks = iter([{"accessibility": False, "waiting": []}, {"accessibility": True, "screen": False,
-                                                            "waiting": ["accessibility"]}])
+    from auren.mac import permissions
+    monkeypatch.setattr(permissions, "accessibility", lambda: False)
+    asked = []
+    monkeypatch.setattr(permissions, "fresh", lambda: asked.append(1) or {"accessibility": len(asked) > 1})
     planned = []
 
     class D:
-        _watch_grants = daemon.Daemon._watch_grants
-
-        def _grants(self):
-            return type("G", (), {"check": lambda _self: next(checks)})()
+        _keys_once_allowed = daemon.Daemon._keys_once_allowed
+        _hotkeys = None
 
         def _plan_restart(self, waiting):
             planned.append(list(waiting))
+            self._hotkeys = "restarting"       # stands in for the restart: the waiter is done
 
     async def go():
-        d = D()
-        d._watch_grants(every=0.0, names=("accessibility",))
-        await asyncio.wait_for(d._grant_watch, 5)
+        await asyncio.wait_for(D()._keys_once_allowed(every=0.0), 5)
     asyncio.run(go())
-    assert planned == [[], ["accessibility"]]
+    assert len(asked) == 2 and planned == [["accessibility"]]     # every fifth round: the 5th and the 10th
 
 
 def test_a_restart_that_didnt_help_is_not_tried_again(monkeypatch, tmp_path):
@@ -1135,15 +1132,16 @@ def test_a_tap_slowed_down_after_accessibility_was_taken_away_stays_off(monkeypa
     q, enabled = _fake_quartz(monkeypatch)
     lost = []
     allowed = [True]
-    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, on_lost=lambda: lost.append(1),
+    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, on_lost=lost.append,
                           trusted=lambda: allowed[0], clock=lambda: 0.0)
-    monkeypatch.setattr(hotkey.threading, "Thread", lambda target, daemon: types.SimpleNamespace(start=target))
+    monkeypatch.setattr(hotkey.threading, "Thread",
+                        lambda target, args, daemon: types.SimpleNamespace(start=lambda: target(*args)))
     assert keys._callback(None, q.kCGEventTapDisabledByUserInput, "e", None) == "e" and enabled == [True]
     assert keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None) == "e" and enabled == [True, True]
     allowed[0] = False
     keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
     keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
-    assert enabled == [True, True] and lost == [1] and keys.lost
+    assert enabled == [True, True] and lost == [keys] and keys.lost
 
 
 def test_a_tap_macos_keeps_stopping_stays_off(monkeypatch):
@@ -1164,6 +1162,7 @@ def test_a_tap_macos_keeps_stopping_stays_off(monkeypatch):
 class _KeysDaemon:
     from auren.daemon import Daemon
     _keys_lost = Daemon._keys_lost
+    _drop_keys = Daemon._drop_keys
     _keys_watchdog = Daemon._keys_watchdog
 
     def __init__(self, keys):
@@ -1173,21 +1172,25 @@ class _KeysDaemon:
     async def _keys_once_allowed(self):
         self.calls.append("wait")
 
-    def _watch_grants(self, names=None):
-        self.calls.append(("watch", names))
-
 
 def test_the_daemon_drops_lost_talk_keys_and_waits_for_accessibility_again():
     import asyncio
     stopped = []
 
     async def go():
-        d = _KeysDaemon(types.SimpleNamespace(stop=lambda: stopped.append(1)))
-        d._keys_lost()
-        await asyncio.sleep(0)
+        old = types.SimpleNamespace(stop=lambda: stopped.append("old"))
+        new = types.SimpleNamespace(stop=lambda: stopped.append("new"))
+        d = _KeysDaemon(new)
+        await d._drop_keys(old)                # a late report about a tap a reload already replaced
+        assert d._hotkeys is new and stopped == [] and d.calls == []
+        d._keys_lost(new)
+        for _ in range(200):
+            if d._hotkeys is None and d.calls:
+                break
+            await asyncio.sleep(0.01)
         return d
     d = asyncio.run(go())
-    assert stopped == [1] and d._hotkeys is None and d.calls == [("watch", ("accessibility",)), "wait"]
+    assert stopped == ["new"] and d._hotkeys is None and d.calls == ["wait"]
 
 
 def test_the_watchdog_drops_the_keys_only_when_a_new_process_agrees_accessibility_is_gone(monkeypatch):

@@ -67,7 +67,7 @@ def _trusted() -> bool:
 
 class Hotkeys:
     def __init__(self, bindings: dict[str, str], on_press: Callable[[str], None],
-                 on_lost: Callable[[], None] | None = None, trusted: Callable[[], bool] = _trusted,
+                 on_lost: Callable[[Hotkeys], None] | None = None, trusted: Callable[[], bool] = _trusted,
                  clock: Callable[[], float] = time.monotonic):
         self.keys = {parse(combo): command for command, combo in bindings.items()}
         self.on_press = on_press
@@ -112,7 +112,7 @@ class Hotkeys:
             self.lost = True
             log.warning("the talk keys are off: Accessibility was taken away, or macOS keeps stopping them")
             if self.on_lost:
-                threading.Thread(target=self.on_lost, daemon=True).start()
+                threading.Thread(target=self.on_lost, args=(self,), daemon=True).start()
         return True
 
     def _fire(self, command: str) -> None:
@@ -149,8 +149,8 @@ class Hotkeys:
 
 
 def start(bindings: dict[str, str], on_press: Callable[[str], None],
-          on_lost: Callable[[], None] | None = None) -> Hotkeys | None:
-    """Listen for the talk keys on a thread of its own. None if macOS didn't allow the tap. on_lost: called
+          on_lost: Callable[[Hotkeys], None] | None = None) -> Hotkeys | None:
+    """Listen for the talk keys on a thread of its own. None if macOS didn't allow the tap. on_lost(keys): called
     (on another thread) if the tap had to be left off for good."""
     try:
         keys = Hotkeys(bindings, on_press, on_lost)

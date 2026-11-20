@@ -987,23 +987,30 @@ class Daemon:
             self._hotkeys = hotkey.start({"talk": self.settings["keys.talk"],
                                           "talk-fresh": self.settings["keys.talk_fresh"]},
                                          lambda command: send(command, timeout=10),
-                                         on_lost=lambda: self.loop.call_soon_threadsafe(self._keys_lost))
+                                         on_lost=lambda keys: self.loop.call_soon_threadsafe(self._keys_lost, keys))
 
-    def _keys_lost(self) -> None:
-        """macOS: Accessibility was taken away while the talk keys were on (tccutil reset, or turned off in
-        System Settings). A tap left in place would make every key press wait on it: drop it, and wait for
-        Accessibility again as at a start without it."""
-        def drop():
+    def _keys_lost(self, keys) -> None:
+        """macOS, on the loop thread: the tap `keys` had to stay off (Accessibility taken away by tccutil reset
+        or in System Settings, or macOS kept stopping it)."""
+        asyncio.create_task(self._drop_keys(keys))
+
+    async def _drop_keys(self, keys) -> None:
+        """Drop the tap `keys`, if it's still the current one (a reload may have put a new one in its place),
+        and wait for Accessibility again as at a start without it. A tap left in place would make every key
+        press wait on it. The lock can be held for seconds (a tap starting): never on the loop thread."""
+        def drop() -> bool:
             with self._keys_lock:
-                if getattr(self, "_hotkeys", None):
-                    self._hotkeys.stop()
+                if keys is None or getattr(self, "_hotkeys", None) is not keys:
+                    return False
+                keys.stop()
                 self._hotkeys = None
-        drop()
+                return True
+        if not await asyncio.get_running_loop().run_in_executor(None, drop):
+            return
         log.warning("Accessibility is off: the talk keys stop until it's allowed again")
         task = getattr(self, "_keys_task", None)
         if not task or task.done():
             self._keys_task = asyncio.create_task(self._keys_once_allowed())
-        self._watch_grants(names=("accessibility",))
 
     async def _keys_watchdog(self, every: float = 5.0) -> None:
         """macOS: notice Accessibility taken away while the talk keys are on, before the tap slows the
@@ -1012,11 +1019,12 @@ class Daemon:
         loop = asyncio.get_running_loop()
         while True:
             await asyncio.sleep(every)
-            if not getattr(self, "_hotkeys", None) or await loop.run_in_executor(None, permissions.accessibility):
+            keys = getattr(self, "_hotkeys", None)
+            if not keys or await loop.run_in_executor(None, permissions.accessibility):
                 continue
             fresh = await loop.run_in_executor(None, permissions.fresh)
-            if fresh.get("accessibility") is False and getattr(self, "_hotkeys", None):
-                self._keys_lost()
+            if fresh.get("accessibility") is False:
+                await self._drop_keys(keys)
 
     async def _keys_once_allowed(self, every: float = 2.0) -> None:
         """macOS: the talk keys couldn't start (Accessibility not allowed yet). Wait for the user to allow it,
@@ -1026,14 +1034,22 @@ class Daemon:
         loop = asyncio.get_running_loop()
         self._keys_wake = asyncio.Event()
         self._keys_failed = False
-        failed = 0
+        failed = rounds = 0
         while not getattr(self, "_hotkeys", None):
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._keys_wake.wait(), every)
             self._keys_wake.clear()
             if getattr(self, "_hotkeys", None):          # a reload started them meanwhile
                 return
-            if await loop.run_in_executor(None, permissions.accessibility):
+            if not await loop.run_in_executor(None, permissions.accessibility):
+                # This process can keep saying no after Accessibility was allowed again (after a reset): ask a
+                # new one now and then (every 10 s for ten minutes, then every minute), and restart for it.
+                rounds += 1
+                if rounds % (5 if rounds <= 300 else 30) == 0:
+                    fresh = await loop.run_in_executor(None, permissions.fresh)
+                    if fresh.get("accessibility") is True and not getattr(self, "_hotkeys", None):
+                        self._plan_restart(["accessibility"])
+            else:
                 await loop.run_in_executor(None, self._listen_for_keys)
                 if self._hotkeys:
                     log.info("Accessibility was allowed: the talk keys are on")
@@ -1115,10 +1131,10 @@ class Daemon:
         self.exit_code = RESTART_EXIT
         self.loop.stop()
 
-    def _watch_grants(self, every: float = 3.0, for_s: float = 600, names: tuple[str, ...] | None = None) -> None:
-        """After an Allow (or a start without Accessibility, whose prompt macOS shows by itself): check for a
-        while even with the setup window closed, so a grant made in System Settings or macOS's prompt is
-        noticed by itself. names: what to wait for (all of permissions.LATER by default)."""
+    def _watch_grants(self, every: float = 3.0, for_s: float = 600) -> None:
+        """After an Allow: check for a while even with the setup window closed, so a grant made in System
+        Settings is noticed by itself. (The talk keys' waiter does that for Accessibility for as long as
+        the keys are off: macOS shows its own prompt when Auren starts without it.)"""
         old = getattr(self, "_grant_watch", None)
         if old and not old.done():
             return
@@ -1131,7 +1147,7 @@ class Daemon:
                 await asyncio.sleep(every)
                 now = await loop.run_in_executor(None, self._grants().check)
                 self._plan_restart(now.get("waiting", []))
-                if all(permissions.allowed(n, now.get(n)) for n in names or permissions.LATER) or getattr(
+                if all(permissions.allowed(n, now.get(n)) for n in permissions.LATER) or getattr(
                         self, "_restart_task", None):
                     return
         self._grant_watch = asyncio.create_task(watch())
@@ -1165,7 +1181,6 @@ class Daemon:
             self._listen_for_keys()
             if not self._hotkeys:
                 self._keys_task = asyncio.create_task(self._keys_once_allowed())
-                self._watch_grants(names=("accessibility",))
             asyncio.create_task(self._keys_watchdog())
         async with server:
             await server.serve_forever()
