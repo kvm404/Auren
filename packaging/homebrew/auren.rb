@@ -10,7 +10,7 @@
 class Auren < Formula
   desc "Voice assistant: say what you want, and it uses your Mac"
   homepage "https://github.com/kvm404/Auren"
-  url "https://github.com/kvm404/Auren/archive/refs/tags/v0.1.7.tar.gz"
+  url "https://github.com/kvm404/Auren/archive/refs/tags/v0.1.8.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
