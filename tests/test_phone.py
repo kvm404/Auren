@@ -1459,3 +1459,58 @@ def test_phone_pair_refuses_a_dead_daemons_status(monkeypatch, capsys):
     assert phone.main(["pair", "--no-wait", "--no-qr"]) == 1
     out = capsys.readouterr()
     assert "auren://" not in out.out and "daemon isn't running" in out.err and not phone.pairing_open()
+
+
+def test_a_phone_starts_a_fresh_conversation_and_sets_the_brain(server):
+    """The bar panel's Fresh, Who answers and Effort, from the phone: the same daemon commands."""
+    client, d, _ = server
+    _, token = _paired()
+    sent, forgot = [], []
+
+    async def command(line):
+        sent.append(line)
+        name, value = line.split(" ", 1)
+        return line if value != "nope" else f"usage: {name} …"
+
+    async def forget(say=True, turn=None):
+        forgot.append(say)
+
+    d.command, d.forget = command, forget
+    with client.websocket_connect("/v1/ws", headers=_auth(token)) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "forget", "id": "f1"})
+        assert ws.receive_json() == {"type": "ack", "id": "f1", "status": "ok"}
+        for i, (name, value) in enumerate([("brain", "codex"), ("effort", "high"), ("codex-effort", "minimal")]):
+            ws.send_json({"type": "setting", "id": f"s{i}", "name": name, "value": value})
+            assert ws.receive_json() == {"type": "ack", "id": f"s{i}", "status": "ok"}
+        ws.send_json({"type": "setting", "id": "bad", "name": "effort", "value": "nope"})
+        assert ws.receive_json()["status"] == "error: usage: effort …"
+        # Not safety (a lost phone can't turn off the questions), nor any other command, nor a second word.
+        for i, (name, value) in enumerate([("safety", "never"), ("quit", "now"), ("brain", "codex; quit"), ("brain", "")]):
+            ws.send_json({"type": "setting", "id": f"x{i}", "name": name, "value": value})
+            assert ws.receive_json()["status"].startswith("error: can't set")
+    assert forgot == [False]
+    assert sent == ["brain codex", "effort high", "codex-effort minimal", "effort nope"]
+
+
+def test_the_state_the_phone_gets_has_the_brain_settings():
+    phone_server.STATE_FILE.write_text(json.dumps({"state": "idle", "mode": "auto", "brain": "claude", "effort": "low",
+                                                   "codexEffort": "low", "codexModel": "gpt-6-luna", "pid": 1}))
+    snap = phone_server.Hub(_Daemon()).snapshot()
+    assert {k: snap[k] for k in ("mode", "brain", "effort", "codexEffort", "codexModel")} == {
+        "mode": "auto", "brain": "claude", "effort": "low", "codexEffort": "low", "codexModel": "gpt-6-luna"}
+    assert "pid" not in snap
+
+
+def test_the_status_lists_the_phones_connected_now(server):
+    """The bar panel shows which phone is connected, and over which path."""
+    client, _, _ = server
+    dev, token = _paired("Pixel")
+    phone_server._write_status(True, 8735, [{"ip": "192.168.1.5", "via": "lan", "ok": True}], "fp")
+    assert phone.status()["connected"] == []
+    with client.websocket_connect("/v1/ws", headers=_auth(token)) as ws:
+        ws.receive_json()
+        assert phone.status()["connected"] == [{"id": dev["id"], "name": "Pixel", "via": "lan"}]
+    assert phone.status()["connected"] == []
+    phone_server._write_status(False, 8735, why="the phone server stopped")
+    assert phone.status()["connected"] == []

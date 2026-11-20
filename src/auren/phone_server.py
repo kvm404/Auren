@@ -60,7 +60,11 @@ SEEN = 500                  # request ids remembered, so a resent request doesn'
 REPLY_TTL = 600             # seconds a reply is kept for a phone that lost its connection before it came
 REPLIES = 200
 STATE_FIELDS = ("state", "detail", "since", "brain", "safety", "voice", "voiceName", "origin", "awaiting", "question", "until",
-                "ask", "transcript", "reply", "silent", "tool", "remind", "fresh")
+                "ask", "transcript", "reply", "silent", "tool", "remind", "fresh",
+                "mode", "effort", "codexEffort", "codexModel")      # the brain settings the app shows and sets
+# What the app may change, as auren-ctl commands (the bar panel's Brain page). Not safety: a lost phone mustn't be
+# able to turn off the questions Auren asks before risky actions.
+SETTINGS = ("brain", "effort", "codex-effort")
 
 
 class TooBig(Exception):
@@ -89,6 +93,8 @@ class Conn:
 
     def __init__(self, ws: WebSocket, device: dict):
         self.ws, self.device = ws, device
+        here = ((getattr(ws, "scope", None) or {}).get("server") or ("", 0))[0]    # the PC address it reached: its path
+        self.via = "tailscale" if phone.is_tailnet(str(here)) else "lan"
         self.out: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=1000)
         self.audio: asyncio.Queue | None = None      # the listen this phone feeds, if any
         self.close_code = 1000
@@ -268,6 +274,17 @@ class Hub:
                 status = "ok"
             except ValueError as e:
                 status = f"error: {e}"
+        elif kind == "forget":
+            # A fresh conversation, as the panel's Fresh: it waits for a turn that's running, then the state says so.
+            asyncio.create_task(d.forget(say=False))
+            status = "ok"
+        elif kind == "setting":
+            name, value = str(msg.get("name") or ""), str(msg.get("value") or "").strip()
+            if name not in SETTINGS or not value or " " in value:
+                status = f"error: can't set {name!r}"[:200]
+            else:
+                said = await d.command(f"{name} {value}")
+                status = "ok" if said == f"{name} {value}" else f"error: {said}"[:200]
         elif kind == "resume":
             ids = msg.get("ids")
             self.resume(conn, ids if isinstance(ids, list) else [])
@@ -543,6 +560,7 @@ def app(hub: Hub) -> Starlette:
         await ws.accept()
         conn = Conn(ws, dev)
         hub.conns.add(conn)
+        _set_connected(hub)
         await asyncio.to_thread(phone.seen, dev["id"])
         log.info("phone connected: %s (%s)", dev["name"], dev["id"])
         conn.send({"type": "hello", **where(), "device": dev, "inboxLast": phone.last_id(), "state": hub.snapshot()})
@@ -594,6 +612,7 @@ def app(hub: Hub) -> Starlette:
             pass
         finally:
             hub.conns.discard(conn)
+            _set_connected(hub)
             log.info("phone disconnected: %s", dev["id"])
             with contextlib.suppress(asyncio.QueueFull):
                 conn.out.put_nowait(None)
@@ -624,13 +643,36 @@ class _Server(uvicorn.Server):
         yield
 
 
+_status: dict = {}                  # what phone.json says now; "connected" changes as phones come and go
+
+
 def _write_status(on: bool, port: int = 0, addrs: list[dict] | None = None, fp: str = "", why: str = "",
                   missing: dict | None = None, idle: bool = False) -> None:
-    phone.STATUS.parent.mkdir(parents=True, exist_ok=True)
-    tmp = phone.STATUS.with_name(f".{phone.STATUS.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"on": on, "port": port, "addrs": addrs or [], "fp": fp, "why": why,
-                               "missing": missing or {}, "idle": idle, "pid": os.getpid(), "at": time.time()}))
-    tmp.replace(phone.STATUS)
+    _status.clear()
+    _status.update({"on": on, "port": port, "addrs": addrs or [], "fp": fp, "why": why, "missing": missing or {},
+                    "idle": idle, "connected": _status_connected if on else [], "pid": os.getpid()})
+    _save_status()
+
+
+_status_connected: list[dict] = []
+
+
+def _set_connected(hub: Hub) -> None:
+    """The phones with a socket open, for the bar panel ({"id", "name", "via"}): one row per phone."""
+    global _status_connected
+    rows = {c.device["id"]: {"id": c.device["id"], "name": c.device["name"], "via": c.via} for c in hub.conns}
+    _status_connected = sorted(rows.values(), key=lambda r: r["name"])
+    if _status.get("on"):
+        _status["connected"] = _status_connected
+        _save_status()
+
+
+def _save_status() -> None:
+    with contextlib.suppress(OSError):
+        phone.STATUS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = phone.STATUS.with_name(f".{phone.STATUS.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({**_status, "at": time.time()}))
+        tmp.replace(phone.STATUS)
 
 
 def wanted() -> bool:

@@ -3,6 +3,7 @@
     auren phone pair            # a QR code (and its text) for the app; the code works once, for 5 minutes
     auren phone devices         # the paired phones
     auren phone revoke <id>     # unpair one: its token stops working at once
+    (--json on pair and devices: for the bar panel, which shows the QR code from pair's SVG)
 
 Everything lives in STATE_DIR/phone (mode 700): devices.json and pairing.json (mode 600) hold only SHA-256
 hashes of the tokens and of the code, never the secrets themselves. The inbox (inbox.jsonl, files/) is what
@@ -47,7 +48,8 @@ INBOX = PHONE_DIR / "inbox.jsonl"
 FILES = PHONE_DIR / "files"
 CERT = PHONE_DIR / "cert.pem"
 KEY = PHONE_DIR / "key.pem"
-STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, and why not
+STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, why not, and who's connected
+PAIR_SVG = RUNTIME_DIR / "phone-pair.svg"   # auren phone pair --json's QR code, for the bar panel (gone after)
 PAIR_TTL = 300                      # seconds a pairing code works
 PAIR_TRIES = 5                      # wrong codes before the pairing is dropped
 MAX_FILE = 50 * 1024 * 1024         # biggest file send_to_phone sends
@@ -338,6 +340,13 @@ def tailscale_ip() -> tuple[str | None, str]:
     return None, "Tailscale is off or logged out" + (f" ({why[0][:80]})" if why else "") + ": tailscale up"
 
 
+def is_tailnet(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip) in TAILNET
+    except ValueError:
+        return False
+
+
 def is_lan(ip: str) -> bool:
     try:
         a = ipaddress.ip_address(ip)
@@ -516,6 +525,16 @@ def _ago(t: float) -> str:
         f"{int(s // 3600)} h ago" if s < 86400 else time.strftime("%Y-%m-%d", time.localtime(t))
 
 
+def tailscale_off(st: dict) -> str:
+    """Why pairing now leaves the phone without Tailscale, or "": installed here, but not up. A phone paired
+    then learns only this Wi-Fi's address, so it can't reach the PC away from it (pair again once it's up)."""
+    why = (st.get("missing") or {}).get("tailscale", "")
+    if not why or why.startswith("Tailscale isn't installed"):
+        return ""
+    return ("Tailscale is off on this PC, so the phone gets only this Wi-Fi's address and can't reach the PC from"
+            " elsewhere. For that, turn Tailscale on (tailscale up) and pair again.")
+
+
 def _qr(text: str) -> str:
     import io
 
@@ -525,13 +544,77 @@ def _qr(text: str) -> str:
     return buf.getvalue()
 
 
+def _open_pairing() -> tuple[dict, str, float] | str:
+    """Open a pairing and wait for the server: (its status, the code, when it expires), or why it can't."""
+    from .settings import current as settings
+    if settings()["phone.enabled"] is False:
+        return "The phone remote is turned off: auren config set phone.enabled auto"
+    # The server listens only while a phone is paired or a pairing is open: open one, then wait for the server.
+    opened = time.time()
+    code, expires = start_pairing()
+    st = _serving(opened)
+    if not (st.get("on") and listening(st) and _alive(st.get("pid"))):     # a dead daemon's status doesn't count
+        PAIRING.unlink(missing_ok=True)
+        why = st.get("why") if _alive(st.get("pid")) and not st.get("idle") else \
+            "the Auren daemon isn't running (systemctl --user start auren)"
+        return f"The phone server is off: {why}"
+    return st, code, expires
+
+
+def _pair_json() -> int:
+    """auren phone pair --json, for the bar panel: one JSON line with the code and the QR code's SVG, then one
+    when a phone paired or the code expired. Stopping it (the panel's Cancel) ends the pairing at once."""
+    import signal
+
+    def out(**msg):
+        print(json.dumps(msg), flush=True)
+
+    def done(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, done)
+    try:
+        opened = _open_pairing()
+        if isinstance(opened, str):
+            out(error=opened)
+            return 1
+        st, code, expires = opened
+        bound = listening(st)
+        uri = pair_uri([x["ip"] for x in bound], int(st["port"]), code, st["fp"])
+        import segno
+        PAIR_SVG.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PAIR_SVG.with_name(f".{PAIR_SVG.name}.{os.getpid()}.tmp")
+        segno.make(uri, error="m").save(str(tmp), kind="svg", scale=8, border=2, dark="#000", light="#fff")
+        os.chmod(tmp, 0o600)                     # it holds the code
+        tmp.replace(PAIR_SVG)
+        before = {d["id"] for d in devices()}
+        out(uri=uri, svg=str(PAIR_SVG), expires=expires,
+            where=[{"ip": x["ip"], "via": x["via"]} for x in bound], warn=tailscale_off(st))
+        while time.time() < expires:
+            new = [d for d in devices() if d["id"] not in before]
+            if new:
+                out(paired={"id": new[0]["id"], "name": new[0]["name"]})
+                return 0
+            time.sleep(0.5)
+        out(expired=True)
+        return 1
+    except KeyboardInterrupt:
+        PAIRING.unlink(missing_ok=True)
+        out(cancelled=True)
+        return 130
+    finally:
+        PAIR_SVG.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="auren phone", description="Pair the Auren phone app with this PC.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("pair", help="show a one-time QR code for the app (works for 5 minutes)")
     p.add_argument("--no-wait", action="store_true", help="print the code and return, don't wait for the phone")
     p.add_argument("--no-qr", action="store_true", help="only the text to paste into the app")
-    sub.add_parser("devices", help="list paired phones")
+    p.add_argument("--json", action="store_true",
+                   help="JSON lines for the bar panel: the code (and an SVG of the QR), then paired or expired")
+    dv = sub.add_parser("devices", help="list paired phones")
+    dv.add_argument("--json", action="store_true", help="as JSON")
     r = sub.add_parser("revoke", help="unpair a phone (its id from auren phone devices)")
     r.add_argument("id")
     a = ap.parse_args(argv)
@@ -541,6 +624,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "devices":
         found = devices()
+        if a.json:
+            print(json.dumps([{k: d.get(k) for k in ("id", "name", "created", "lastSeen")} for d in found]))
+            return 0
         if not found:
             print("No phone is paired. Pair one: auren phone pair")
         for d in found:
@@ -554,21 +640,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unpaired {gone['name']} ({gone['id']}). It can't connect any more.")
         return 0
 
-    from .settings import current as settings
-    if settings()["phone.enabled"] is False:
-        print("The phone remote is turned off: auren config set phone.enabled auto", file=sys.stderr)
+    if a.json:
+        return _pair_json()
+    opened = _open_pairing()
+    if isinstance(opened, str):
+        print(opened, file=sys.stderr)
+        if not opened.startswith("The phone remote is turned off"):
+            print("auren doctor says more.", file=sys.stderr)
         return 1
-    # The server listens only while a phone is paired or a pairing is open: open one, then wait for the server.
-    opened = time.time()
-    code, expires = start_pairing()
-    st = _serving(opened)
-    if not (st.get("on") and listening(st) and _alive(st.get("pid"))):     # a dead daemon's status doesn't count
-        PAIRING.unlink(missing_ok=True)
-        why = st.get("why") if _alive(st.get("pid")) and not st.get("idle") else \
-            "the Auren daemon isn't running (systemctl --user start auren)"
-        print(f"The phone server is off: {why}", file=sys.stderr)
-        print("auren doctor says more.", file=sys.stderr)
-        return 1
+    st, code, expires = opened
     bound = listening(st)
     uri = pair_uri([a["ip"] for a in bound], int(st["port"]), code, st["fp"])
     before = {d["id"] for d in devices()}
@@ -579,6 +659,8 @@ def main(argv: list[str] | None = None) -> int:
     where = ", ".join(f"{a['ip']} ({'Tailscale' if a['via'] == 'tailscale' else 'Wi-Fi/LAN'})" for a in bound)
     print(f"It works once, for {PAIR_TTL // 60} minutes, from a phone on the same Wi-Fi or your tailnet: {where},"
           f" port {st['port']}.")
+    if warn := tailscale_off(st):
+        print(f"\n{warn}")
     if a.no_wait:
         return 0
     try:
