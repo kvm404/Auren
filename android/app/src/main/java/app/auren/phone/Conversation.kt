@@ -31,5 +31,11 @@ val QUIET_ENDS = setOf("heard nothing", "key tap ignored")
 fun heardNothing(before: AurenState, now: AurenState): Boolean =
     before.state == "listening" && now.state == "idle" && now.detail in QUIET_ENDS
 
+/**
+ * Someone at the desk started a turn: the conversation ends rather than open this phone's microphone again
+ * once the desk is done (whoever is at the PC now has it).
+ */
+fun deskTookOver(before: AurenState, now: AurenState): Boolean = now.busyAtDesk && !before.busyAtDesk
+
 /** How long conversation mode waits, once the turn is over, before it opens the microphone again. */
 const val LISTEN_PAUSE_MS = 400L

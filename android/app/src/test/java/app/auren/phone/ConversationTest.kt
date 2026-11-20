@@ -62,4 +62,12 @@ class ConversationTest {
         // An idle that didn't come straight from listening isn't this listen's end.
         assertFalse(heardNothing(AurenState(state = "thinking"), AurenState(state = "idle", detail = "heard nothing")))
     }
+
+    @Test
+    fun `a turn started at the desk ends the conversation`() {
+        val desk = AurenState(state = "listening", origin = "desk")
+        assertTrue(deskTookOver(idle, desk))
+        assertFalse(deskTookOver(desk, desk.copy(state = "thinking")))            // once, when it starts
+        assertFalse(deskTookOver(idle, AurenState(state = "listening", origin = "phone")))
+    }
 }

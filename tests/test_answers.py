@@ -303,3 +303,18 @@ def test_the_replay_guard_survives_the_brain_going_on_after_a_yes(tmp_path):
 
     d = _run(tmp_path, scenario, level="task")
     assert d.acted                                       # a backup brain must not start this request over
+
+
+def test_fresh_while_someone_talks_keeps_the_listen_going(tmp_path):
+    """Fresh from the panel or the phone, or a new Claude effort, during a listen: the brain restarts under it,
+    and the state stays "listening" (the phone took "thinking" then "idle" for the end of its listen)."""
+    async def scenario(d):
+        d.listening = object()                           # a listen is open
+        d.set_state("listening", "")
+        await d.forget(say=False)
+        d.during = d.state
+        d.listening = None
+        await d.forget(say=False)
+
+    d = _run(tmp_path, scenario)
+    assert d.during == "listening" and d.brain.forgot == 2 and d.state == "idle"

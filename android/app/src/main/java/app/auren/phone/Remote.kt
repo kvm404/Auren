@@ -496,6 +496,7 @@ object Remote {
         if (_conversation.value) {
             // Backups for the turn's end message: the PC's own word that the listen heard nothing, or failed.
             if (voiceTurn != null && heardNothing(before, s)) endConversation("you went quiet")
+            else if (deskTookOver(before, s)) endConversation("Auren is busy at the desk")
             else if (s.state == "error" && before.state != "error" &&
                 (_talk.value != null || voiceTurn != null || _lines.value.any { it.waiting })) {
                 endConversation(s.detail.ifBlank { "Auren hit an error" }.take(80))

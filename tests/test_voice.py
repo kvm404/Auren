@@ -36,6 +36,7 @@ class _Quiet(daemon.Daemon):
         self.settings = {"voice": True, "brain": "auto", "voiceName": "Everly", "safety": "ask", **tuning()}
         self.tools = Runtime(Path("/nonexistent/tools.sock"))       # never started
         self.voice = None
+        self.listening = None
         self.profile = None
         self.vocab = []
         self.refreshed = 0

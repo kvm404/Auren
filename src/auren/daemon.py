@@ -673,13 +673,15 @@ class Daemon:
     async def _set_claude(self, effort: str | None = None, model: str | None = None) -> None:
         what = " and ".join(x for x in (effort and f"{effort} effort", model and f"model {model}") if x)
         async with self.busy:              # after the current answer, if there is one
-            self.set_state("thinking", f"Switching to {what}…")
+            if not self.listening:         # under a listen, it keeps the listen's state (see forget)
+                self.set_state("thinking", f"Switching to {what}…")
             self._fresh()
             await self._restart_brain(self.brain.set_claude, effort, model)
             log.info("claude: %s (fresh conversation)", what)
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": f"({what})",
                            "tools": [], "brain": self._brain_name()})
-        self.idle()
+        if not self.listening:
+            self.idle()
 
     async def _warm(self) -> None:
         """After a mode change: start Claude if the mode now uses it, stop it if not (between answers)."""
@@ -772,12 +774,17 @@ class Daemon:
 
     async def forget(self, say: bool = True, turn: Turn | None = None) -> None:
         async with self.busy:
-            self.set_state("thinking", "Starting fresh…")
+            # Fresh (the panel, the phone) while someone is talking: the brain restarts under the listen, which
+            # keeps its state, or the phone would take "thinking" for the end of its listen and stop recording.
+            if not self.listening:
+                self.set_state("thinking", "Starting fresh…")
             self._fresh()
             await self._restart_brain(self.brain.forget)
             log.info("fresh conversation")
             self._history({"at": time.time(), "source": "forget", "transcript": "", "reply": "(fresh conversation)",
                            "tools": [], "brain": self._brain_name()})
+        if self.listening:
+            return
         if say:
             await self._say("Okay, fresh start. I've forgotten our conversation.", turn)
         else:

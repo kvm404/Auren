@@ -347,9 +347,13 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
     for line in rules.splitlines():
         if not line.startswith("-A ufw-user-input") or not re.search(r"-j ACCEPT\b", line):
             continue
-        # This port, or every port (ufw allow from 192.168.1.0/24); not a rule for UDP only.
+        # This port, or every port (ufw allow from 192.168.1.0/24); TCP or any protocol; not narrowed to one
+        # destination address or to a source port.
         dport = re.search(r"--dports? (\S+)", line)
-        if dport and str(port) not in re.split(r"[,:]", dport[1]) or re.search(r"-p udp\b|-d \S", line):
+        if dport and str(port) not in re.split(r"[,:]", dport[1]):
+            continue
+        proto = re.search(r"-p (\S+)", line)
+        if proto and proto[1] not in ("tcp", "all") or re.search(r"-d \S|--sports? ", line):
             continue
         dev = re.search(r"-i (\S+)", line)
         src = re.search(r"-s (\S+)", line)

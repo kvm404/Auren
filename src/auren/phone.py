@@ -131,6 +131,14 @@ def start_pairing(ttl: float = PAIR_TTL) -> tuple[str, float]:
     return code, expires
 
 
+def end_pairing(code: str) -> None:
+    """Cancel the pairing this code opened, and not a newer one opened since (by the panel or a terminal)."""
+    with _locked("devices"):
+        p = _read(PAIRING, {})
+        if isinstance(p, dict) and p.get("hash") == _hash(code):
+            PAIRING.unlink(missing_ok=True)
+
+
 def pairing_open() -> bool:
     p = _read(PAIRING, {})
     return isinstance(p, dict) and p.get("expires", 0) > time.time()
@@ -645,7 +653,11 @@ def _open_pairing() -> tuple[dict, str, float] | str:
     # The server listens only while a phone is paired or a pairing is open: open one, then wait for the server.
     opened = time.time()
     code, expires = start_pairing()
-    st = _serving(opened)
+    try:
+        st = _serving(opened)
+    except KeyboardInterrupt:              # cancelled while it waited: this code goes, not a newer one
+        end_pairing(code)
+        raise
     if not (st.get("on") and listening(st) and _alive(st.get("pid"))):     # a dead daemon's status doesn't count
         PAIRING.unlink(missing_ok=True)
         why = st.get("why") if _alive(st.get("pid")) and not st.get("idle") else \
@@ -665,6 +677,7 @@ def _pair_json() -> int:
     def done(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, done)
+    code = None
     try:
         opened = _open_pairing()
         if isinstance(opened, str):
@@ -691,7 +704,8 @@ def _pair_json() -> int:
         out(expired=True)
         return 1
     except KeyboardInterrupt:
-        PAIRING.unlink(missing_ok=True)
+        if code:
+            end_pairing(code)
         out(cancelled=True)
         return 130
     finally:
@@ -768,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             time.sleep(0.5)
     except KeyboardInterrupt:
-        PAIRING.unlink(missing_ok=True)
+        end_pairing(code)
         print("\nCancelled: the code no longer works.")
         return 130
     print("The code expired. Run auren phone pair again.")

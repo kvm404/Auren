@@ -1664,3 +1664,29 @@ def test_a_stopped_tailscale_isnt_listened_on_but_its_address_is_kept(monkeypatc
     assert REAL_TAILSCALE_IP()[1].startswith("Tailscale is logged out")
     monkeypatch.setattr(phone.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "failed to connect"))
     assert "failed to connect" in REAL_TAILSCALE_IP()[1]
+
+
+def test_cancelling_a_pairing_leaves_a_newer_one_alone():
+    """The panel's pairing cancelled after a terminal opened another: the terminal's code still works."""
+    old, _ = phone.start_pairing()
+    new, _ = phone.start_pairing()
+    phone.end_pairing(old)
+    assert phone.pairing_open()
+    phone.end_pairing(new)
+    assert not phone.pairing_open()
+
+
+def test_the_firewall_check_counts_only_rules_that_let_the_phone_in(monkeypatch, tmp_path):
+    from auren import doctor
+    rules = tmp_path / "user.rules"
+    monkeypatch.setattr(doctor, "UFW_RULES", rules)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
+    lan = ["192.168.31.214"]
+    for line, ok in [("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT", True),
+                     ("-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT", True),
+                     ("-A ufw-user-input -p gre -j ACCEPT", False),             # another protocol
+                     ("-A ufw-user-input -p udp --dport 8735 -j ACCEPT", False),
+                     ("-A ufw-user-input -p tcp --sport 22 -j ACCEPT", False),  # only from a source port
+                     ("-A ufw-user-input -p tcp -d 10.0.0.5 -j ACCEPT", False)]:
+        rules.write_text(line + "\n")
+        assert (doctor.firewall_check(8735, lan, tailscale=False).status == doctor.OK) is ok, line
