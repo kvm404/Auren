@@ -7,6 +7,9 @@
   "auren" in the browser). It never closes or reuses the user's own tabs.
 - Pages are read as text plus a numbered list of links, buttons and fields;
   `browser_click` / `browser_type` act on those numbers (or on visible text).
+- Clicks and typing are real input (CDP Input events, inside the page only: never the user's mouse or
+  keyboard), so rich text boxes and sites that ignore script events work. Where a real click can't land on
+  the element (covered, off-screen), it falls back to a script click.
 - Downloads are detected by watching that profile's download folder for a new finished file.
 - If the browser isn't connected (not running, the profile has no window, or it just started and the
   extension hasn't connected yet), auren starts it or opens a window in that profile, waits for the
@@ -21,6 +24,7 @@ import json
 import re
 import secrets
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -168,7 +172,9 @@ def _obu(link: Link, *args: str, timeout: float = 30) -> dict:
 
 
 def _eval(browser: Link, tab: int, js: str, timeout: float = 30):
-    params = json.dumps({"expression": js, "returnByValue": True, "awaitPromise": True})
+    # In a block, so the helpers a script declares (const find, ...) don't stay behind in the page: declaring
+    # them again in the next script would be a SyntaxError. A block still gives its last value.
+    params = json.dumps({"expression": "{\n" + js + "\n}", "returnByValue": True, "awaitPromise": True})
     r = obu(browser, "cdp", "--tab-id", str(tab), "--method", "Runtime.evaluate", "--params", params, timeout=timeout)
     if r.get("exceptionDetails"):     # reply shape: {"result": {"type", "value"}, "exceptionDetails"?}
         raise BrowserError("page script failed: " + str(r["exceptionDetails"].get("text"))[:200])
@@ -199,14 +205,22 @@ _READ_JS = r"""
     el.getAttribute('placeholder'), el.getAttribute('alt'), imgLabel(el)].find(x => x && String(x).trim()) || '')
     .toString().trim().replace(/\s+/g, ' ').slice(0, 80);
   document.querySelectorAll('[data-auren-id]').forEach(e => e.removeAttribute('data-auren-id'));
-  const sel = 'a[href], button, [role=button], [role=link], [role=tab], [role=menuitem], input, select, textarea, summary, [onclick]';
+  // rich text boxes (posts, chats, mail bodies) are named by their label first, not by the draft in them
+  const editor = el => !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+    && el.matches('[contenteditable]:not([contenteditable=false]), [role=textbox]');
+  const boxLabel = el => (['aria-label', 'aria-placeholder', 'data-placeholder', 'placeholder', 'title']
+    .map(a => el.getAttribute(a)).find(x => x && x.trim()) || label(el)).trim().replace(/\s+/g, ' ').slice(0, 80);
+  const sel = 'a[href], button, [role=button], [role=link], [role=tab], [role=menuitem], input, select, textarea, summary, [onclick], '
+    + '[contenteditable]:not([contenteditable=false]), [role=textbox]';
   const items = []; let n = 0;
   for (const el of document.querySelectorAll(sel)) {
     if (!visible(el) || n >= 150) continue;
-    const text = label(el); const type = el.getAttribute('type') || '';
-    if (!text && !['text','search','email','password','number'].includes(type) && el.tagName !== 'TEXTAREA') continue;
+    const box = editor(el);
+    if (box && el.parentElement && el.parentElement.isContentEditable) continue;    // a part of a bigger box
+    const text = box ? boxLabel(el) : label(el); const type = el.getAttribute('type') || '';
+    if (!text && !box && !['text','search','email','password','number'].includes(type) && el.tagName !== 'TEXTAREA') continue;
     n += 1; el.setAttribute('data-auren-id', String(n)); el.setAttribute('data-auren-label', text);
-    const item = {id: n, kind: el.tagName.toLowerCase() + (type ? ':' + type : ''), text};
+    const item = {id: n, kind: box ? 'textbox' : el.tagName.toLowerCase() + (type ? ':' + type : ''), text};
     if (el.href && !el.href.startsWith('javascript:')) item.href = el.href.slice(0, 160);
     if (el.target === '_blank') item.new_tab = true;
     if (el.hasAttribute('download')) item.download = true;
@@ -252,6 +266,145 @@ const field = (target) => target.startsWith('pin:')
   ? document.querySelector(`[data-auren-pin="${target.slice(4)}"]`)
   : document.querySelector(`[data-auren-id="${target}"]`);
 """
+
+# Where a real click on el lands: the middle of its visible part, in the coordinates CDP's Input events take
+# (CSS pixels of the viewport; a pinch zoom shifts them by the visual viewport's offset). null when a click
+# there wouldn't reach el: zero-sized, off-screen, or covered (a cookie banner, an overlay). For typing
+# (typing=true) the point must also not be on a link or button inside the box: that click wouldn't pass the
+# risky-click check.
+# It also watches that click (window.__aurenAim): whether the mouse got to el, and whether the press and the
+# click did. Trusted events at that point that land on anything else are stopped before the page sees them;
+# events anywhere else (the user's own clicks) pass. After 5 s it stops watching and nothing is pressed.
+_AIM_JS = r"""
+const ACTIONABLE = 'a[href], button, [role=button], [role=link], [role=menuitem], [role=tab], input, select, '
+  + 'textarea, summary, [onclick]';
+const aim = (el, typing) => {
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const size = q => q.width > 0 && q.height > 0;
+  let r = el.getBoundingClientRect();
+  if (!size(r)) r = [...el.querySelectorAll('img, svg')].map(e => e.getBoundingClientRect()).find(size) || r;
+  const left = Math.max(r.left, 0), right = Math.min(r.right, innerWidth);
+  const top = Math.max(r.top, 0), bottom = Math.min(r.bottom, innerHeight);
+  if (right - left < 1 || bottom - top < 1) return null;
+  const x = (left + right) / 2, y = (top + bottom) / 2;
+  const on = n => {
+    if (!n || !(n === el || el.contains(n))) return false;
+    if (!typing) return true;
+    const act = n.closest(ACTIONABLE);
+    return !act || act === el || act.contains(el);
+  };
+  if (!on(document.elementFromPoint(x, y))) return null;
+  if (window.__aurenAim) window.__aurenAim.off();
+  const st = {moved: false, down: false, clicked: false, expired: false};
+  const near = e => Math.abs(e.clientX - x) <= 2 && Math.abs(e.clientY - y) <= 2;
+  const watch = e => {
+    if (!e.isTrusted || !near(e)) return;
+    const hit = on(e.target) || (!typing && e.composedPath().includes(el));
+    if (e.type === 'mousemove') { st.moved = hit; return; }
+    if (!hit) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    if (e.type === 'click') st.clicked = true; else if (e.type.endsWith('down')) st.down = true;
+  };
+  const types = ['mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+  types.forEach(t => window.addEventListener(t, watch, true));
+  st.off = () => { st.moved = false; st.expired = true; types.forEach(t => window.removeEventListener(t, watch, true)); };
+  setTimeout(st.off, 5000);
+  window.__aurenAim = st;
+  if (typing) window.__aurenFocusBefore = document.activeElement;
+  const v = window.visualViewport;
+  return {x: x - (v ? v.offsetLeft : 0), y: y - (v ? v.offsetTop : 0)};
+};
+"""
+
+_AIM_READY_JS = "!!(window.__aurenAim && window.__aurenAim.moved && !window.__aurenAim.expired)"
+
+_AIM_DONE_JS = """(() => { const s = window.__aurenAim; if (!s) return null; s.off(); delete window.__aurenAim;
+  return {down: s.down, clicked: s.clicked}; })()"""
+
+
+# --- real input (CDP Input events: they go to this tab's page only, never the user's mouse or keyboard) --
+
+CTRL, META = 2, 4          # CDP's modifier bits
+
+
+def _cdp(browser: Link, tab: int, method: str, params: dict, timeout: float = 15) -> dict:
+    return obu(browser, "cdp", "--tab-id", str(tab), "--method", method, "--params", json.dumps(params), timeout=timeout)
+
+
+def _mouse(browser: Link, tab: int, kind: str, x: float, y: float) -> None:
+    p: dict = {"type": kind, "x": x, "y": y}
+    if kind != "mouseMoved":
+        p.update(button="left", buttons=1 if kind == "mousePressed" else 0, clickCount=1)
+    _cdp(browser, tab, "Input.dispatchMouseEvent", p)
+
+
+def _real_click(browser: Link, tab: int, point: dict | None) -> bool:
+    """A real left click at `point` (from aim), pressed only once the mouse is seen to be over the element.
+    True if the click reached it; False if nothing reached it, so the caller can fall back to a script click
+    without clicking twice. If the press reached it but the click may not have finished, raises."""
+    if not point:
+        return False
+    x, y = point["x"], point["y"]
+    try:
+        _mouse(browser, tab, "mouseMoved", x, y)
+        ready = _eval(browser, tab, _AIM_READY_JS, timeout=5) is True
+    except BrowserError:
+        ready = False
+    if not ready:
+        try:
+            _eval(browser, tab, _AIM_DONE_JS, timeout=5)
+        except BrowserError:
+            pass
+        return False
+    try:
+        _mouse(browser, tab, "mousePressed", x, y)
+    except BrowserError:
+        pass                          # it may still have got there: what the page saw decides, below
+    try:
+        _mouse(browser, tab, "mouseReleased", x, y)       # always, so the mouse isn't left down
+        released = True
+    except BrowserError:
+        released = False
+    try:
+        st = _eval(browser, tab, _AIM_DONE_JS, timeout=5)
+    except BrowserError:
+        st = None
+    if st is None:                    # the page went away under the click: it navigated
+        if released:
+            return True
+    elif st.get("clicked") or (st.get("down") and released):
+        return True                   # (some items act on the press alone)
+    elif not st.get("down"):
+        return False
+    raise BrowserError("the click may not have finished: read the page again")
+
+
+_KEYS = {"Enter": ("Enter", 13, "\r"), "a": ("KeyA", 65, "")}
+
+
+def _key(browser: Link, tab: int, key: str, modifiers: int = 0, commands: tuple[str, ...] = ()) -> None:
+    """Press and release one key. Enter carries its text ("\\r"), which is what makes it insert a line or send.
+    No nativeVirtualKeyCode: Chrome builds a Mac's native key event from it, and Mac key codes differ."""
+    code, vk, text = _KEYS[key]
+    down: dict = {"type": "keyDown" if text else "rawKeyDown", "key": key, "code": code,
+                  "windowsVirtualKeyCode": vk, "modifiers": modifiers}
+    if text:
+        down.update(text=text, unmodifiedText=text)
+    if commands:
+        down["commands"] = list(commands)
+    _cdp(browser, tab, "Input.dispatchKeyEvent", down)
+    _cdp(browser, tab, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code,
+                                                  "windowsVirtualKeyCode": vk, "modifiers": modifiers})
+
+
+def _select_all(browser: Link, tab: int) -> None:
+    """Ctrl+A (Cmd+A on a Mac). In a focused text box Chrome selects only that box's text. The selectAll
+    command is what makes it work on a Mac, where the shortcut comes from the menu, not the page."""
+    _key(browser, tab, "a", META if sys.platform == "darwin" else CTRL, ("selectAll",))
+
+
+def _insert_text(browser: Link, tab: int, text: str) -> None:
+    """Type text where the focus is, as the keyboard would (IME-style: no key events, so no Enter)."""
+    _cdp(browser, tab, "Input.insertText", {"text": text})
 
 
 def _wait_ready(browser: Link, tab: int, timeout: float = 15) -> None:
@@ -336,21 +489,27 @@ def browser_click(target: str, tab: int | None = None, expect_download: bool = F
     b, t = _current(), _tab(tab)
     _front(b, t)
     before = _download_snapshot(b) if expect_download else None
-    js = _FIND_JS + """
+    js = _FIND_JS + _AIM_JS + """
     ((target) => {
       const el = find(target);
       if (!el) return {ok: false};
-      el.scrollIntoView({block: 'center'});
+      const text = (el.getAttribute('data-auren-label') || '').slice(0, 60);
       if (el.tagName === 'A' && el.target === '_blank' && el.href && !el.hasAttribute('download')) {
-        location.href = el.href; return {ok: true, text: (el.getAttribute('data-auren-label') || '').slice(0, 60), navigated: true};
+        el.scrollIntoView({block: 'center'});
+        location.href = el.href; return {ok: true, text, navigated: true};
       }
-      el.click();
-      return {ok: true, text: (el.getAttribute('data-auren-label') || '').slice(0, 60)};
+      return {ok: true, text, point: aim(el, false)};
     })(%s)
     """ % json.dumps(str(target))
     r = _eval(b, t, js)
     if not r or not r.get("ok"):
         raise BrowserError(f"nothing to click matches '{target}' (read the page again for current numbers)")
+    if not r.get("navigated") and not _real_click(b, t, r.get("point")):
+        # The mouse can't reach it (covered, off-screen, zero-sized) or the click didn't get there: a script click.
+        clicked = _eval(b, t, _FIND_JS + "((target) => { const el = find(target); if (!el) return false; "
+                        "el.click(); return true; })(%s)" % json.dumps(str(target)))
+        if not clicked:
+            raise BrowserError(f"'{target}' went away before it could be clicked (read the page again)")
     msg = f"clicked “{r.get('text')}”"
     if before is not None:
         f = _wait_download(b, before)
@@ -430,35 +589,161 @@ def field_of(target: str, tab: int | None = None) -> dict | None:
     return _eval(b, t, js)
 
 
+# Typing into a field: what kind it is, focusing it, selecting what it holds, and checking what it holds after.
+# box(target) is the control that really takes the text: the field itself, or for a role=textbox wrapper the
+# input or editable part inside it.
+_BOX_JS = r"""
+const TEXT_TYPES = ['text', 'search', 'email', 'password', 'number', 'tel', 'url'];
+const plain = el => el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && TEXT_TYPES.includes(el.type));
+const rich = el => !['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+  && (el.isContentEditable || el.getAttribute('role') === 'textbox');
+const takes = n => plain(n) || n.isContentEditable;
+const box = (target) => {
+  const el = field(target);
+  if (!el || plain(el) || el.isContentEditable || !rich(el)) return el;
+  const a = document.activeElement;
+  if (a && el.contains(a) && takes(a)) return a;
+  return [...el.querySelectorAll('input, textarea, [contenteditable]:not([contenteditable=false])')].find(takes) || el;
+};
+const setValue = (el, text) => {          // the script way: right for selects, dates and the like
+  el.focus();
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+  setter && setter.set ? setter.set.call(el, text) : (el.value = text);
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+};
+// Focus el and select what it holds, so the typed text replaces it (as setting the value did).
+// 'elsewhere': our click moved the focus into another editor (Google Docs types into a hidden frame).
+// Typing goes in there at the cursor. Only when the click moved it: an editor that already had the focus
+// may be an unrelated one.
+const focusIn = (el, reached) => {
+  const before = window.__aurenFocusBefore;
+  delete window.__aurenFocusBefore;
+  if (!el) return {focus: 'none'};
+  const inside = () => { const a = document.activeElement; return !!a && (a === el || el.contains(a)); };
+  const a = document.activeElement;
+  if (reached && !inside() && a && a !== document.body && a !== before
+      && (a.tagName === 'IFRAME' || a.isContentEditable || a.getAttribute('role') === 'textbox')) return {focus: 'elsewhere'};
+  if (!inside()) el.focus();
+  if (!inside()) return {focus: 'none'};
+  if (plain(el)) {
+    el.select();
+    let all = true;
+    try { if (el.selectionStart !== null) all = el.selectionStart === 0 && el.selectionEnd === el.value.length; } catch (e) {}
+    return {focus: 'in', selected: all || !el.value};
+  }
+  if (!el.innerText.trim()) return {focus: 'in', selected: true};
+  if (!el.isContentEditable) return {focus: 'in', selected: false};
+  const r = document.createRange(); r.selectNodeContents(el);
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  const n = x => x.replace(/\s+/g, '').length;
+  return {focus: 'in', selected: n(s.toString()) >= n(el.innerText)};
+};
+// Did it take? ok: the box holds the text. lines: it does, but with its line breaks joined. differs: the box
+// changed but reads otherwise (now: what it reads). no: nothing changed. unchecked: can't be read.
+const typed = (el, text, focus, before) => {
+  if (!el) return {r: 'no'};
+  if (plain(el)) {
+    if (el.value !== (el.tagName === 'INPUT' ? text.replace(/[\r\n]/g, '') : text)) return {r: 'no'};
+    el.dispatchEvent(new Event('change', {bubbles: true}));     // as a person leaving the field would
+    return {r: 'ok'};
+  }
+  if (focus === 'elsewhere') { const a = document.activeElement; return {r: a && a !== document.body ? 'unchecked' : 'no'}; }
+  const canon = s => String(s).replace(/[\u200b-\u200d\u2060\ufeff]/g, '').replace(/[\u2018\u2019\u201a\u201b]/g, "'")
+    .replace(/[\u201c\u201d\u201e\u201f]/g, '"').replace(/[^\S\n]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+  const flat = s => s.replace(/\s+/g, ' ');
+  const got = canon(el.innerText), want = canon(text);
+  if (got === want) return {r: 'ok'};
+  if (flat(got) === flat(want)) return {r: 'lines'};
+  if (got !== canon(before)) return {r: 'differs', now: flat(got).slice(0, 120)};
+  return {r: 'no'};
+};
+"""
+
+
+def _box(browser: Link, tab: int, call: str, *args) -> object:
+    return _eval(browser, tab, _FIND_JS + _AIM_JS + _BOX_JS + f"({call})(" + ", ".join(json.dumps(a) for a in args) + ")")
+
+
+def _type_real(b: Link, t: int, target: str, text: str, prep: dict) -> dict | None:
+    """Type with real input: click the field (or focus it), select what it holds, insert the text.
+    Returns what typed() found (r: ok, lines, differs, unchecked), or None when nothing took (the caller
+    falls back). Never presses a key that could send: Enter only comes with submit, in browser_type."""
+    reached = _real_click(b, t, prep.get("point"))
+    f = _box(b, t, "(target, reached) => focusIn(box(target), reached)", target, reached)
+    if not f or f["focus"] == "none":
+        return None
+
+    def select() -> None:
+        if f["focus"] == "in" and not f["selected"]:
+            _select_all(b, t)
+
+    def check() -> dict:
+        return _box(b, t, "(target, text, focus, before) => typed(box(target), text, focus, before)",
+                    target, text, f["focus"], prep.get("before", "")) or {"r": "no"}
+    try:
+        select()
+        _insert_text(b, t, text)
+        got = check()
+    except BrowserError:
+        got = {"r": "no"}
+    if got["r"] == "no" and prep["mode"] == "rich":
+        # Nothing changed: the page's own insert command, over what's there again (selected first, and only
+        # when nothing went in, so the text can't be typed twice).
+        f = _box(b, t, "(target) => focusIn(box(target), false)", target)
+        if not f or f["focus"] != "in":
+            return None
+        select()
+        _eval(b, t, "document.execCommand('insertText', false, %s)" % json.dumps(text))
+        got = check()
+    return None if got["r"] == "no" else got
+
+
 def browser_type(target: str, text: str, submit: bool = False, tab: int | None = None) -> str:
     b, t = _current(), _tab(tab)
-    js = _FIND_JS + """
-    ((target, text, submit) => {
-      const el = field(target);
-      if (!el) return false;
-      if (el.isContentEditable) return 'editable';    // setting .value wouldn't change what it shows (or sends)
-      el.focus();
-      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
-      setter && setter.set ? setter.set.call(el, text) : (el.value = text);
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-      el.dispatchEvent(new Event('change', {bubbles: true}));
-      if (submit) {
-        // One way to send, never both (a page that sends on Enter and on submit would send twice).
-        if (el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
-        else el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
-      }
-      return true;
-    })(%s, %s, %s)
-    """ % (json.dumps(str(target)), json.dumps(text), "true" if submit else "false")
-    done = _eval(b, t, js)
-    if done == "editable":
-        raise BrowserError("that box can't be typed into from the page: click it with click_at and use type_text")
-    if not done:
+    _front(b, t)                      # real input needs the tab laid out, so in front
+    prep = _box(b, t, """(target) => { const el = box(target);
+      if (!el) return null;
+      if (!plain(el) && !rich(el)) return {mode: 'set'};
+      return {mode: plain(el) ? 'plain' : 'rich', point: aim(el, true), before: plain(el) ? '' : el.innerText}; }""",
+                str(target))
+    if not prep:
         raise BrowserError(f"no field number {target} (read the page again)")
+    got = _type_real(b, t, str(target), text, prep) if prep["mode"] != "set" else None
+    if got is None and prep["mode"] != "rich":
+        if not _box(b, t, "(target, text) => { const el = box(target); if (!el) return false; setValue(el, text); "
+                    "return true; }", str(target), text):
+            raise BrowserError(f"no field number {target} (read the page again)")
+        got = {"r": "ok"}
+    if got is None:
+        raise BrowserError("that box can't be typed into from the page: click it with click_at and use type_text")
+    note = {"lines": "typed, but the box joined the lines (typed as one line)",
+            "differs": f"typed, but the box now reads “{got.get('now', '')}”: check it",
+            "unchecked": "typed at the cursor, but couldn't select or check what the box already held (it may "
+                         "have added to existing text): read the page to check"}.get(got["r"])
     if submit:
+        if note:
+            # What would be sent isn't (only) what was asked for: leave it for a look first. Errors aren't
+            # wrapped as page text, so no page text in this one.
+            raise BrowserError("typed, but didn't send: " + {
+                "lines": "the box joined the lines (typed as one line)",
+                "differs": "the box reads differently from what was typed",
+                "unchecked": "couldn't check what the box holds (it may have added to existing text)"}[got["r"]]
+                + ". Read the page to check")
+        # One way to send, never both (a page that sends on Enter and on submit would send twice).
+        sent = _box(b, t, """(target) => { const el = box(target);
+          if (!el) return 'gone';
+          if (el.form) { el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit(); return 'form'; }
+          const a = document.activeElement;
+          if (!(a && (a === el || el.contains(a)))) el.focus();
+          return 'key'; }""", str(target))
+        if sent == "gone":
+            raise BrowserError(f"typed, but field {target} went away before Enter could be pressed (read the page again)")
+        if sent == "key":
+            _key(b, t, "Enter")
         _wait_ready(b, t)
         return "typed and submitted\n\n" + browser_read(t)
-    return "typed"
+    return note or "typed"
 
 
 def browser_scroll(direction: str = "down", tab: int | None = None) -> str:

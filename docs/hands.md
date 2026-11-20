@@ -162,14 +162,17 @@ Flatpak browsers aren't supported: their sandbox doesn't run native hosts from o
 |---|---|
 | `browser_open(url, browser)` | New tab in Auren's own session (tab group "auren"), then read. `url` may be `bookmark:<folder/name>`; the URL comes from the browser's `Bookmarks` file |
 | `browser_read()` | Page text (first 5,000 characters) plus numbered clickable items: links, buttons, fields. Image-only links are labelled `image: <file>` with their target. Identical labels get their row's name: "More actions (Alt+A) (Week 3)" |
-| `browser_click(target, expect_download)` | By number or by words of the label. `target=_blank` links open in the same tab. `expect_download` watches the profile's download folder (from its `Preferences`, else `~/Downloads`) for a new finished file and returns its path |
-| `browser_type(target, text, submit)`, `browser_scroll` | Type into a field; scroll |
+| `browser_click(target, expect_download)` | By number or by words of the label. A real mouse click in the page (CDP `Input.dispatchMouseEvent`) at the middle of the element, once the mouse is seen over it; covered, off-screen or zero-sized elements get a script `el.click()` instead. `target=_blank` links open in the same tab. `expect_download` watches the profile's download folder (from its `Preferences`, else `~/Downloads`) for a new finished file and returns its path |
+| `browser_type(target, text, submit)`, `browser_scroll` | Type into a field, including rich text boxes (`textbox` items: posts, chats, mail bodies). It clicks the field (never a link or button inside it), selects what it holds and types with `Input.insertText`, then checks the field shows the text; a plain field that doesn't gets its value set from the page. If a rich box reads otherwise (it joined the lines, or reads something else), it says so, and with `submit` it doesn't send. `submit` submits the field's form, or presses one real Enter outside a form; scroll |
 | `browser_bookmarks`, `recent_downloads`, `browser_close` | Bookmark names (URLs with long tokens are shortened in output); recent files; close Auren's tabs |
 
 **Safety.** Clicks on buy, pay, send, post, submit, delete and similar labels need confirmation (at the default approval level, see [safety.md](safety.md#approval-levels)). Page text is wrapped as untrusted.
 
 **Browser behavior to account for:**
 - **Chrome doesn't lay out background tabs,** so their visible text is empty (Drive rows read as nothing). Auren brings its tab to the front before reading or clicking (CDP `Page.bringToFront`).
+- **Script events are untrusted,** and rich editors (Docs, Notion, Gmail, X, Slack, WhatsApp Web) ignore a `.value` set from the page. Clicks and typing are CDP Input events in the tab: real input to the page, never the user's mouse or keyboard. A click is only pressed once a mouse move shows it lands on the element; while it's under way, a press at that point that lands on anything else is stopped (clicks elsewhere, such as the user's own, pass). If the press got there but the release failed, the tool says the click may not have finished.
+- **New lines in a chat box:** `Input.insertText` sends no key events, so a new line in the text can't press Enter (which sends there; some editors send on Shift+Enter too). No Enter is ever pressed except the one for `submit`. An editor that drops the line breaks keeps the text on one line, and the tool says so.
+- **Google Docs** types into a hidden frame: when the click moves the focus there, the text goes in at the cursor, and the tool says it couldn't check or replace what was there. An editor that had the focus before the click is never typed into.
 - **Links can be zero-sized** while the image inside them shows, and a link's "text" can be a single space. Both need care when listing clickable items.
 - **Drive downloads a folder as a zip,** after a few seconds of preparing.
 

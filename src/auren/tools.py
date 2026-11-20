@@ -859,7 +859,8 @@ def browser_click(target: str, expect_download: bool = False) -> str:
 
 @tool(lock=BROWSER)
 def browser_type(target: str, text: str, submit: bool = False) -> str:
-    """Type text into a numbered field from the last read; submit=True presses Enter. Submitting a search
+    """Type text into a numbered field from the last read, replacing what it holds. Rich text boxes (posts,
+    chats, mail bodies, docs) work too: a new line in the text never sends. submit=True presses Enter. Submitting a search
     box runs straight away; submitting any other field (a message, a comment, a form) makes the tool ask the
     user itself, since it can send or post: just call it, don't ask in words first."""
     _warm_judge()

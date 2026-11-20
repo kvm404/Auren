@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The browser tools click and type with real input in the page, not script events, so `browser_type`
+  works in rich text boxes (Google Docs, Notion, Gmail, X, Slack, WhatsApp Web) and clicks work on sites
+  that ignore script clicks. Your own mouse and keyboard aren't used. Rich text boxes are listed as
+  `textbox` items when a page is read. A new line in the text never presses Enter, and if the box ends up
+  reading differently from what was typed, Auren says so and doesn't send it.
+
 ## 0.1.7
 
 ### Added

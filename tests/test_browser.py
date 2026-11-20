@@ -438,3 +438,221 @@ def test_readable_tells_a_folder_kept_from_this_process(machine, monkeypatch):
     monkeypatch.setattr(os, "listdir", listdir)
     assert not hosts.readable(HELIUM)
     assert hosts.readable(browsers.BY_KEY["brave"])
+
+
+# --- real input (CDP Input events) ---------------------------------------------------------------------------
+
+class FakeTab:
+    """A tab behind a fake Open Browser Use: records the CDP calls, and answers auren's page scripts by what
+    they do (`page` holds the answers a test sets)."""
+
+    def __init__(self):
+        self.calls, self.page = [], {"point": {"x": 120.5, "y": 40.0}, "moved": True, "reached": {"down": True, "clicked": True},
+                                     "mode": "plain", "focus": {"focus": "in", "selected": True}, "typed": ["ok"],
+                                     "form": False}
+
+    def obu(self, link, *args, timeout=30, retry=True):
+        assert args[0] == "cdp"
+        method, params = args[4], json.loads(args[6])
+        if method != "Runtime.evaluate":
+            self.calls.append((method, params))
+            if params.get("type") in self.page.get("failing", ()):
+                raise b.BrowserError("browser: lost")
+            return {}
+        js, p = params["expression"], self.page
+        if "point: aim(el, false)" in js:
+            value = {"ok": True, "text": "Send", "point": p["point"]}
+        elif "mode: plain(el)" in js:
+            value = {"mode": p["mode"], "point": p["point"], "before": ""}
+        elif "__aurenAim.moved" in js:
+            value = p["moved"]
+        elif "delete window.__aurenAim" in js:
+            value = p["reached"]
+        elif "el.click(); return true" in js:
+            self.calls.append(("script click", None))
+            value = True
+        elif "focusIn(box(target)" in js:
+            value = p["focus"]
+        elif "typed(box(target)" in js:
+            r = p["typed"].pop(0) if len(p["typed"]) > 1 else p["typed"][0]
+            value = {"r": r, "now": "old draft hello"} if r == "differs" else {"r": r}
+        elif "setValue(el, text)" in js:
+            self.calls.append(("set value", None))
+            value = True
+        elif "requestSubmit" in js:
+            value = "form" if p["form"] else "key"
+            if p["form"]:
+                self.calls.append(("request submit", None))
+        elif "execCommand('insertText'" in js:
+            self.calls.append(("execCommand", None))
+            value = True
+        elif "visibilityState" in js:
+            value = "visible"
+        else:
+            value = None
+        return {"result": {"type": "object", "value": value}}
+
+    def input(self, method=None):
+        return [(m, p) for m, p in self.calls if method is None or m == method]
+
+
+@pytest.fixture
+def tab(machine, monkeypatch):
+    t = FakeTab()
+    monkeypatch.setattr(b, "obu", t.obu)
+    monkeypatch.setattr(b, "_wait_ready", lambda link, tab, timeout=15: None)
+    monkeypatch.setattr(b, "browser_read", lambda tab=None: "page")
+    monkeypatch.setattr(b, "_state", {"tab": 3, "link": object()})
+    return t
+
+
+def test_a_click_is_a_real_mouse_click_at_the_middle_of_the_element(tab):
+    assert b.browser_click("7").startswith("clicked “Send”")
+    mouse = tab.input("Input.dispatchMouseEvent")
+    assert [p["type"] for _, p in mouse] == ["mouseMoved", "mousePressed", "mouseReleased"]
+    assert all((p["x"], p["y"]) == (120.5, 40.0) for _, p in mouse)
+    assert mouse[1][1]["button"] == "left" and mouse[1][1]["clickCount"] == 1
+    assert ("script click", None) not in tab.calls
+
+
+def test_a_covered_element_gets_a_script_click_instead(tab):
+    tab.page["point"] = None                  # aim found something on top of it
+    b.browser_click("7")
+    assert tab.calls == [("script click", None)]
+
+
+def test_when_the_mouse_lands_elsewhere_nothing_is_pressed(tab):
+    tab.page["moved"] = False                 # the page moved under it (zoom, a banner sliding in)
+    b.browser_click("7")
+    assert [p["type"] for _, p in tab.input("Input.dispatchMouseEvent")] == ["mouseMoved"]
+    assert tab.calls[-1] == ("script click", None)
+
+
+def test_a_click_that_got_there_is_not_clicked_again(tab):
+    tab.page["reached"] = {"down": True, "clicked": False}    # it acted on the press and went away
+    b.browser_click("7")
+    assert ("script click", None) not in tab.calls
+
+
+def test_a_rich_text_box_is_typed_into_with_real_input(tab):
+    tab.page["mode"] = "rich"
+    assert b.browser_type("5", "hello there") == "typed"
+    assert tab.input("Input.insertText") == [("Input.insertText", {"text": "hello there"})]
+    assert not tab.input("Input.dispatchKeyEvent")            # no Enter: in a chat box it would send
+
+
+def test_a_plain_field_is_typed_with_insert_text_and_checked(tab):
+    assert b.browser_type("2", "weather") == "typed"
+    assert [m for m, _ in tab.calls] == ["Input.dispatchMouseEvent"] * 3 + ["Input.insertText"]
+
+
+def test_a_field_that_didnt_take_it_gets_its_value_set(tab):
+    tab.page["typed"] = ["no"]
+    assert b.browser_type("2", "weather") == "typed"
+    assert tab.calls[-1] == ("set value", None)
+
+
+def test_a_rich_box_that_doesnt_take_it_says_to_use_the_screen(tab):
+    tab.page.update(mode="rich", typed=["no"])
+    with pytest.raises(b.BrowserError, match="click_at and use type_text"):
+        b.browser_type("5", "hello")
+    assert ("execCommand", None) in tab.calls and ("set value", None) not in tab.calls
+
+
+def test_joined_lines_are_left_as_typed_and_nothing_is_pressed(tab):
+    tab.page.update(mode="rich", typed=["lines"])
+    assert b.browser_type("5", "one\ntwo") == "typed, but the box joined the lines (typed as one line)"
+    assert not tab.input("Input.dispatchKeyEvent") and len(tab.input("Input.insertText")) == 1
+
+
+@pytest.mark.parametrize("found", ["lines", "differs", "unchecked"])
+def test_a_box_that_doesnt_hold_just_the_text_isnt_sent(tab, found):
+    tab.page.update(mode="rich", typed=[found])
+    with pytest.raises(b.BrowserError, match="typed, but didn't send") as e:
+        b.browser_type("5", "hello", submit=True)
+    assert "old draft" not in str(e.value)            # errors aren't wrapped as page text
+    assert not tab.input("Input.dispatchKeyEvent") and ("request submit", None) not in tab.calls
+
+
+def test_a_box_that_reads_otherwise_says_what_it_reads(tab):
+    tab.page.update(mode="rich", typed=["differs"])
+    assert b.browser_type("5", "hello") == "typed, but the box now reads “old draft hello”: check it"
+    assert ("execCommand", None) not in tab.calls     # something went in: never typed again
+
+
+def test_an_editor_that_cant_be_read_back_says_so(tab):
+    tab.page.update(mode="rich", typed=["unchecked"])
+    out = b.browser_type("5", "hello")
+    assert out.startswith("typed at the cursor") and "read the page" in out
+
+
+def test_typing_aims_away_from_links_and_buttons_in_the_box(tab, monkeypatch):
+    seen = []
+    real = tab.obu
+    monkeypatch.setattr(b, "obu", lambda link, *a, **k: seen.append(a[6]) or real(link, *a, **k))
+    b.browser_type("5", "hello")
+    b.browser_click("7")
+    assert any("aim(el, true)" in x for x in seen) and any("aim(el, false)" in x for x in seen)
+
+
+def test_a_late_press_isnt_allowed_once_the_watch_has_expired():
+    assert "!window.__aurenAim.expired" in b._AIM_READY_JS
+    assert "st.moved = false; st.expired = true" in b._AIM_JS
+
+
+def test_a_release_that_fails_after_the_press_got_there_is_an_error(tab):
+    tab.page.update(failing={"mouseReleased"}, reached={"down": True, "clicked": False})
+    with pytest.raises(b.BrowserError, match="may not have finished"):
+        b.browser_click("7")
+    assert ("script click", None) not in tab.calls
+
+
+def test_the_mouse_is_released_even_when_the_press_fails(tab):
+    tab.page.update(failing={"mousePressed"}, reached={"down": False, "clicked": False})
+    b.browser_click("7")
+    assert [p["type"] for _, p in tab.input("Input.dispatchMouseEvent")] == ["mouseMoved", "mousePressed", "mouseReleased"]
+    assert tab.calls[-1] == ("script click", None)         # nothing got there: a script click, once
+
+
+def test_keys_carry_no_native_key_code(tab):
+    tab.page["mode"] = "rich"
+    b.browser_type("5", "hi", submit=True)
+    assert all("nativeVirtualKeyCode" not in p for _, p in tab.input("Input.dispatchKeyEvent"))
+
+
+def test_submitting_outside_a_form_presses_a_real_enter_once(tab):
+    tab.page["mode"] = "rich"
+    b.browser_type("5", "running late", submit=True)
+    keys = tab.input("Input.dispatchKeyEvent")
+    assert [(p["type"], p["key"], p["windowsVirtualKeyCode"]) for _, p in keys] == [("keyDown", "Enter", 13), ("keyUp", "Enter", 13)]
+    assert keys[0][1]["text"] == "\r" and keys[0][1]["modifiers"] == 0
+    assert ("request submit", None) not in tab.calls
+
+
+def test_submitting_in_a_form_submits_it_and_presses_nothing(tab):
+    tab.page["form"] = True
+    b.browser_type("2", "weather", submit=True)
+    assert ("request submit", None) in tab.calls and not tab.input("Input.dispatchKeyEvent")
+
+
+@pytest.mark.parametrize("platform, modifier", [("linux", b.CTRL), ("darwin", b.META)])
+def test_select_all_uses_the_platforms_shortcut(tab, monkeypatch, platform, modifier):
+    monkeypatch.setattr(b.sys, "platform", platform)
+    tab.page["focus"] = {"focus": "in", "selected": False}    # selecting from the page didn't take
+    b.browser_type("2", "weather")
+    down, up = tab.input("Input.dispatchKeyEvent")
+    assert (down[1]["key"], down[1]["code"], down[1]["modifiers"]) == ("a", "KeyA", modifier)
+    assert down[1]["commands"] == ["selectAll"] and "text" not in down[1] and up[1]["type"] == "keyUp"
+
+
+def test_a_field_that_cant_be_focused_gets_its_value_set(tab):
+    tab.page.update(point=None, focus={"focus": "none"})
+    b.browser_type("2", "weather")
+    assert tab.calls == [("set value", None)]
+
+
+def test_scripts_run_in_a_block_so_their_helpers_can_be_declared_again(tab, monkeypatch):
+    seen = []
+    monkeypatch.setattr(b, "obu", lambda link, *a, **k: seen.append(json.loads(a[6])["expression"]) or tab.obu(link, *a, **k))
+    b._eval(None, 3, "const find = 1; find")
+    assert seen == ["{\nconst find = 1; find\n}"]
