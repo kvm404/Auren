@@ -25,7 +25,7 @@ def phone_dir(tmp_path, monkeypatch):
     d = tmp_path / "phone"
     for name, value in {"PHONE_DIR": d, "DEVICES": d / "devices.json", "PAIRING": d / "pairing.json",
                         "INBOX": d / "inbox.jsonl", "FILES": d / "files", "STATUS": tmp_path / "phone.json",
-                        "CERT": d / "cert.pem", "KEY": d / "key.pem"}.items():
+                        "CERT": d / "cert.pem", "KEY": d / "key.pem", "PAIR_QR": tmp_path / "phone-pair.png"}.items():
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
     return d
@@ -1536,3 +1536,30 @@ def test_doctor_sees_a_rule_for_every_port_and_tailscales_own(monkeypatch, tmp_p
     rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
     ts = doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True)
     assert ts.status == doctor.WARN and "Tailscale" in ts.detail and "tailscale0" in ts.fix
+
+
+def test_pair_json_gives_the_bar_panel_a_qr_code_then_the_phone(monkeypatch, capsys):
+    from urllib.parse import parse_qs, urlparse
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": [
+            {"ip": "192.168.1.20", "via": "lan", "ok": True}], "missing": {"tailscale": "Tailscale is off or logged out"}})
+    seen = {}
+
+    def phone_scans(_):                    # while it waits: the panel shows the PNG, the phone pairs with its code
+        if "line" not in seen:
+            seen["line"] = json.loads(capsys.readouterr().out)
+            seen["png"] = phone.PAIR_QR.read_bytes()
+            phone.pair(parse_qs(urlparse(seen["line"]["uri"]).query)["code"][0], "Pixel")
+    monkeypatch.setattr(phone.time, "sleep", phone_scans)
+    assert phone.main(["pair", "--json"]) == 0
+    line = seen["line"]
+    assert line["qr"] == str(phone.PAIR_QR) and line["where"] == [{"ip": "192.168.1.20", "via": "lan"}]
+    assert "Tailscale is off on this PC" in line["warn"] and seen["png"].startswith(b"\x89PNG")
+    assert json.loads(capsys.readouterr().out)["paired"]["name"] == "Pixel"
+    assert not phone.PAIR_QR.exists()                                      # gone once it's done
+
+
+def test_pair_json_says_why_it_cant(monkeypatch, capsys):
+    monkeypatch.setattr(phone, "SERVE_WAIT", 0.1)
+    assert phone.main(["pair", "--json"]) == 1
+    assert "isn't running" in json.loads(capsys.readouterr().out)["error"] and not phone.pairing_open()

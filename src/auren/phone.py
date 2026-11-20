@@ -3,7 +3,7 @@
     auren phone pair            # a QR code (and its text) for the app; the code works once, for 5 minutes
     auren phone devices         # the paired phones
     auren phone revoke <id>     # unpair one: its token stops working at once
-    (--json on pair and devices: for the bar panel, which shows the QR code from pair's SVG)
+    (--json on pair and devices: for the bar panel, which shows the QR code from the PNG pair writes)
 
 Everything lives in STATE_DIR/phone (mode 700): devices.json and pairing.json (mode 600) hold only SHA-256
 hashes of the tokens and of the code, never the secrets themselves. The inbox (inbox.jsonl, files/) is what
@@ -49,7 +49,7 @@ FILES = PHONE_DIR / "files"
 CERT = PHONE_DIR / "cert.pem"
 KEY = PHONE_DIR / "key.pem"
 STATUS = RUNTIME_DIR / "phone.json"     # the daemon's server: on or off, where, why not, and who's connected
-PAIR_SVG = RUNTIME_DIR / "phone-pair.svg"   # auren phone pair --json's QR code, for the bar panel (gone after)
+PAIR_QR = RUNTIME_DIR / "phone-pair.png"    # auren phone pair --json's QR code, for the bar panel (gone after)
 PAIR_TTL = 300                      # seconds a pairing code works
 PAIR_TRIES = 5                      # wrong codes before the pairing is dropped
 MAX_FILE = 50 * 1024 * 1024         # biggest file send_to_phone sends
@@ -503,10 +503,10 @@ def _alive(pid) -> bool:
     return True
 
 
-def _serving(since: float, wait: float = SERVE_WAIT) -> dict:
+def _serving(since: float, wait: float | None = None) -> dict:
     """The daemon's server status once it listens somewhere for the pairing opened at `since`, or once it
     wrote, after that, why it can't; else as it is when `wait` runs out."""
-    end = time.time() + wait
+    end = time.time() + (SERVE_WAIT if wait is None else wait)
     while True:
         st = status()
         if _alive(st.get("pid")) and (st.get("on") and listening(st)
@@ -562,7 +562,7 @@ def _open_pairing() -> tuple[dict, str, float] | str:
 
 
 def _pair_json() -> int:
-    """auren phone pair --json, for the bar panel: one JSON line with the code and the QR code's SVG, then one
+    """auren phone pair --json, for the bar panel: one JSON line with the code and its QR code (a PNG), then one
     when a phone paired or the code expired. Stopping it (the panel's Cancel) ends the pairing at once."""
     import signal
 
@@ -581,13 +581,13 @@ def _pair_json() -> int:
         bound = listening(st)
         uri = pair_uri([x["ip"] for x in bound], int(st["port"]), code, st["fp"])
         import segno
-        PAIR_SVG.parent.mkdir(parents=True, exist_ok=True)
-        tmp = PAIR_SVG.with_name(f".{PAIR_SVG.name}.{os.getpid()}.tmp")
-        segno.make(uri, error="m").save(str(tmp), kind="svg", scale=8, border=2, dark="#000", light="#fff")
+        PAIR_QR.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PAIR_QR.with_name(f".{PAIR_QR.name}.{os.getpid()}.tmp")
+        segno.make(uri, error="m").save(str(tmp), kind="png", scale=10, border=2, dark="#000", light="#fff")
         os.chmod(tmp, 0o600)                     # it holds the code
-        tmp.replace(PAIR_SVG)
+        tmp.replace(PAIR_QR)
         before = {d["id"] for d in devices()}
-        out(uri=uri, svg=str(PAIR_SVG), expires=expires,
+        out(uri=uri, qr=str(PAIR_QR), expires=expires,
             where=[{"ip": x["ip"], "via": x["via"]} for x in bound], warn=tailscale_off(st))
         while time.time() < expires:
             new = [d for d in devices() if d["id"] not in before]
@@ -602,7 +602,7 @@ def _pair_json() -> int:
         out(cancelled=True)
         return 130
     finally:
-        PAIR_SVG.unlink(missing_ok=True)
+        PAIR_QR.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -612,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-wait", action="store_true", help="print the code and return, don't wait for the phone")
     p.add_argument("--no-qr", action="store_true", help="only the text to paste into the app")
     p.add_argument("--json", action="store_true",
-                   help="JSON lines for the bar panel: the code (and an SVG of the QR), then paired or expired")
+                   help="JSON lines for the bar panel: the code (and a PNG of the QR), then paired or expired")
     dv = sub.add_parser("devices", help="list paired phones")
     dv.add_argument("--json", action="store_true", help="as JSON")
     r = sub.add_parser("revoke", help="unpair a phone (its id from auren phone devices)")

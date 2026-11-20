@@ -29,18 +29,22 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    you to allow installing from your browser once). A newer release's APK installs over it, keeping the
    pairing. To build it yourself: `cd android && ./gradlew installDebug` (a debug build can't update a
    release one: uninstall that first), with `android/native/build-phonon.sh` first for the phone's own voice.
-4. On the PC, run `auren phone pair`. It prints a QR code, the same thing as text (`auren://pair?...`), and
-   waits. Scan the QR with the app, or paste the text. The code works once, for 5 minutes, and 5 wrong
+4. On the PC, open the bar panel's **Phone** page and click **Pair a phone** (or run `auren phone pair` in a
+   terminal). It shows a QR code; the terminal also prints the same thing as text (`auren://pair?...`), and
+   waits. Scan the QR with the app, or paste the text. Turn Tailscale on on the PC first if you want the
+   phone to reach it away from this Wi-Fi: a phone paired while it's off gets only the Wi-Fi's address
+   (both say so). The code works once, for 5 minutes, and 5 wrong
    codes cancel it. The QR also carries every address the server listens on and the fingerprint of the
    PC's certificate, which is what the app trusts from then on.
-5. `auren doctor` has a **Phone** section: Tailscale and Wi-Fi/LAN (each a warning when missing, never a
+5. The panel's Phone page also shows where the server listens, which phone is connected and over which
+   path, and unpairs a phone. `auren doctor` has a **Phone** section: Tailscale and Wi-Fi/LAN (each a warning when missing, never a
    failure while the other works), every address the server listens on or why it can't, the firewall, and
    the certificate.
 
 | Command | Does |
 |---|---|
-| `auren phone pair [--no-wait] [--no-qr]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen |
-| `auren phone devices` | The paired phones: id, name, when paired, last seen |
+| `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn}` (`qr` a PNG, deleted after), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
+| `auren phone devices [--json]` | The paired phones: id, name, when paired, last seen |
 | `auren phone revoke <id>` | Unpair one. Its token stops working at once and its open connection is closed |
 
 `config.toml`:
@@ -182,6 +186,8 @@ Phone to PC:
 | `cancel` | | `cancelled` (Stop: listening, thinking, working) |
 | `answer` | `id`, `yes`, `ask` | `approved N`, `dropped N`, `that question is no longer open`, `nothing is waiting for an answer`, `busy` |
 | `voice.set` | `id`, `name` | `ok`, or `error: no voice 'X': choose Everly, Juniper, Hugh or Trevor` for an unknown name |
+| `forget` | `id` | `ok`: a fresh conversation, as the panel's Fresh (after a turn that's running) |
+| `setting` | `id`, `name` (`brain`, `effort`, `codex-effort`), `value` | `ok` or `error: …`, the auren-ctl command's answer. The state carries `mode`, `effort`, `codexEffort`, `codexModel`. Not `safety`: a lost phone can't turn off Auren's questions |
 | `resume` | `ids` | none: for each id, its `reply` if the PC kept it, else `lost`; nothing while it still runs |
 | `sync` | `after` | none: `inbox` messages for each item after the cursor |
 | `ping` | `id` | `{"type":"pong"}` |
@@ -228,7 +234,7 @@ close code 4401), `error`. When the server stops or moves, open connections are 
 | `pairing.json` (600) | The open pairing: the code's hash, expiry, wrong tries |
 | `inbox.jsonl`, `files/` (600) | What Auren sent to the phone |
 | `cert.pem`, `key.pem` (600) | The server's self-signed certificate and its private key, made once |
-| `$XDG_RUNTIME_DIR/auren/phone.json` | The server: `on`, `port`, `addrs` (`[{ip, via, ok, why}]`), `fp`, `why` |
+| `$XDG_RUNTIME_DIR/auren/phone.json` | The server: `on`, `idle`, `port`, `addrs` (`[{ip, via, ok, why}]`), `fp`, `why`, `missing`, `connected` (`[{id, name, via}]`) |
 
 On the phone, the PC's addresses, its certificate fingerprint and the device token are kept in the app's
 private storage. Pairing again or unpairing clears the old PC's conversation, inbox and cursor.

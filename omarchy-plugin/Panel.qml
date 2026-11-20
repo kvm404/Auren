@@ -15,6 +15,8 @@ import qs.Ui
 //                   Voice    spoken replies in English, voice (voiceChoices), speed, volume,
 //                            pause, test; listening: auto-send and its delay
 //                   Brain    auto / Claude / Codex, Claude's effort, how much it asks before risky actions, today's numbers
+//                   Vocabulary  words Auren should listen for
+//                   Phone    the phone remote: where it listens, pair a phone (its QR code), the paired phones (unpair)
 //                   Updates  the installed version, a check for a newer one, and the update (auren update)
 //   right-click   start a fresh conversation
 //
@@ -22,7 +24,8 @@ import qs.Ui
 // from its first column comes back. In a page, up/down moves between rows, left/right between buttons
 // or along a slider; Enter acts, Esc closes, Tab goes to the next bar panel.
 //
-// It reads $XDG_RUNTIME_DIR/auren/state.json (written by the daemon, including the voice settings),
+// It reads $XDG_RUNTIME_DIR/auren/state.json (written by the daemon, including the voice settings), phone.json
+// (its phone server: where it listens, who's connected; pairing runs auren phone pair --json),
 // $XDG_RUNTIME_DIR/auren/update.json (written by auren update) and ~/.config/auren/mascot.json (the
 // mascot's preferences, which it also writes), and talks to the daemon through
 // ~/.local/share/auren/bin/auren-ctl; the services are started and stopped with systemctl --user.
@@ -218,16 +221,123 @@ Panel {
     }
   }
   onOpenedChanged: {
-    if (!opened) { confirmingUpdate = false; return }
+    if (!opened) { confirmingUpdate = false; unpairAsk = ""; cancelPairing(); return }
     historyProc.running = false; historyProc.running = true
     cursorActive = false
     now = Date.now() / 1000
-    if (page === 5) checkIfStale()
+    if (page === 6) checkIfStale()
+    if (page === 5) loadPhones()
     if (page === 4) loadVocab()
   }
   onMoodChanged: if (opened && mood === "idle") { historyProc.running = false; historyProc.running = true }
   property real now: Date.now() / 1000
   Timer { interval: 30000; running: root.opened; repeat: true; onTriggered: root.now = Date.now() / 1000 }
+
+  // ---- the phone remote (auren phone) --------------------------------------------------------------
+  // phone.json is the daemon's phone server: on (listening) or idle (no phone paired, so nothing listens),
+  // where, why a path is missing, and the phones connected now. The paired phones come from auren phone devices.
+  property var phoneSt: ({})
+  FileView {
+    id: phoneFile
+    path: root.runtimeDir + "/phone.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try { root.phoneSt = JSON.parse(text()) } catch (e) { root.phoneSt = ({}) }
+      if (root.opened && root.page === 5) root.loadPhones()     // a phone came or went: its "last seen" moved
+    }
+    onLoadFailed: root.phoneSt = ({})
+  }
+  property var phones: []
+  Process {
+    id: phonesProc
+    command: [root.aurenBin, "phone", "devices", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.phones = JSON.parse(String(text || "").trim() || "[]") } catch (e) { root.phones = [] }
+      }
+    }
+  }
+  function loadPhones() { phonesProc.running = false; phonesProc.running = true }
+  function viaName(v) { return v === "tailscale" ? "Tailscale" : "Wi-Fi" }
+  function connectedVia(id) {
+    var c = (root.phoneSt.on ? root.phoneSt.connected || [] : []).find(function(x) { return x.id === id })
+    return c ? c.via : ""
+  }
+  readonly property string phoneStatus: {
+    if (!root.daemonAlive) return "Auren is off, so the phone can't reach it."
+    if (root.phoneSt.on) return "Listening on " + (root.phoneSt.addrs || []).filter(function(a) { return a.ok })
+                                  .map(function(a) { return root.viaName(a.via) + " (" + a.ip + ")" }).join(" and ") + "."
+    if (root.phoneSt.idle || root.phoneSt.on === undefined) return "Not listening: no phone is paired. Pair one to start."
+    return "Not listening: " + (root.phoneSt.why || "the phone server is off") + "."
+  }
+  // Tailscale is installed but off: a phone then reaches the PC only on this Wi-Fi, and one paired now gets
+  // no Tailscale address (auren phone pair says the same).
+  readonly property string tailscaleWarn: {
+    var why = (root.phoneSt.missing || {}).tailscale || ""
+    return why && why.indexOf("isn't installed") < 0
+           ? "Tailscale is off on this PC: phones reach it only on this Wi-Fi. Turn it on (tailscale up) to use"
+             + " the phone from anywhere, then pair again if this phone was paired while it was off."
+           : ""
+  }
+
+  // Pairing: auren phone pair --json writes the QR code (a PNG) and prints a line for it, then one when a
+  // phone paired or the code expired. Cancel (or closing the panel) stops it, and the code stops working.
+  property var pairing: ({})          // { uri, qr, expires, where, warn } while the code is up
+  property string pairStage: ""       // "", "starting", "showing", "paired", "expired", "error"
+  property string pairNote: ""
+  Process {
+    id: pairProc
+    command: [root.aurenBin, "phone", "pair", "--json"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        var m
+        try { m = JSON.parse(line) } catch (e) { return }
+        if (m.uri) { root.pairing = m; root.pairStage = "showing"; root.now = Date.now() / 1000 }
+        else if (m.paired) { root.pairStage = "paired"; root.pairNote = "Paired " + m.paired.name + "."; root.loadPhones() }
+        else if (m.expired) { root.pairStage = "expired"; root.pairNote = "The code expired: pair again for a new one." }
+        else if (m.error) { root.pairStage = "error"; root.pairNote = m.error }
+      }
+    }
+    onExited: {
+      if (root.pairStage === "starting" || root.pairStage === "showing") {
+        root.pairStage = "error"
+        root.pairNote = "Pairing stopped. auren doctor says why."
+      }
+      root.pairing = ({})
+    }
+  }
+  function startPairing() {
+    if (pairProc.running) return
+    pairing = ({}); pairNote = ""; pairStage = "starting"
+    pairProc.running = true
+  }
+  function cancelPairing() {
+    if (pairStage === "starting" || pairStage === "showing") pairStage = ""
+    if (pairProc.running) pairProc.signal(15)
+  }
+  readonly property int pairLeft: Math.max(0, Math.round((root.pairing.expires || 0) - root.now))
+  Timer { interval: 1000; running: root.pairStage === "showing"; repeat: true; onTriggered: root.now = Date.now() / 1000 }
+  readonly property var pairActions: pairProc.running
+    ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }]
+    : [{ label: root.phones.length ? "Pair another phone" : "Pair a phone", icon: "󰄜",
+         tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing }]
+
+  // Unpair asks once more (the phone has to pair again), then runs auren phone revoke.
+  property string unpairAsk: ""
+  Process { id: revokeProc; onExited: root.loadPhones() }
+  function unpair(id) {
+    if (unpairAsk !== id) { unpairAsk = id; return }
+    unpairAsk = ""
+    revokeProc.command = [root.aurenBin, "phone", "revoke", id]
+    revokeProc.running = true
+  }
+  function phoneDetail(p) {
+    var via = root.connectedVia(p.id)
+    return via ? "Connected over " + root.viaName(via) : "Last seen " + root.ago(p.lastSeen)
+  }
 
   // ---- vocabulary (auren vocab) -----------------------------------------------------------------
   // The user's own boost words. `auren vocab` checks them against the built-in list and tells the daemon,
@@ -537,16 +647,19 @@ Panel {
     { label: "Voice", icon: "󰗋" },
     { label: "Brain", icon: "󰧑" },
     { label: "Vocabulary", icon: "󰈙" },
+    { label: "Phone", icon: "󰄜" },
     { label: "Updates", icon: "󰚰" }
   ]
   property int page: 0
   function showPage(p) {
     page = Math.max(0, Math.min(pages.length - 1, p))
     confirmingUpdate = false
+    unpairAsk = ""
     pagesBox.contentY = 0
     keyCatcher.forceActiveFocus()
     if (page === 4) { vocabMessage = ""; loadVocab() }
-    if (page === 5) checkIfStale()
+    if (page === 5) loadPhones()
+    if (page === 6) checkIfStale()
   }
 
   // Each page is rows of controls: { n: how many across, act(col), adjust(dx) for sliders }; the footer
@@ -577,6 +690,9 @@ Panel {
       { n: 2, act: function(c) { if (c === 0) vocabField.forceActiveFocus(); else root.addVocab() } }
     ].concat(root.vocabMine.length ? [{ n: root.vocabMine.length, act: function(c) { root.removeVocab(root.vocabMine[c]) } }] : [])
     if (page === 5) return [
+      { n: root.pairActions.length, act: function(c) { root.runAction(root.pairActions, c) } }
+    ].concat(root.phones.length ? [{ n: root.phones.length, act: function(c) { root.unpair(root.phones[c].id) } }] : [])
+    if (page === 6) return [
       { n: root.updateActions.length, act: function(c) { root.runAction(root.updateActions, c) } },
       { n: 1, act: function() { panelPrefs.notifyUpdates = !panelPrefs.notifyUpdates; panelPrefsFile.writeAdapter() } }]
     return [{ n: 1, act: function() { root.talk() } }]
@@ -757,7 +873,7 @@ Panel {
               required property int index
               width: nav.width
               leftAlign: true
-              text: modelData.label + (index === 5 && root.updateAvailable ? "  ●" : "")
+              text: modelData.label + (index === 6 && root.updateAvailable ? "  ●" : "")
               iconText: modelData.icon
               iconSize: Style.font.body
               selected: root.page === index
@@ -788,8 +904,9 @@ Panel {
           readonly property real tallest: Math.max(homePage.implicitHeight, mascotPage.implicitHeight,
                                                    voicePage.implicitHeight, brainPage.implicitHeight,
                                                    Math.min(vocabPage.implicitHeight, Style.space(380)),
+                                                   Math.min(phonePage.implicitHeight, Style.space(420)),
                                                    updatesPage.implicitHeight)
-          contentHeight: [homePage, mascotPage, voicePage, brainPage, vocabPage, updatesPage][root.page].implicitHeight
+          contentHeight: [homePage, mascotPage, voicePage, brainPage, vocabPage, phonePage, updatesPage][root.page].implicitHeight
 
           // ---------------- Home ----------------
           Column {
@@ -1374,12 +1491,175 @@ Panel {
             Caption { text: root.vocabDefaults.join(", ") }
           }
 
+          // ---------------- Phone ----------------
+          Column {
+            id: phonePage
+            width: parent.width
+            spacing: Style.space(12)
+            visible: root.page === 5
+
+            SectionTitle { text: "PHONE" }
+            Caption { text: "Talk to Auren from the Auren app on your Android phone: on this Wi-Fi, or anywhere over Tailscale." }
+
+            Card {
+              implicitHeight: phoneStatusText.implicitHeight + Style.space(20)
+              Text {
+                id: phoneStatusText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.phoneStatus
+                color: root.fg
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.Wrap
+              }
+            }
+            Caption {
+              visible: root.tailscaleWarn !== ""
+              text: root.tailscaleWarn
+              color: Color.accent
+            }
+
+            Choice {
+              width: parent.width
+              title: "PAIR"
+              options: root.asOptions(root.pairActions)
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(0) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.pairActions, i) }
+              onHoveredIndex: function(i) { root.hover(0, i) }
+            }
+            Caption {
+              visible: root.pairStage === "starting"
+              text: "Opening a pairing…"
+            }
+            Row {         // the QR code, while it works
+              width: parent.width
+              spacing: Style.space(14)
+              visible: root.pairStage === "showing" && !!root.pairing.qr
+              Rectangle {
+                id: qrBox
+                width: Style.space(176)
+                height: width
+                radius: Style.cornerRadius
+                color: "white"
+                Image {
+                  anchors.fill: parent
+                  anchors.margins: Style.space(4)
+                  // the same path each time: the expiry in the URL makes a new code a new image
+                  source: root.pairing.qr ? "file://" + root.pairing.qr + "?" + root.pairing.expires : ""
+                  cache: false
+                  smooth: false
+                  fillMode: Image.PreserveAspectFit
+                }
+              }
+              Column {
+                width: parent.width - qrBox.width - parent.spacing
+                spacing: Style.space(6)
+                Text {
+                  width: parent.width
+                  text: "Scan it in the Auren app (Pair)."
+                  color: root.fg
+                  font.family: root.font
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  wrapMode: Text.Wrap
+                }
+                Caption {
+                  text: "It works once, for " + Math.floor(root.pairLeft / 60) + ":" + ("0" + root.pairLeft % 60).slice(-2)
+                        + " more, from a phone on "
+                        + (root.pairing.where || []).map(function(a) { return root.viaName(a.via) + " (" + a.ip + ")" }).join(" or ")
+                        + "."
+                }
+                Caption {
+                  visible: !!root.pairing.warn
+                  text: root.pairing.warn || ""
+                  color: Color.accent
+                }
+              }
+            }
+            Text {
+              width: parent.width
+              visible: root.pairNote !== "" && root.pairStage !== "showing" && root.pairStage !== "starting"
+              text: root.pairNote
+              color: root.pairStage === "paired" ? root.fg : Color.accent
+              wrapMode: Text.WordWrap
+              font.family: root.font
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            PanelSectionHeader {
+              text: (root.has(1) ? "› " : "") + "PAIRED PHONES · " + root.phones.length
+              foreground: root.fg
+              fontFamily: root.font
+            }
+            Caption {
+              visible: root.phones.length === 0
+              text: "None yet. Install the Auren app on your phone, then pair it here."
+            }
+            Repeater {
+              model: root.phones
+              Card {
+                id: phoneRow
+                required property var modelData
+                required property int index
+                hot: root.has(1, index)
+                implicitHeight: Math.max(phoneText.implicitHeight, unpairButton.implicitHeight) + Style.space(16)
+                Column {
+                  id: phoneText
+                  anchors.left: parent.left
+                  anchors.right: unpairButton.left
+                  anchors.margins: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(2)
+                  Text {
+                    width: parent.width
+                    text: phoneRow.modelData.name
+                    color: root.fg
+                    font.family: root.font
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width
+                    text: root.phoneDetail(phoneRow.modelData) + " · paired " + root.ago(phoneRow.modelData.created)
+                    color: root.connectedVia(phoneRow.modelData.id) ? root.accent : root.dim
+                    font.family: root.font
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+                Button {
+                  id: unpairButton
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.unpairAsk === phoneRow.modelData.id ? "Unpair? Click again" : "Unpair"
+                  iconText: "󰅖"
+                  iconSize: Style.font.body
+                  fontSize: Style.font.bodySmall
+                  foreground: root.fg
+                  fontFamily: root.font
+                  bordered: true
+                  selected: root.unpairAsk === phoneRow.modelData.id
+                  hasCursor: root.has(1, phoneRow.index)
+                  tooltipText: "It stops working at once; it has to pair again to come back"
+                  onClicked: root.unpair(phoneRow.modelData.id)
+                  onHovered: function(h) { if (h) root.hover(1, phoneRow.index) }
+                }
+              }
+            }
+          }
+
           // ---------------- Updates ----------------
           Column {
             id: updatesPage
             width: parent.width
             spacing: Style.space(12)
-            visible: root.page === 5
+            visible: root.page === 6
 
             SectionTitle { text: "UPDATES" }
 
@@ -1528,7 +1808,7 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.showPage(5)
+                onClicked: root.showPage(6)
               }
             }
           }
