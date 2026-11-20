@@ -2,7 +2,7 @@
 
 It imports every module (so each Linux module's switch to its mac/ counterpart runs, with the Mac
 dependencies), checks the switches took, builds Auren.app and runs Python through its launcher, and starts
-the mascot's host for a few seconds to see mac.qml and mac-setup.qml load. All in throwaway folders.
+the mascot's host for a few seconds to see mac.qml, mac-setup.qml and mac-phone.qml load. All in throwaway folders.
 Nothing needs a permission: no microphone, keys or screen.
 """
 

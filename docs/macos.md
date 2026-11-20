@@ -74,10 +74,30 @@ Updating Auren's Python code never touches it. The icon is the Auren robot, rend
 Press **Control+Option+A** anywhere and talk; press it again to send (or let auto-send do it). The
 robot sits in a corner of the screen and floats over every Space; drag it anywhere and scroll on it
 to resize it. Its menu bar icon has the same controls as Omarchy's bar plugin: talk, stop, voice,
-brain, safety level, mascot, and the setup window.
+brain, safety level, mascot, the setup window, and the Phone window.
 
 `auren config set keys.talk cmd+shift+space` (and `keys.talk_fresh`) changes the keys; the daemon
 picks them up without a restart.
+
+## Your phone
+
+The Android app works with Auren on a Mac as it does on Omarchy ([Phone remote](phone.md)).
+
+1. Menu bar icon → **Phone…**. Click **Get the app** and scan the QR code with your phone's camera,
+   then open the download (Android asks once to allow installs from your browser).
+2. Click **Pair a phone**, and in the app tap **Pair** and scan the QR code. The window shows how long
+   the code still works; **Cancel** ends it at once.
+3. The paired phones are listed below, with **Unpair**.
+
+The phone reaches the Mac on the same Wi-Fi. To use it from anywhere, install
+[Tailscale](https://tailscale.com/download/mac) on both and turn it on from its menu bar icon.
+
+**The firewall.** If the macOS firewall is on (System Settings → Network → Firewall), macOS asks once,
+when Auren first listens for a phone, whether **python3.x** (Auren's Python; it may say **Auren**) may
+accept incoming network connections. Click **Allow**. If you clicked Deny, open Firewall → **Options**,
+find it in the list and choose **Allow incoming connections**. With **Block all incoming connections**
+on, no phone can connect. `auren doctor` says which of these applies.
+
 ## How the pieces map
 
 | Omarchy | macOS |
@@ -88,6 +108,9 @@ picks them up without a restart.
 | Workspaces | Spaces, switched with Control+arrows (no API to move windows between Spaces) |
 | `grim` + `ydotool`/`wtype` | `screencapture` + Quartz mouse and key events |
 | `wl-copy` / `wl-paste` | NSPasteboard |
+| `ip addr`, `/sys/class/net` (the phone's addresses) | `ifconfig` and `networksetup -listallhardwareports` |
+| `ufw` (the phone's port) | The Application Firewall, which asks once per program |
+| The bar panel's Phone page | The menu bar icon's Phone window (`mascot/mac-phone.qml`) |
 | systemd user units | launch agents, running through Auren.app |
 | Quickshell mascot + bar plugin | `mascot/mac.qml` in a PySide6 host + a menu bar icon |
 | `notify-send`, the OSD | Notification Center (`osascript`) |

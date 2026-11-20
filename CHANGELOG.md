@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **The phone remote on macOS.** Pair the Android app from the menu bar icon's new **Phone…** window
+  (Get the app, Pair a phone with its QR code, the paired phones with Unpair), or with `auren phone
+  pair` in Terminal. Auren listens on the Mac's Wi-Fi or Ethernet address and on Tailscale (the Mac app
+  or Homebrew's), and `auren doctor` checks the macOS firewall instead of ufw: when the firewall is on,
+  macOS asks once whether Auren's Python may accept incoming connections. Click Allow. See
+  [docs/macos.md](docs/macos.md#your-phone).
+
 ### Changed
 
 - The browser tools click and type with real input in the page, not script events, so `browser_type`

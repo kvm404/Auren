@@ -33,9 +33,9 @@ class Check:
     fix: str = ""
 
 
-def _run(cmd: list[str], timeout: float = 5) -> tuple[int, str]:
+def _run(cmd: list[str], timeout: float = 5, env: dict | None = None) -> tuple[int, str]:
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         return p.returncode, (p.stdout or p.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 1, str(e)
@@ -239,7 +239,7 @@ def _shared(svc: str | None, mac: bool = False) -> list[Check]:
                         else "add a udev rule giving your user access to /dev/uinput (see README)")}
     for name, i in integrations.INTEGRATIONS.items():
         if name == "phone":
-            continue                     # its own group (Omarchy only, for now)
+            continue                     # its own group (phone_checks)
         if mac and name == "screen":        # its Accessibility check runs here, in the terminal: the Permissions
             continue                        # section has the daemon's own
         st, why = integrations.state(name)
@@ -282,6 +282,7 @@ def phone_checks() -> list[Check]:
     from . import phone
     from .settings import current as settings
     g = "Phone"
+    mac = sys.platform == "darwin"
     conf = settings()
     if conf["phone.enabled"] is False:
         return [Check(g, "phone remote", OK, "turned off")]
@@ -295,7 +296,9 @@ def phone_checks() -> list[Check]:
         g, "Tailscale", WARN, f"{why_ts}: the phone works only on the same Wi-Fi"
         + ("" if "installed" in why_ts or phone.known_tailscale() else " for now (phones learn the Tailscale address"
            " the next time they connect after it's on)"),
-        "install Tailscale (omarchy install tailscale) and run: tailscale up" if "installed" in why_ts else "tailscale up"))
+        ("install Tailscale (tailscale.com/download/mac, or the App Store) and turn it on" if mac else
+         "install Tailscale (omarchy install tailscale) and run: tailscale up") if "installed" in why_ts
+        else phone.tailscale_up()))
     lan_ips = [ip for ip, via in addrs if via == "lan"]
     if not lan:
         out.append(Check(g, "Wi-Fi/LAN", OK, "off (phone.lan = false): Tailscale only"))
@@ -304,9 +307,15 @@ def phone_checks() -> list[Check]:
             g, "Wi-Fi/LAN", WARN, f"{missing.get('lan', 'none')}: the phone works only over Tailscale", ""))
     if not addrs:
         out.append(Check(g, "phone server", FAIL if wanted else WARN, "nowhere to listen: no Tailscale and no Wi-Fi/LAN",
-                         "tailscale up, or join a Wi-Fi network"))
+                         f"{phone.tailscale_up()}, or join a Wi-Fi network"))
     st = phone.status()
-    daemon_up = _run(["systemctl", "--user", "is-active", "auren"])[1] == "active" or st.get("pid")
+    if mac:
+        from .mac import service
+        daemon_up = service.running("daemon") or st.get("pid")
+        restart, start = "auren service restart", "auren service start"
+    else:
+        daemon_up = _run(["systemctl", "--user", "is-active", "auren"])[1] == "active" or st.get("pid")
+        restart, start = "systemctl --user restart auren", "systemctl --user start auren"
     if st.get("on"):
         for a in st.get("addrs") or []:
             path = "Tailscale" if a.get("via") == "tailscale" else "Wi-Fi/LAN"
@@ -315,16 +324,22 @@ def phone_checks() -> list[Check]:
         if st.get("fp"):
             out.append(Check(g, "certificate", OK, f"self-signed, pinned by the app (SHA-256 {st['fp'][:16]}…)"))
     elif st.get("idle") and not phone.devices():
-        out.append(Check(g, "phone server", OK, "not listening until a phone is paired (auren phone pair starts it)"))
+        out.append(Check(g, "phone server", OK, "not listening until a phone is paired (pairing one starts it)"))
     elif addrs:
         out.append(Check(g, "phone server", WARN, st.get("why") or "the Auren daemon isn't running",
-                         "systemctl --user restart auren" if daemon_up else "systemctl --user start auren"))
-    if addrs and (fw := firewall_check(int(conf.get("phone.port") or 8735), lan_ips, bool(ts))):
+                         restart if daemon_up else start))
+    if mac:
+        from .mac.doctor import firewall_check as mac_firewall
+        fw = mac_firewall(int(conf.get("phone.port") or 8735)) if addrs else None
+    else:
+        fw = firewall_check(int(conf.get("phone.port") or 8735), lan_ips, bool(ts)) if addrs else None
+    if fw:
         out.append(fw)
     paired = phone.devices()
     out.append(Check(g, "paired phones", OK if paired else WARN,
                      ", ".join(f"{d['name']} ({d['id']})" for d in paired) or "none: send_to_phone is left out",
-                     "" if paired else "auren phone pair"))
+                     "" if paired else "menu bar icon → Phone… → Pair a phone, or auren phone pair" if mac
+                     else "auren phone pair"))
     return out
 
 
@@ -381,7 +396,10 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
 
 def _tailscale_lets_in() -> bool:
     """Does Tailscale's own firewall rule (ts-input: accept all on tailscale0) run ahead of ufw's?"""
-    code, out = _run(["tailscale", "debug", "prefs"])
+    from . import phone
+    cmd = [phone.tailscale_cli() or "tailscale", "debug", "prefs"]
+    env = phone.tailscale_env()            # the Mac app's binary is the CLI only with TAILSCALE_BE_CLI=1
+    code, out = _run(cmd, env=env) if env else _run(cmd)
     try:
         return code == 0 and json.loads(out).get("NetfilterMode") == 2      # 2: on (1: nodivert, 0: off)
     except (ValueError, AttributeError):

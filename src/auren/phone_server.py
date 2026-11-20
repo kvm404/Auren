@@ -31,6 +31,7 @@ import mimetypes
 import os
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from collections import OrderedDict, deque
@@ -369,10 +370,14 @@ class Hub:
                 path.unlink(missing_ok=True)
             return status
         if action == "clipboard":
-            if kind == "image":
-                await asyncio.to_thread(subprocess.run, ["wl-copy", "--type", mime], input=data, check=True, timeout=5)
-            else:                               # exactly as shared: code and documents keep their spaces
-                await asyncio.to_thread(subprocess.run, ["wl-copy"], input=text.encode(), check=True, timeout=5)
+            from .hands import clipboard  # wl-copy, or the Mac's pasteboard
+            try:
+                if kind == "image":
+                    await asyncio.to_thread(clipboard.copy, data, mime, False)
+                else:                           # exactly as shared: code and documents keep their spaces
+                    await asyncio.to_thread(clipboard.copy, text.encode(), None, False)
+            except clipboard.ClipboardError as e:
+                return f"error: {e}"[:200]
             return "ok"
         # open on the PC
         if kind == "link":
@@ -442,6 +447,8 @@ def shared_ask(kind: str, text: str, note: str) -> str:
 
 
 def _downloads_dir() -> Path:
+    if sys.platform == "darwin":            # no xdg-user-dir there: Finder's Downloads is always this one
+        return Path.home() / "Downloads"
     try:
         out = subprocess.run(["xdg-user-dir", "DOWNLOAD"], capture_output=True, text=True, timeout=3).stdout.strip()
     except (OSError, subprocess.SubprocessError):

@@ -117,10 +117,10 @@ If something doesn't work, run `auren doctor`.
 The Auren app for Android talks to the Auren on your PC. Your phone is the microphone and the screen;
 the PC does the work, with the same brain, tools and safety level as at the desk.
 
-1. On the PC, open the bar panel's **Phone** page, click **Get the app** and scan the QR code with your
-   phone's camera. Open the download. Android asks once to allow installs from your browser. (Or get
+1. On the PC, open the bar panel's **Phone** page (on a Mac: the menu bar icon → **Phone…**), click
+   **Get the app** and scan the QR code with your phone's camera. Open the download. Android asks once to allow installs from your browser. (Or get
    `auren-phone-X.Y.Z.apk` from the [latest release](https://github.com/kvm404/Auren/releases/latest).)
-2. On the same page, click **Pair a phone**.
+2. On the same page (or window), click **Pair a phone**.
 3. In the app, tap **Pair** and scan the QR code.
 
 The phone reaches the PC on the same Wi-Fi. To use it away from home, install
@@ -138,9 +138,9 @@ In the app:
   reads replies aloud. The phone speaks in the same voice as the PC, on its own CPU.
 - The **inbox** keeps what Auren sends you: links, text, images and files.
 
-Auren handles one request at a time, from the desk or the phone. The phone remote works with Auren on
-Omarchy; the Mac gets it in a later release. [Phone remote](docs/phone.md) has the details, including
-the firewall, the commands and the protocol.
+Auren handles one request at a time, from the desk or the phone. [Phone remote](docs/phone.md) has the
+details, including the firewall (ufw on Omarchy, the macOS firewall on a Mac), the commands and the
+protocol.
 
 <br clear="right">
 

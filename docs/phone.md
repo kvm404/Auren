@@ -4,8 +4,8 @@ The Android app (`android/`) is a remote for the Auren on your PC: talk or type 
 see what it's doing, answer its questions, stop it, and get what it sends you. The PC does all the work;
 the phone is a microphone, a screen and a few buttons. The plan behind it is [phone-plan.md](phone-plan.md).
 
-It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren phone` says so, and
-`send_to_phone` isn't offered); it comes in a later release.
+It works with Auren on Omarchy and on macOS. On a Mac the pairing is in the menu bar icon's **Phone…**
+window instead of the bar panel, and the firewall is macOS's own: see [On macOS](#on-macos).
 
 ## Setting it up
 
@@ -25,6 +25,8 @@ It works with Auren on Omarchy. On macOS the phone remote is off for now (`auren
    sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
    sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
    ```
+
+   On a Mac, see [On macOS](#on-macos) for its firewall.
 3. Install the app: on the bar panel's **Phone** page, click **Get the app** and scan the QR code with the
    phone's camera (or run `auren phone app` in a terminal). It downloads `auren-phone-X.Y.Z.apk` for the
    Auren you have, from its GitHub release; a build that isn't a release links to the
@@ -65,6 +67,34 @@ The server checks its addresses every 5 s and moves with them (a new Wi-Fi, Tail
 none it stays off. `auren config set` for any of these takes effect on the next reload: the server
 starts, stops, or moves to the new port, and phones connected to the old one are dropped. `send_to_phone` and its prompt rule are offered to the brain only while at least one phone is
 paired (pairing or revoking the last phone starts a fresh conversation so the brain's tools match).
+
+## On macOS
+
+- **Pairing**: the menu bar icon → **Phone…** opens a window with what the bar panel's Phone page has:
+  where Auren listens (and a note when Tailscale is off), **Get the app**, **Pair a phone** with its QR
+  code and countdown (**Cancel**, or closing the window, ends the code at once), and the paired phones
+  with **Unpair**. It runs `auren phone pair --json` with Auren's own Python and reads the same files.
+  The `auren phone` commands work in Terminal too.
+- **Addresses**: Wi-Fi and Ethernet (a USB or Thunderbolt adapter, an iPhone over USB) come from
+  `ifconfig`, kept only on the interfaces `networksetup -listallhardwareports` lists (if it doesn't
+  answer, only `en0`, `en1`...). Tunnels (`utun`,
+  which is also Tailscale's), bridges (the Thunderbolt Bridge, Internet Sharing, VMs), AirDrop
+  (`awdl`, `llw`) and link-local `169.254` addresses are left out, as on Omarchy.
+- **Tailscale**: the Mac app (from the App Store or tailscale.com) or Homebrew's `tailscale`. Auren
+  finds its command in your PATH, in Homebrew's folders, or inside Tailscale.app, so the standalone app
+  needs no CLI installed (it's run with `TAILSCALE_BE_CLI=1`, which that binary needs to act as the
+  CLI). Turn Tailscale on from its menu bar icon.
+- **The firewall**: macOS's Application Firewall (System Settings → Network → Firewall) is off unless
+  you turned it on. When it's on, the first time Auren listens for a phone (when you pair one) macOS
+  asks whether **python3.x** (or **Auren**) may "accept incoming network connections". Click **Allow**.
+  If you clicked Deny, or the phone can't connect: System Settings → Network → Firewall → **Options**,
+  find python3.x or Auren in the list (add it with **+** if it isn't there) and set it to **Allow
+  incoming connections**. **Block all incoming connections** stops every phone, whatever the list says.
+  `auren doctor`'s Phone section asks the firewall (`socketfilterfw`) and says which of these it is: it
+  says allowed only when the firewall is off or its list of apps allows Auren's Python or Auren.app. A
+  reinstall that brings a new Python can make macOS ask again.
+- **Downloads and the clipboard**: an image shared to Auren is saved in `~/Downloads`; the PC clipboard
+  action uses the Mac's pasteboard (an image goes on as PNG), and Open on PC uses `open`.
 
 ## How a phone turn works
 
@@ -156,7 +186,7 @@ Share text, a link or an image from any Android app to Auren, then pick:
 | Action | On the PC |
 |---|---|
 | Ask Auren | A phone turn about it (an image is saved to Downloads and its path given to the brain) |
-| PC clipboard | Copied with `wl-copy` |
+| PC clipboard | Copied with `wl-copy` (on a Mac, the pasteboard; an image as PNG) |
 | Open on PC | A link opens in the browser, an image in the viewer, text shows as a notification |
 
 ## Protocol (API v1)
