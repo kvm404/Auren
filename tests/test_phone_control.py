@@ -63,6 +63,14 @@ def test_the_screen_is_untrusted_and_its_items_can_be_named_by_words(rt, ph):
     assert call(rt, "phone_tap", {"target": "Dad"}).startswith("error: nothing called 'Dad'")
 
 
+def test_words_name_a_text_field_before_other_items_that_mention_them():
+    android._items.clear()
+    android._items.update({"8": {"label": "Photo · reaction on previous message", "field": False, "search": False},
+                           "12": {"label": "Message box", "field": True, "search": False}})
+    assert android.item("message")[0] == "12"
+    android._items.clear()
+
+
 def test_a_risky_tap_asks_first_and_checks_the_item_is_still_there(rt, ph):
     rt.set_level("ask")
     call(rt, "phone_screen")

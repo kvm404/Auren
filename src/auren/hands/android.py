@@ -53,7 +53,8 @@ def _call(action: str, **args) -> str:
 
 def item(target: str) -> tuple[str, dict] | None:
     """The numbered item `target` names, from the last screen: its number, or words of its label (the first,
-    best match: whole label, then words in it). None if the last screen has none."""
+    best match: whole label, then words in it; a text field before anything else at each step, so "Message"
+    is the message box, not a chat bubble that mentions a message). None if the last screen has none."""
     t = target.strip()
     with _lock:
         if t.lstrip("[").rstrip("]") in _items:
@@ -61,7 +62,7 @@ def item(target: str) -> tuple[str, dict] | None:
             return n, _items[n]
         low = t.lower()
         for match in (lambda lab: lab == low, lambda lab: low in lab):
-            for n, it in _items.items():
+            for n, it in sorted(_items.items(), key=lambda kv: not kv[1]["field"]):
                 if it["label"] and match(it["label"].lower()):
                     return n, it
     return None

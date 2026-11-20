@@ -290,7 +290,9 @@ class HandsService : AccessibilityService() {
             inside = name
             val kind = kind(n)
             val state = buildList {
-                if (n.isEditable) n.text?.toString()?.takeIf { it.isNotBlank() && it != own }?.let { add("holds “${it.take(80)}”") }
+                if (n.isEditable && !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && n.isShowingHintText)) {
+                    n.text?.toString()?.takeIf { it.isNotBlank() && it != own }?.let { add("holds “${it.take(80)}”") }
+                }
                 if (n.isCheckable) add(if (n.isChecked) "on" else "off")
                 if (n.isScrollable) add(more(n))
                 if (n.isFocused) add("focused")
@@ -300,11 +302,24 @@ class HandsService : AccessibilityService() {
             out.line("[$number] $shown${if (state.isEmpty()) "" else " (${state.joinToString()})"}")
             out.items.put(JSONObject().put("n", number).put("label", name).put("field", n.isEditable)
                 .put("search", n.isEditable && searchy(n)))
-            if (own.isBlank() && !n.isScrollable) return       // its words are its name now; don't list them twice
+            // Its words are its name now: don't list them twice, unless something inside acts on its own (a
+            // chat's message box and buttons sit inside one tappable bar), which needs its own number.
+            if (own.isBlank() && !n.isScrollable && !holdsActionable(n)) return
         } else if (own.isNotBlank() && own != above) {
             out.line(own.take(300))
         }
         for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, out, depth + 1, inside) }
+    }
+
+    private fun holdsActionable(n: AccessibilityNodeInfo, depth: Int = 0): Boolean {
+        if (depth > 12) return false
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            if (!c.isVisibleToUser) continue
+            if (c.isClickable || c.isLongClickable || c.isEditable || c.isCheckable || c.isScrollable) return true
+            if (holdsActionable(c, depth + 1)) return true
+        }
+        return false
     }
 
     /**
@@ -329,7 +344,9 @@ class HandsService : AccessibilityService() {
     }
 
     private fun label(n: AccessibilityNodeInfo): String {
-        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) n.hintText?.toString() else null
+        // An empty field may report its placeholder as its text: that is its name, not what it holds.
+        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            n.hintText?.toString() ?: n.text?.toString()?.takeIf { n.isShowingHintText } else null
         val text = if (n.isEditable) null else n.text?.toString()
         return listOfNotNull(text, n.contentDescription?.toString(), if (n.isEditable) hint else null,
             if (n.isEditable && hint == null) n.viewIdResourceName?.substringAfterLast('/') else null)
