@@ -6,7 +6,7 @@
 
 - A phone remote: an Android app (`android/`) that talks to Auren on your PC over the same Wi-Fi or
   Tailscale. Hold to talk, type, or turn on hands-free for a live conversation (after each reply it
-  listens again, until you go quiet for 12 s or tap it off); see what Auren is doing and its replies (read
+  listens again, until you go quiet for 12 s or tap it off, and it keeps going with the screen off); see what Auren is doing and its replies (read
   aloud on the phone if you like); answer its questions and stop it; get the links, text, images and
   files it sends with the new `send_to_phone` tool; share from any app to Auren, the PC's clipboard or
   the PC's browser; start a fresh conversation (which clears the phone's chat), pick who answers (Auto, Claude, Codex)

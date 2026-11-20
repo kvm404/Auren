@@ -3,6 +3,7 @@ package app.auren.phone
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -86,6 +87,18 @@ private fun App(pairLink: String?, pairLinkUsed: () -> Unit) {
     val askMic: (() -> Unit) -> Unit = { action ->
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) action()
         else askMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    // Hands-free keeps going with the screen off, shown by a notification with an End button. Android 13+ asks
+    // before an app may show one: ask when it first goes on (Android itself stops asking after two refusals).
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val conversation by Remote.conversation.collectAsStateWithLifecycle()
+    LaunchedEffect(conversation) {
+        if (conversation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     BackHandler(screen == Screen.INBOX || screen == Screen.SETTINGS || (screen == Screen.PAIR && Remote.store.pc != null)) {

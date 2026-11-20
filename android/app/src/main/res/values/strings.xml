@@ -3,4 +3,9 @@
     <string name="app_name">Auren</string>
     <string name="share_label">Auren</string>
     <string name="tile_label">Auren</string>
+    <string name="handsfree_channel">Hands-free</string>
+    <string name="handsfree_channel_about">Shows while a hands-free conversation keeps going with the screen off</string>
+    <string name="handsfree_on">Hands-free on</string>
+    <string name="handsfree_on_about">Auren listens after each reply. It ends when you go quiet.</string>
+    <string name="handsfree_end">End</string>
 </resources>

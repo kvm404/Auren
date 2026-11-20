@@ -82,8 +82,15 @@ paired (pairing or revoking the last phone starts a fresh conversation so the br
   the PC is idle), the app opens the microphone again by itself, so you can keep talking back and forth. A
   yes/no question doesn't stop it: say "yes" or "no". It turns off when you tap Hands-free again or Stop,
   when a listen hears nothing for 12 s, when the PC is busy at the desk, on an error, or when the link
-  drops or the app leaves the screen. The app says why ("Hands-free off: you went quiet"). The decision
-  is `listenNext` in `android/.../Conversation.kt`.
+  drops. The app says why ("Hands-free off: you went quiet"). The decision is `listenNext` in
+  `android/.../Conversation.kt`.
+- **It keeps going with the screen off**, or with another app in front, like a call. While it's on, a
+  foreground service (`ConversationService`, type microphone) keeps the link and the microphone, and a
+  partial wake lock keeps the CPU awake between turns. A "Hands-free on" notification shows it, with an
+  **End** button (Android 13 and newer ask once to allow notifications). The service stops the moment the
+  mode goes off. Hold-to-talk still stops when the app leaves the screen. Some phones (Vivo, Xiaomi and
+  others) close background apps hard: if hands-free stops with the screen off, allow Auren to run in the
+  background in the phone's battery settings.
 - **Fresh** (Home's top bar, or Settings) starts a fresh conversation on the PC and clears the phone's
   chat. A request still waiting is dropped: its reply isn't shown or read aloud. The inbox stays.
 - The brain is told the request came from the phone, so it keeps replies short and uses `send_to_phone`

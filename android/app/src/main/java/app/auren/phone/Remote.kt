@@ -579,6 +579,7 @@ object Remote {
         if (_conversation.value) return false
         if (!talkStart(handsFree = true)) return false
         _conversation.value = true
+        ConversationService.start(app)          // it keeps going with the screen off
         return true
     }
 

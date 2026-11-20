@@ -129,7 +129,7 @@ carries the Tailscale address too.
 In the app:
 
 - **Hold to talk**, or tap **Hands-free** for a live conversation that keeps listening after each reply.
-  It turns off when you tap it again or go quiet for a while.
+  It keeps going with the screen off, and turns off when you tap it again or go quiet for a while.
 - **Type** a request instead, and **Stop** Auren from either side.
 - Answer Auren's **Yes / No** questions, by tapping or by voice.
 - **Fresh** (the circular arrow) starts a new conversation and clears the chat.
