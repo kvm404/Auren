@@ -1,7 +1,7 @@
-"""The menu bar icon's Phone window on macOS (mascot/mac-phone.qml): what the bar panel's Phone page is on
+"""The Auren window's Phone page on macOS (in mascot/mac-window.qml): what the bar panel's Phone page is on
 Omarchy. Where Auren listens (and a note when Tailscale is off), Get the app (its download's QR code), Pair a
 phone (a one-time QR code with its countdown; Cancel ends the code at once) and the paired phones, each with
-Unpair.
+Unpair. The menu bar icon's Phone… opens the window on this page.
 
 It reads what the panel reads: the daemon's phone.json, and `auren phone devices`, `app`, `revoke` (called
 here in Python, on a thread when they take a lock or draw a QR code). Pairing runs `auren phone pair --json`
@@ -163,12 +163,11 @@ def background(fn, *args) -> None:
 
 
 def bridge(alive):
-    """The window's QObject (`phone` in mac-phone.qml). alive(): whether the daemon runs (the mascot knows)."""
+    """The page's QObject (`phone` in mac-window.qml). alive(): whether the daemon runs (the mascot knows)."""
     from PySide6.QtCore import Property, QObject, QProcess, QTimer, Signal, Slot
 
     class PhoneBridge(QObject):
         changed = Signal()
-        raiseWindow = Signal()
         _loaded = Signal("QVariant")           # from a thread: [what, result]
 
         def __init__(self):
@@ -187,7 +186,7 @@ def bridge(alive):
             self._unpair_ask = ""
             self._loaded.connect(self._take)
 
-        # ---- what the window shows -------------------------------------------------------------
+        # ---- what the page shows -------------------------------------------------------------
         @Property(bool, notify=changed)
         def open(self):
             return self._open
@@ -259,7 +258,7 @@ def bridge(alive):
 
         # ---- keeping up --------------------------------------------------------------------------
         def poll(self) -> None:
-            """phone.json and the daemon, every second while the window is open; the paired phones when
+            """phone.json and the daemon, every second while the page shows; the paired phones when
             phone.json changed (a phone came, went, or paired)."""
             if not self._open:
                 return
@@ -288,22 +287,22 @@ def bridge(alive):
                 self._devices = phone.device_rows()
             self.changed.emit()
 
-        # ---- the window ----------------------------------------------------------------------------
+        # ---- the page ----------------------------------------------------------------------------
         @Slot()
-        def openWindow(self) -> None:
+        def showPage(self) -> None:
+            """The Phone page is showing (the Auren window is open on it): keep up with phone.json."""
+            if self._open:
+                return
             self._open, self._stamp = True, None
             self.poll()
             self._load_devices()
-            self.raiseWindow.emit()
-            try:                                 # an accessory app has to bring itself forward
-                from AppKit import NSApplication
-                NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-            except Exception:  # noqa: BLE001 - not on macOS (tests)
-                pass
 
         @Slot()
-        def closeWindow(self) -> None:
-            """Closing the window ends a pairing that's showing (the code stops working), as the panel does."""
+        def hidePage(self) -> None:
+            """Leaving the page, or closing the window, ends a pairing that's showing (the code stops working),
+            as the panel does when it closes."""
+            if not self._open and self._proc is None:
+                return
             self.cancelPairing()
             self._open, self._app_shown, self._unpair_ask = False, False, ""
             self.changed.emit()

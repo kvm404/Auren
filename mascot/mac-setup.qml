@@ -1,15 +1,19 @@
 // Auren's setup window on macOS: the steps before Auren can work, each with its state and one button.
-// Hosted by src/auren/mac/mascot.py, next to mac.qml. `auren` gives it:
+// Hosted by src/auren/mac/mascot.py, next to mac.qml; its pieces are in mac/, shared with mac-window.qml.
+// Every step notices by itself when the user allows something (it checks about once a second, and again
+// when the window comes back to the front); a permission Auren can only use after a restart turns on by
+// itself too ("Turning on …"), and Restart shows only when that didn't work. `auren` gives it:
 //
 //   auren.setupOpen          whether the window shows          auren.setup   the steps (mac/setup.py check())
 //   auren.brainText          the brain row's line              auren.brainAction  "", "copy", "claude", "codex"
 //   auren.talkKey            ⌃⌥A
 //   auren.allow(name)        ask for a permission (microphone, accessibility, screen)
 //   auren.saveKey(text)      returns "" or why not             auren.useBrain(mode), auren.copyInstall()
-//   auren.restart(), auren.startDaemon(), auren.openUrl(url), auren.closeSetup()
+//   auren.restart(), auren.startDaemon(), auren.openUrl(url), auren.closeSetup(), auren.recheck()
 //   auren.raiseSetup               (signal) the window is asked for again while it's open: come forward
 import QtQuick
 import QtQuick.Window
+import "mac"
 import "mascots/auren"
 
 Window {
@@ -22,51 +26,16 @@ Window {
   minimumHeight: fit; maximumHeight: fit
   visible: auren.setupOpen
   onClosing: auren.closeSetup()
+  onActiveChanged: if (active) auren.recheck()         // back from System Settings: look again now
   Connections { target: auren; function onRaiseSetup() { if (w.visible) { w.raise(); w.requestActivate() } } }
-  color: pal.bg
+  color: Theme.bg
 
   readonly property var s: auren.setup
-  readonly property bool dark: Application.styleHints.colorScheme === Qt.ColorScheme.Dark
-  QtObject {
-    id: pal
-    readonly property color bg: w.dark ? "#1d1d1f" : "#f5f5f7"
-    readonly property color card: w.dark ? "#2a2a2d" : "#ffffff"
-    readonly property color line: w.dark ? "#3a3a3d" : "#e5e5ea"
-    readonly property color text: w.dark ? "#f5f5f7" : "#1d1d1f"
-    readonly property color dim: w.dark ? "#98989d" : "#6e6e73"
-    readonly property color field: w.dark ? "#1d1d1f" : "#f5f5f7"
-    readonly property color accent: "#D77757"
-    readonly property color ok: "#34C759"
-    readonly property color warn: "#FF9F0A"
-  }
+  readonly property var turning: s.turningOn || []
+  // Auren restarts by itself to turn something on: not "isn't running" while it's on its way back
+  readonly property bool up: s.running || s.starting === true
 
   // ---- pieces -----------------------------------------------------------------------------------
-  component Pill: Rectangle {
-    id: pill
-    property string label
-    property bool primary: false
-    signal clicked()
-    implicitWidth: t.implicitWidth + 28
-    implicitHeight: 28
-    radius: 14
-    color: primary ? (ma.pressed ? Qt.darker(pal.accent, 1.15) : pal.accent)
-                   : (ma.pressed ? pal.line : (w.dark ? "#3a3a3d" : "#e8e8ed"))
-    Text { id: t; anchors.centerIn: parent; text: pill.label; font.pixelSize: 13; font.weight: Font.Medium
-           color: pill.primary ? "white" : pal.text }
-    MouseArea { id: ma; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pill.clicked() }
-  }
-
-  component Mark: Rectangle {      // the step's state: done, needs you, optional
-    property string state: "todo"   // done, todo, optional
-    width: 22; height: 22; radius: 11
-    color: state === "done" ? pal.ok : "transparent"
-    border.width: state === "done" ? 0 : 1.5
-    border.color: state === "todo" ? pal.warn : pal.dim
-    Text { anchors.centerIn: parent; text: parent.state === "done" ? "✓" : parent.state === "todo" ? "!" : "–"
-           color: parent.state === "done" ? "white" : parent.state === "todo" ? pal.warn : pal.dim
-           font.pixelSize: 12; font.weight: Font.Bold }
-  }
-
   component Step: Item {
     id: step
     property string title
@@ -83,8 +52,8 @@ Window {
       x: 52; anchors.verticalCenter: parent.verticalCenter
       width: parent.width - x - slot.width - 32
       spacing: 3
-      Text { text: step.title; color: pal.text; font.pixelSize: 14; font.weight: Font.DemiBold }
-      Text { text: step.detail; color: pal.dim; font.pixelSize: 12; wrapMode: Text.WordWrap; width: parent.width
+      Text { text: step.title; color: Theme.text; font.pixelSize: 14; font.weight: Font.DemiBold }
+      Text { text: step.detail; color: Theme.dim; font.pixelSize: 12; wrapMode: Text.WordWrap; width: parent.width
              visible: text !== "" }
       Column { id: under; width: parent.width }
     }
@@ -93,12 +62,11 @@ Window {
       anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
       width: childrenRect.width; height: childrenRect.height
     }
-    Rectangle { visible: !step.last; x: 52; anchors.bottom: parent.bottom; width: parent.width - x; height: 1; color: pal.line }
+    Rectangle { visible: !step.last; x: 52; anchors.bottom: parent.bottom; width: parent.width - x; height: 1; color: Theme.line }
   }
 
   // ---- the window -------------------------------------------------------------------------------
-  Rectangle { anchors.fill: parent; color: pal.bg }
-  property bool screenAsked: false        // Screen Recording takes effect after a restart: offer one then
+  Rectangle { anchors.fill: parent; color: Theme.bg }
 
   Column {
     id: col
@@ -116,20 +84,20 @@ Window {
       Column {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 2
-        Text { text: w.s.ready && !w.s.restart ? "Auren is ready" : "Set up Auren"; color: pal.text; font.pixelSize: 22; font.weight: Font.Bold }
+        Text { text: w.s.ready && !w.s.restart ? "Auren is ready" : "Set up Auren"; color: Theme.text; font.pixelSize: 22; font.weight: Font.Bold }
         Text { text: w.s.ready && !w.s.restart ? "Press " + auren.talkKey + ", talk, and press it again to send."
                                : "A few things first. Each one takes a click."
-               color: pal.dim; font.pixelSize: 13 }
+               color: Theme.dim; font.pixelSize: 13 }
       }
     }
 
     // Auren isn't running: nothing below can be checked
     Rectangle {
-      visible: !w.s.running
+      visible: !w.up
       width: parent.width; height: 52; radius: 12
-      color: pal.card; border.color: pal.line
+      color: Theme.card; border.color: Theme.line
       Text { x: 16; anchors.verticalCenter: parent.verticalCenter; text: "Auren isn't running."
-             color: pal.text; font.pixelSize: 13 }
+             color: Theme.text; font.pixelSize: 13 }
       Pill { label: "Start Auren"; primary: true; anchors.right: parent.right; anchors.rightMargin: 12
              anchors.verticalCenter: parent.verticalCenter; onClicked: auren.startDaemon() }
     }
@@ -138,9 +106,9 @@ Window {
       width: parent.width
       height: steps.implicitHeight
       radius: 12
-      color: pal.card
-      border.color: pal.line
-      opacity: w.s.running ? 1 : 0.5
+      color: Theme.card
+      border.color: Theme.line
+      opacity: w.up ? 1 : 0.5
 
       Column {
         id: steps
@@ -148,25 +116,33 @@ Window {
 
         Step {
           title: "Microphone"
-          mark: w.s.microphone === "granted" ? "done" : "todo"
-          detail: w.s.microphone === "granted" ? "Auren can hear you." : "So Auren hears you after you press its key."
+          readonly property bool later: w.turning.indexOf("microphone") >= 0
+          mark: later ? "busy" : w.s.microphone === "granted" ? "done" : "todo"
+          detail: later ? "Allowed. Auren turns it on by itself in a moment."
+                  : w.s.microphone === "granted" ? "Auren can hear you." : "So Auren hears you after you press its key."
           Pill { visible: w.s.microphone !== "granted"; primary: true
                  label: w.s.microphone === "not asked" ? "Allow" : "Open Settings"
                  onClicked: auren.allow("microphone") }
         }
         Step {
           title: "Accessibility"
-          mark: w.s.accessibility ? "done" : "todo"
-          detail: w.s.accessibility ? "The talk key works, and Auren can click and type for you."
-                                    : "For the talk key, and to click and type for you. Turn Auren on in the list."
+          readonly property bool restarting: w.turning.indexOf("accessibility") >= 0
+          readonly property bool later: restarting || w.s.keysTurningOn === true
+          mark: later ? "busy" : w.s.accessibility ? "done" : "todo"
+          detail: restarting ? "Allowed. Auren restarts by itself to turn it on, once it isn't busy."
+                  : later ? "Allowed. Turning on the talk key…"
+                  : w.s.accessibility ? "The talk key works, and Auren can click and type for you."
+                  : "For the talk key, and to click and type for you. Turn Auren on in the list."
           Pill { visible: !w.s.accessibility; primary: true; label: "Allow"; onClicked: auren.allow("accessibility") }
         }
         Step {
           title: "Screen Recording"
-          mark: w.s.screen ? "done" : "optional"
-          detail: w.s.screen ? "Auren can see other apps when it needs to."
-                             : "Optional: lets Auren look at other apps' windows. Restart Auren after turning it on."
-          Pill { visible: !w.s.screen; label: "Allow"; onClicked: { w.screenAsked = true; auren.allow("screen") } }
+          readonly property bool later: w.turning.indexOf("screen") >= 0
+          mark: later ? "busy" : w.s.screen ? "done" : "optional"
+          detail: later ? "Allowed. Auren restarts by itself to turn it on, once it isn't busy."
+                  : w.s.screen ? "Auren can see other apps when it needs to."
+                  : "Optional: lets Auren look at other apps' windows. Turn Auren on in the list."
+          Pill { visible: !w.s.screen; label: "Allow"; onClicked: auren.allow("screen") }
         }
         Step {
           id: keyStep
@@ -187,15 +163,15 @@ Window {
             spacing: 8
             Rectangle {
               width: 240; height: 28; radius: 7
-              color: pal.field; border.color: input.activeFocus ? pal.accent : pal.line
+              color: Theme.field; border.color: input.activeFocus ? Theme.accent : Theme.line
               TextInput {
                 id: input
                 anchors.fill: parent; anchors.leftMargin: 9; anchors.rightMargin: 9
                 verticalAlignment: TextInput.AlignVCenter
-                echoMode: TextInput.Password; color: pal.text; font.pixelSize: 13; clip: true
+                echoMode: TextInput.Password; color: Theme.text; font.pixelSize: 13; clip: true
                 selectByMouse: true
                 onAccepted: save.clicked()
-                Text { anchors.verticalCenter: parent.verticalCenter; text: "Paste your API key"; color: pal.dim
+                Text { anchors.verticalCenter: parent.verticalCenter; text: "Paste your API key"; color: Theme.dim
                        font.pixelSize: 13; visible: input.text === "" && !input.activeFocus }
               }
             }
@@ -234,8 +210,9 @@ Window {
       Text {
         anchors.left: parent.left; anchors.right: buttons.left; anchors.rightMargin: 12
         anchors.verticalCenter: parent.verticalCenter
-        wrapMode: Text.WordWrap; font.pixelSize: 12; color: pal.dim
-        text: w.s.restart || (w.screenAsked && !w.s.screen) ? "Restart Auren to turn on what you allowed."
+        wrapMode: Text.WordWrap; font.pixelSize: 12; color: Theme.dim
+        text: w.s.restart ? "Auren couldn't turn on what you allowed by itself. Restart it to finish."
+            : w.s.turningText ? w.s.turningText
             : w.s.ready ? "Try: press " + auren.talkKey + " and say “open Safari”."
             : "Auren lives in the menu bar. Setup is there too."
       }
@@ -243,8 +220,7 @@ Window {
         id: buttons
         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
         spacing: 8
-        Pill { visible: w.s.restart || (w.screenAsked && !w.s.screen); label: "Restart Auren"; primary: w.s.restart
-               onClicked: auren.restart() }
+        Pill { visible: w.s.restart === true; label: "Restart Auren"; primary: true; onClicked: auren.restart() }
         Pill { label: w.s.ready ? "Done" : "Later"; primary: w.s.ready && !w.s.restart; onClicked: auren.closeSetup() }
       }
     }

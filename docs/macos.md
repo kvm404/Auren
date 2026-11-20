@@ -33,7 +33,7 @@ Python environment in `~/.local/share/auren`, downloads the voice model, builds 
 | Agent | Runs | Log |
 |---|---|---|
 | `com.auren.daemon` | `Auren daemon`: listening, the brain, the tools, the talk keys | `~/.local/state/auren/daemon.out.log` |
-| `com.auren.mascot` | `Auren mascot`: the robot, the menu bar icon, the setup window | `~/.local/state/auren/mascot.out.log` |
+| `com.auren.mascot` | `Auren mascot`: the robot, the menu bar icon, the setup window and the Auren window | `~/.local/state/auren/mascot.out.log` |
 
 Then it opens Auren, and Auren's setup window takes over: each step has one button.
 
@@ -41,12 +41,22 @@ Then it opens Auren, and Auren's setup window takes over: each step has one butt
 |---|---|
 | Microphone | **Allow**, then allow in the macOS prompt |
 | Accessibility | **Allow** opens the Settings list with Auren already in it: switch it on |
-| Screen Recording | Optional, the same way; Auren restarts to use it |
+| Screen Recording | Optional, the same way |
 | Speech to text | Paste an AssemblyAI key and **Save** |
 | Brain | Shows Claude Code or Codex; if neither is installed, copies the install command |
 
-The window comes back from the menu bar icon (**Set up Auren…**), from opening Auren.app in Finder or
-Spotlight, or with `auren open`. `auren doctor` checks the same things in a terminal.
+Each step notices by itself when you allow something in System Settings: there's nothing to restart.
+macOS lets a running program use the microphone or Screen Recording only from its next start (and can
+keep saying no to Accessibility after it was turned off and on again), so for those Auren checks with a
+new process, and when that one has the permission, Auren restarts itself as
+soon as it isn't busy. The window says **Turning on Screen Recording…** meanwhile. It restarts once per
+permission you allow; if that didn't turn it on, the window offers **Restart Auren** instead. The talk
+keys start by themselves once Accessibility is allowed, also when you allow it in the prompt macOS
+shows when Auren starts, with the setup window closed.
+
+The window comes back from the menu bar icon (**Set up Auren…**, marked while something needs you), or
+from opening Auren.app in Finder or Spotlight (or `auren open`) while setup isn't finished; once it is,
+opening Auren.app shows the Auren window instead. `auren doctor` checks the same things in a terminal.
 
 Until `auren setup` has run, `auren` only says to run it. Run it again any time: it keeps your
 settings, keys and voice model.
@@ -91,8 +101,28 @@ Updating Auren's Python code never touches it. The icon is the Auren robot, rend
 
 Press **Control+Option+A** anywhere and talk; press it again to send (or let auto-send do it). The
 robot sits in a corner of the screen and floats over every Space; drag it anywhere and scroll on it
-to resize it. Its menu bar icon has the same controls as Omarchy's bar plugin: talk, stop, voice,
-brain, safety level, mascot, the setup window, and the Phone window.
+to resize it.
+
+**The menu bar icon** says what Auren is doing, then has Talk, Fresh conversation and Stop (with their
+keys), Speak replies, Send when I stop talking, and the Voice, Brain, Safety and Mascot menus. Below
+them: **Open Auren…** (⌘,), **Phone…**, **Set up Auren…**, **Update to …** when a release is waiting,
+Restart Auren and Quit Auren.
+
+**The Auren window** has the pages of Omarchy's bar panel, in the look of System Settings:
+
+| Page | |
+|---|---|
+| Home | The mascot (click it to talk), what Auren is doing, a Yes/No when it asks, what setup still needs, quick switches, the last exchange |
+| Mascot | Auren or Veyra (each with its own voice, if you want), the speech bubble, the sleep animation, showing it, how faded it gets, its size and place |
+| Voice | Spoken replies, the voice, speed, volume, the pause between sentences, a test; Send when I stop talking and after how long |
+| Brain | Who answers (Auto, Claude, Codex), how hard it thinks, how much Auren asks before risky actions, today's numbers |
+| Vocabulary | Names and words Auren should listen for |
+| Phone | Pairing your phone ([below](#your-phone)) |
+| Updates | The waiting release and what's new, Update now, Check for updates, the notification |
+
+At the bottom of its sidebar: the settings file (`config.toml`, opened in your text editor), Auren's log
+(in Console) and Restart Auren. The window and the menu change the same settings, so each shows what
+the other changed.
 
 `auren config set keys.talk cmd+shift+space` (and `keys.talk_fresh`) changes the keys; the daemon
 picks them up without a restart.
@@ -101,10 +131,11 @@ picks them up without a restart.
 
 The Android app works with Auren on a Mac as it does on Omarchy ([Phone remote](phone.md)).
 
-1. Menu bar icon → **Phone…**. Click **Get the app** and scan the QR code with your phone's camera,
-   then open the download (Android asks once to allow installs from your browser).
-2. Click **Pair a phone**, and in the app tap **Pair** and scan the QR code. The window shows how long
-   the code still works; **Cancel** ends it at once.
+1. Menu bar icon → **Phone…** (the Auren window's Phone page). Next to **Get the app**, click **Show
+   code** and scan the QR code with your phone's camera, then open the download (Android asks once to
+   allow installs from your browser).
+2. Next to **Pair a phone**, click **Pair**, and in the app tap **Pair** and scan the QR code. The page
+   shows how long the code still works; **Cancel**, or leaving the page, ends it at once.
 3. The paired phones are listed below, with **Unpair**.
 
 The phone reaches the Mac on the same Wi-Fi. To use it from anywhere, install
@@ -128,7 +159,7 @@ on, no phone can connect. `auren doctor` says which of these applies.
 | `wl-copy` / `wl-paste` | NSPasteboard |
 | `ip addr`, `/sys/class/net` (the phone's addresses) | `ifconfig` and `networksetup -listallhardwareports` |
 | `ufw` (the phone's port) | The Application Firewall, which asks once per program |
-| The bar panel's Phone page | The menu bar icon's Phone window (`mascot/mac-phone.qml`) |
+| The bar panel (`omarchy-plugin/Panel.qml`) | The Auren window (`mascot/mac-window.qml`, its pieces in `mascot/mac/`) |
 | systemd user units | launch agents, running through Auren.app |
 | Quickshell mascot + bar plugin | `mascot/mac.qml` in a PySide6 host + a menu bar icon |
 | `notify-send`, the OSD | Notification Center (`osascript`) |

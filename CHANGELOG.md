@@ -10,14 +10,36 @@
   After a `brew upgrade` on its own, `auren` reminds you to run `auren setup`. Each release is published
   to the tap `kvm404/homebrew-auren` by a new `brew` workflow. Installing from a clone with
   `./install-macos.sh` still works. See [docs/macos.md](docs/macos.md).
-- **The phone remote on macOS.** Pair the Android app from the menu bar icon's new **Phone…** window
-  (Get the app, Pair a phone with its QR code, the paired phones with Unpair), or with `auren phone
-  pair` in Terminal. Auren listens on the Mac's Wi-Fi or Ethernet address and on Tailscale (the Mac app
+- **The phone remote on macOS.** Pair the Android app from the menu bar icon's **Phone…**, the Auren
+  window's Phone page (Get the app, Pair a phone with its QR code, the paired phones with Unpair), or
+  with `auren phone pair` in Terminal. Auren listens on the Mac's Wi-Fi or Ethernet address and on Tailscale (the Mac app
   or Homebrew's), and `auren doctor` checks the macOS firewall instead of ufw: when the firewall is on,
   macOS asks once whether Auren's Python may accept incoming connections. Click Allow. See
   [docs/macos.md](docs/macos.md#your-phone).
+- **The Auren window on macOS**, with the pages of Omarchy's bar panel in the look of System Settings,
+  light or dark: Home (the mascot, what Auren is doing, Yes/No, what setup still needs, quick switches,
+  the last exchange), Mascot, Voice, Brain, Vocabulary, Phone and Updates. Its sidebar also opens the
+  settings file, the log, and restarts Auren. Open it from the menu bar icon (**Open Auren…**, ⌘,) or by
+  opening Auren.app once setup is done. It and the menu change the same settings, so each shows what the
+  other changed. The separate Phone window is gone: **Phone…** opens this window's Phone page. See
+  [docs/macos.md](docs/macos.md#using-it).
 
 ### Changed
+
+- **macOS setup notices permissions by itself.** Allow the microphone, Accessibility or Screen Recording
+  in System Settings (or in macOS's own prompt) and Auren turns it on without a restart by hand: it checks with a new process (a running one
+  sees those only from its next start) and restarts itself once it isn't busy, while the setup window
+  says **Turning on Screen Recording…**. It restarts once per permission; if that didn't help, the window
+  offers **Restart Auren**. The talk keys start by themselves once Accessibility is allowed (with a restart
+  when macOS still tells the running Auren no, as after a reset), without the window asking for one. The window checks again when it comes back to the front, and
+  finds Claude Code or Codex installed after Auren (in `~/.local/bin` or `~/.claude/local`).
+  `auren doctor` says the same as the window. Taking Accessibility away while Auren runs (in System
+  Settings, or `tccutil reset`) turns the talk keys off instead of slowing the keyboard down, and they
+  come back once it's allowed again.
+- **A tidier menu bar menu on macOS**: what Auren is doing at the top, Talk and Fresh conversation with
+  their keys, Stop only while Auren is busy, **Open Auren…**, **Phone…**, **Set up Auren…** (marked
+  while setup needs you), **Update to …** only when a release is waiting, then Restart and Quit. Edit
+  settings is gone: the Auren window opens the settings file.
 
 - Auren.app finds Auren's Python through a link in `~/Library/Application Support/Auren`, so opening it
   from Finder works with any data folder. The app changes, so the next install rebuilds it and macOS asks

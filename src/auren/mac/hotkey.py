@@ -8,13 +8,16 @@ holding the keys doesn't start and stop listening. The tap needs the Accessibili
 Auren's screen control needs anyway; without it start() returns None and `auren doctor` says why.
 
 macOS turns a tap off when its callback is slow or the user types in a secure field; the callback turns
-it back on.
+it back on. Not when Accessibility was taken away (or macOS keeps timing it out): every key press in the
+session would wait on the tap again, and the keyboard lags. Then the tap stays off and `on_lost()` tells
+the daemon, which waits for Accessibility again.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 
 from .screen import _HOLD, KEYS
@@ -32,6 +35,17 @@ def parse(combo: str) -> tuple[frozenset[str], int]:
     return frozenset(_HOLD[p] for p in parts[:-1]), KEYS[parts[-1]]
 
 
+def valid(bindings: dict[str, str]) -> bool:
+    """Every key set is a shortcut this can listen for (a restart can't fix one that isn't)."""
+    try:
+        for combo in bindings.values():
+            if combo:
+                parse(str(combo))
+    except ValueError:
+        return False
+    return True
+
+
 def _mods(flags: int) -> frozenset[str]:
     import Quartz as Q
     masks = {"cmd": Q.kCGEventFlagMaskCommand, "shift": Q.kCGEventFlagMaskShift, "alt": Q.kCGEventFlagMaskAlternate,
@@ -39,10 +53,28 @@ def _mods(flags: int) -> frozenset[str]:
     return frozenset(m for m, bit in masks.items() if flags & bit)
 
 
+TIMEOUTS = 3            # turned off for being slow this many times
+TIMEOUT_WINDOW = 30.0   # within this many seconds: something's wrong, leave it off
+
+
+def _trusted() -> bool:
+    from .windows import trusted
+    try:
+        return trusted()
+    except Exception:  # noqa: BLE001 - can't tell: assume nothing changed
+        return True
+
+
 class Hotkeys:
-    def __init__(self, bindings: dict[str, str], on_press: Callable[[str], None]):
+    def __init__(self, bindings: dict[str, str], on_press: Callable[[str], None],
+                 on_lost: Callable[[Hotkeys], None] | None = None, trusted: Callable[[], bool] = _trusted,
+                 clock: Callable[[], float] = time.monotonic):
         self.keys = {parse(combo): command for command, combo in bindings.items()}
         self.on_press = on_press
+        self.on_lost = on_lost
+        self._trusted, self._clock = trusted, clock
+        self._timeouts: list[float] = []
+        self.lost = False
         self.tap = None
         self.source = None
         self.loop = None
@@ -51,6 +83,8 @@ class Hotkeys:
     def _callback(self, proxy, kind, event, refcon):
         import Quartz as Q
         if kind in (Q.kCGEventTapDisabledByTimeout, Q.kCGEventTapDisabledByUserInput):
+            if kind == Q.kCGEventTapDisabledByTimeout and self._give_up():
+                return event
             Q.CGEventTapEnable(self.tap, True)
             return event
         code = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode)
@@ -66,6 +100,20 @@ class Hotkeys:
         if not Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventAutorepeat):
             threading.Thread(target=self._fire, args=(command,), daemon=True).start()
         return None
+
+    def _give_up(self) -> bool:
+        """macOS turned the tap off for being slow: leave it off if Accessibility is gone, or if that keeps
+        happening, and tell the daemon (once)."""
+        now = self._clock()
+        self._timeouts = [t for t in self._timeouts if now - t < TIMEOUT_WINDOW] + [now]
+        if self._trusted() and len(self._timeouts) < TIMEOUTS:
+            return False
+        if not self.lost:
+            self.lost = True
+            log.warning("the talk keys are off: Accessibility was taken away, or macOS keeps stopping them")
+            if self.on_lost:
+                threading.Thread(target=self.on_lost, args=(self,), daemon=True).start()
+        return True
 
     def _fire(self, command: str) -> None:
         try:
@@ -100,10 +148,12 @@ class Hotkeys:
             Q.CFRunLoopStop(self.loop)
 
 
-def start(bindings: dict[str, str], on_press: Callable[[str], None]) -> Hotkeys | None:
-    """Listen for the talk keys on a thread of its own. None if macOS didn't allow the tap."""
+def start(bindings: dict[str, str], on_press: Callable[[str], None],
+          on_lost: Callable[[Hotkeys], None] | None = None) -> Hotkeys | None:
+    """Listen for the talk keys on a thread of its own. None if macOS didn't allow the tap. on_lost(keys): called
+    (on another thread) if the tap had to be left off for good."""
     try:
-        keys = Hotkeys(bindings, on_press)
+        keys = Hotkeys(bindings, on_press, on_lost)
     except ValueError as e:
         log.error("talk keys: %s", e)
         return None

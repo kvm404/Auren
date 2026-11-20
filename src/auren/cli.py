@@ -14,7 +14,7 @@
 Run with nothing after it, `auren` sets Auren up the first time, then shows this help.
 
 macOS only:
-  auren open                  # start Auren and show its setup window (what opening Auren.app does)
+  auren open                  # start Auren and show its setup, or the Auren window once set up (opening Auren.app)
   auren app install|uninstall # Auren.app in ~/Applications (install-macos.sh builds it)
   auren mascot                # the mascot and the menu bar icon (the com.auren.mascot launch agent runs this)
   auren service install|start|stop|restart|status   # the launch agents (install-macos.sh sets them up)

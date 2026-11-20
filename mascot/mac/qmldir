@@ -1,0 +1,13 @@
+singleton Theme 1.0 Theme.qml
+Pill 1.0 Pill.qml
+Mark 1.0 Mark.qml
+Toggle 1.0 Toggle.qml
+Segmented 1.0 Segmented.qml
+Slider 1.0 Slider.qml
+Group 1.0 Group.qml
+SettingRow 1.0 SettingRow.qml
+Heading 1.0 Heading.qml
+Caption 1.0 Caption.qml
+Field 1.0 Field.qml
+QrCode 1.0 QrCode.qml
+Tile 1.0 Tile.qml

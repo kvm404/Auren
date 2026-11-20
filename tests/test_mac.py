@@ -2,6 +2,8 @@
 
 import re
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -205,12 +207,14 @@ def test_the_launch_agents_run_through_the_app_when_it_is_there(monkeypatch, tmp
     assert service.plist("mascot")["ProgramArguments"][0] == str(tmp_path / "share/venv/bin/auren")
 
 
-def _setup_check(monkeypatch, status, found=(), brain="auto", key=True):
+def _setup_check(monkeypatch, status, found=(), brain="auto", key=True, restarted=None):
     from auren import config, settings
     from auren.mac import setup
     monkeypatch.setattr(config, "secret", lambda name: "k" if key else None)
     monkeypatch.setattr(settings, "current", lambda: {"brain": brain})
-    return setup.check(status, which=lambda name: f"/opt/homebrew/bin/{name}" if name in found else None)
+    monkeypatch.setattr(setup, "_brain_path", lambda: None)
+    return setup.check(status, which=lambda name, path=None: f"/opt/homebrew/bin/{name}" if name in found else None,
+                       restarted=restarted)
 
 
 ALLOWED = {"microphone": "granted", "accessibility": True, "screen": False, "talk_keys": True}
@@ -235,8 +239,8 @@ def test_setup_needs_a_key_and_a_brain(monkeypatch):
 def test_setup_says_when_auren_is_off_or_needs_a_restart(monkeypatch):
     from auren.mac import setup
     monkeypatch.setattr(setup, "_daemon_status", lambda: None)
-    off = _setup_check(monkeypatch, None, found=("codex",))
-    assert not off["running"] and not off["ready"] and not off["restart"]
+    off = _setup_check(monkeypatch, None, found=("codex",), restarted={})
+    assert not off["running"] and not off["ready"] and not off["restart"] and not off["starting"]
     restart = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False}, found=("codex",))
     assert restart["restart"]
 
@@ -336,7 +340,9 @@ def test_setup_offers_no_restart_for_a_key_no_restart_fixes(monkeypatch):
     from auren.mac import setup
     monkeypatch.setattr(config, "secret", lambda name: "k")
     monkeypatch.setattr(settings, "current", lambda: {"brain": "auto", "keys.talk": "ctrl+nothing"})
-    s = setup.check({**ALLOWED, "talk_keys": False}, which=lambda name: "/bin/codex" if name == "codex" else None)
+    monkeypatch.setattr(setup, "_brain_path", lambda: None)
+    s = setup.check({**ALLOWED, "talk_keys": False}, which=lambda name, path=None: "/bin/codex" if name == "codex" else None,
+                    restarted={})
     assert not s["restart"]
 
 
@@ -526,10 +532,11 @@ def phone_files(tmp_path, monkeypatch):
     return phone
 
 
-def test_the_menu_bar_has_a_phone_window():
+def test_the_menu_bar_opens_the_phone_page_of_the_auren_window():
     src = (ROOT / "src/auren/mac/mascot.py").read_text()
-    assert 'item("Phone…", phone_ui.openWindow)' in src
-    assert 'qml.with_name("mac-phone.qml")' in src and (ROOT / "mascot/mac-phone.qml").exists()
+    assert 'item("Phone…", lambda: window_ui.openPage("phone"))' in src
+    assert 'qml.with_name("mac-window.qml")' in src and (ROOT / "mascot/mac-window.qml").exists()
+    assert not (ROOT / "mascot/mac-phone.qml").exists()
     assert 'setContextProperty("phone", phone_ui)' in src and "aboutToQuit.connect(phone_ui.stop)" in src
 
 
@@ -647,7 +654,7 @@ def test_the_phone_window_pairs_cancels_and_unpairs_for_real(phone_files, monkey
             app.processEvents()
             time.sleep(0.02)
         return cond()
-    ui.openWindow()
+    ui.showPage()
     assert ui.open and [p["name"] for p in ui.phones] == ["Pixel"]
     phone.STATUS.write_text(json.dumps({"on": True, "addrs": [{"ip": "192.168.1.23", "via": "lan", "ok": True}]}))
     os.utime(phone.STATUS, ns=(1, 1))
@@ -667,7 +674,7 @@ def test_the_phone_window_pairs_cancels_and_unpairs_for_real(phone_files, monkey
     assert ui.unpairAsk == dev["id"] and phone.devices()                  # asks once more
     ui.unpair(dev["id"])
     assert until(lambda: ui.phones == []) and phone.devices() == []
-    ui.closeWindow()
+    ui.hidePage()
     assert not ui.open
 
 
@@ -711,7 +718,7 @@ def test_a_pairing_child_that_dies_takes_its_code_and_qr_with_it(phone_files, mo
     ended = []
     monkeypatch.setattr(phone, "end_pairing", ended.append)
     ui = pw.bridge(lambda: True)
-    ui.openWindow()
+    ui.showPage()
     ui.startPairing()
     end = time.time() + 10
     while not (ended and not qr.exists()) and time.time() < end:
@@ -729,3 +736,488 @@ def test_the_mascot_quits_through_qt_on_sigterm():
     """launchd stops the mascot with SIGTERM: Qt's aboutToQuit must run so an open pairing ends."""
     src = (ROOT / "src/auren/mac/mascot.py").read_text()
     assert "signal.signal(sig, lambda *_: app.quit())" in src and "(signal.SIGTERM, signal.SIGINT)" in src
+
+
+# --- noticing permissions without a restart by hand ----------------------------------------------
+
+def _grants(tmp_path, live, new, clock=None):
+    from auren.mac import permissions
+    asked = []
+
+    def ask():
+        asked.append(1)
+        return dict(new)
+    g = permissions.Grants(ask=ask, live=lambda: dict(live), path=tmp_path / "restart.json", ttl=2.0,
+                           clock=clock or (lambda: 0.0))
+    return g, asked
+
+
+def test_a_new_process_is_asked_only_while_something_is_missing(tmp_path):
+    g, asked = _grants(tmp_path, {"microphone": "granted", "accessibility": True, "screen": True}, {})
+    assert g.check()["waiting"] == [] and asked == []
+
+
+def test_a_permission_a_new_process_has_is_waiting_for_a_restart(tmp_path):
+    now = [0.0]
+    g, asked = _grants(tmp_path, {"microphone": "granted", "accessibility": True, "screen": False},
+                       {"microphone": "granted", "screen": True}, clock=lambda: now[0])
+    s = g.check()
+    assert s["waiting"] == ["screen"] and s["screen"] is True and len(asked) == 1
+    g.check()
+    assert len(asked) == 1                      # the answer is kept for a couple of seconds
+    now[0] = 2.5
+    g.check()
+    assert len(asked) == 2
+    g.forget_fresh()                            # an Allow click: asked again at once
+    g.check()
+    assert len(asked) == 3
+
+
+def test_accessibility_the_daemon_still_sees_as_off_waits_for_a_restart(tmp_path):
+    """Turned off (or reset) and on again, Accessibility can stay off for the running daemon: a new process
+    sees it, so the window shows it allowed and the daemon restarts for it."""
+    g, asked = _grants(tmp_path, {"microphone": "granted", "accessibility": False, "screen": True},
+                       {"microphone": "granted", "accessibility": True, "screen": True})
+    s = g.check()
+    assert s["waiting"] == ["accessibility"] and s["accessibility"] is True and len(asked) == 1
+
+
+def test_a_restart_is_remembered_until_it_worked_or_the_grant_is_gone(tmp_path):
+    from auren.mac import permissions
+    live = {"microphone": "granted", "accessibility": True, "screen": False}
+    g, _ = _grants(tmp_path, live, {"screen": True})
+    g.mark(["screen"])
+    assert g.tried() == ["screen"] and permissions.restarted(g.path)["at"] > 0
+    g.check()
+    assert g.tried() == ["screen"]              # still waiting after the restart: the Restart button's case
+    g._ask = lambda: {"screen": False}          # turned off in System Settings: a later Allow is a new grant
+    g.forget_fresh()
+    g.check()
+    assert g.tried() == [] and not g.path.exists()
+    g.mark(["screen", "keys"])
+    live["screen"] = True                       # the restart turned it on
+    g.check()
+    assert g.tried() == ["keys"]
+    g.done("keys")
+    assert g.tried() == []
+
+
+def test_the_setup_window_says_what_turns_on_by_itself():
+    from auren.mac import permissions
+    assert permissions.turning_on([]) == ""
+    assert permissions.turning_on(["screen"]) == "Turning on Screen Recording…"
+    assert permissions.turning_on(["microphone", "screen", "screen"]) == "Turning on the microphone and Screen Recording…"
+
+
+def test_the_permissions_child_prints_one_json_line():
+    src = (ROOT / "src/auren/mac/permissions.py").read_text()
+    assert 'if __name__ == "__main__":' in src and '"-m", "auren.mac.permissions"' in src
+
+
+def test_setup_says_turning_on_while_the_daemon_restarts_for_a_grant(monkeypatch):
+    import time
+
+    from auren.mac import setup
+    s = _setup_check(monkeypatch, {**ALLOWED, "waiting": ["screen"], "screen": True, "restarting": ["screen"]},
+                     found=("codex",))
+    assert s["turningOn"] == ["screen"] and s["turningText"] == "Turning on Screen Recording…" and not s["restart"]
+    monkeypatch.setattr(setup, "_daemon_status", lambda: None)   # gone for the restart: on its way back
+    back = _setup_check(monkeypatch, None, found=("codex",), restarted={"for": ["screen"], "at": time.time()})
+    assert back["starting"] and back["turningOn"] == ["screen"] and not back["restart"]
+    old = _setup_check(monkeypatch, None, found=("codex",), restarted={"for": ["screen"], "at": time.time() - 300})
+    assert not old["starting"] and old["turningOn"] == []
+    assert setup.needs(back) == "Turning on Screen Recording…"
+
+
+def test_setup_says_turning_on_accessibility_while_the_daemon_restarts_for_it(monkeypatch):
+    s = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False, "keys_waiting": True, "waiting": ["accessibility"],
+                                   "restarting": ["accessibility"]}, found=("codex",))
+    assert s["accessibility"] and s["turningText"] == "Turning on Accessibility…" and not s["restart"]
+
+
+def test_setup_offers_restart_only_when_the_daemons_own_restart_didnt_help(monkeypatch):
+    stuck = _setup_check(monkeypatch, {**ALLOWED, "screen": True, "waiting": ["screen"], "restart": ["screen"]},
+                         found=("codex",))
+    assert stuck["restart"] and stuck["turningOn"] == []
+    from auren.mac import setup
+    assert setup.needs(stuck) == "Restart Auren to turn on what you allowed."
+
+
+def test_the_talk_keys_about_to_start_are_no_reason_to_restart(monkeypatch):
+    waiting = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False, "keys_waiting": True}, found=("codex",))
+    assert waiting["keysTurningOn"] and not waiting["restart"]
+    restarting = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False, "restarting": ["keys"]}, found=("codex",))
+    assert restarting["keysTurningOn"] and not restarting["restart"]
+    failed = _setup_check(monkeypatch, {**ALLOWED, "talk_keys": False}, found=("codex",))
+    assert failed["restart"] and not failed["keysTurningOn"]
+
+
+def test_setup_finds_a_brain_on_the_launch_agents_path(monkeypatch):
+    from auren import config, settings
+    from auren.mac import setup
+    monkeypatch.setattr(config, "secret", lambda name: "k")
+    monkeypatch.setattr(settings, "current", lambda: {"brain": "auto"})
+    monkeypatch.setattr(setup, "_brain_path", lambda: "/Users/a/.local/bin:/usr/bin")
+    seen = []
+
+    def which(name, path=None):
+        seen.append(path)
+        return "/Users/a/.local/bin/claude" if name == "claude" and path and ".local/bin" in path else None
+    s = setup.check(ALLOWED, which=which, restarted={})
+    assert s["claude"] and s["brainReady"] and seen == ["/Users/a/.local/bin:/usr/bin"] * 2
+
+
+def test_the_launch_agents_path_has_where_claude_installs_itself(monkeypatch, tmp_path):
+    """Claude Code's installer puts it in ~/.local/bin (or ~/.claude/local): found there once installed later."""
+    monkeypatch.setattr(service, "DATA_HOME", tmp_path / "share")
+    monkeypatch.setattr(service, "STATE_DIR", tmp_path / "state")
+    path = service.plist("daemon", "/usr/bin")["EnvironmentVariables"]["PATH"].split(":")
+    assert str(Path.home() / ".local/bin") in path and str(Path.home() / ".claude/local") in path
+
+
+def test_setup_needs_says_what_is_missing_in_a_line():
+    from auren.mac import setup
+    base = {"running": True, "microphone": "granted", "accessibility": True, "key": True, "brainReady": True}
+    assert setup.needs(base) == ""
+    assert setup.needs({**base, "running": False}) == "Auren isn't running."
+    assert setup.needs({**base, "key": False}) == "Needs a speech-to-text key."
+    assert setup.needs({**base, "microphone": "not asked", "brainReady": False}) == "Needs the microphone and a brain."
+
+
+def test_only_the_launch_agents_daemon_restarts_itself(monkeypatch):
+    monkeypatch.setenv("XPC_SERVICE_NAME", "com.auren.daemon")
+    assert service.managed("daemon") and not service.managed("mascot")
+    monkeypatch.delenv("XPC_SERVICE_NAME")
+    assert not service.managed("daemon")
+
+
+def test_talk_keys_are_valid_only_when_each_one_can_be_listened_for():
+    assert hotkey.valid({"talk": "ctrl+alt+a", "talk-fresh": "ctrl+alt+shift+a"})
+    assert not hotkey.valid({"talk": "ctrl+nothing", "talk-fresh": "ctrl+alt+shift+a"})
+
+
+class _RestartingDaemon:
+    """The parts of Daemon that restart it for a permission, with Auren idle or not as a test says."""
+    from auren.daemon import Daemon
+    _grants = Daemon._grants
+    _plan_restart = Daemon._plan_restart
+    _restart_when_idle = Daemon._restart_when_idle
+    settings = {"keys.talk": "ctrl+alt+a", "keys.talk_fresh": "ctrl+alt+shift+a"}
+    _hotkeys = None
+
+    def __init__(self, grants, quiet):
+        self._grants_now, self.quiets, self.stopped = grants, iter(quiet), False
+        self.loop = self
+
+    def _quiet(self):
+        return next(self.quiets, True)
+
+    def stop(self):                      # loop.stop()
+        self.stopped = True
+
+
+def _restart(d, waiting):
+    import asyncio
+
+    async def go():
+        out = d._plan_restart(waiting)
+        task = getattr(d, "_restart_task", None)
+        if task:
+            await asyncio.wait_for(task, 5)
+        return out
+    return asyncio.run(go())
+
+
+def test_the_daemon_restarts_once_it_is_idle_for_a_new_grant(monkeypatch, tmp_path):
+    from auren import daemon
+    monkeypatch.setattr(service, "managed", lambda name: True)
+    monkeypatch.setattr(daemon.Daemon._restart_when_idle, "__defaults__", (0.0, 3))
+    g, _ = _grants(tmp_path, {}, {})
+    d = _RestartingDaemon(g, quiet=[True, False, True, True, True])     # busy once: counts from zero again
+    restarting, stuck = _restart(d, ["screen"])
+    assert restarting == ["screen"] and stuck == []
+    assert d.stopped and d.exit_code == daemon.RESTART_EXIT and g.tried() == ["screen"]
+    assert next(d.quiets, "none") == "none"                               # all five checks were needed
+
+
+def test_the_keys_waiter_restarts_for_accessibility_the_daemon_still_sees_as_off(monkeypatch, tmp_path):
+    """After a reset, the daemon can keep seeing Accessibility as off once it's allowed again (in macOS's own
+    prompt, with the setup window closed): the waiter asks a new process every 10 s and restarts for it,
+    also when it restarted for an earlier grant that was taken away since."""
+    import asyncio
+
+    from auren import daemon
+    from auren.mac import permissions
+    monkeypatch.setattr(permissions, "accessibility", lambda: False)
+    live = {"microphone": "granted", "accessibility": False, "screen": True}
+    answers = iter([{"accessibility": False}, {"accessibility": True}])
+    g, asked = _grants(tmp_path, live, {})
+    g._ask = lambda: (asked.append(1), next(answers))[1]
+    g.mark(["accessibility"])                  # the restart for the first grant
+    planned = []
+
+    class D:
+        _keys_once_allowed = daemon.Daemon._keys_once_allowed
+        _hotkeys = None
+
+        def _grants(self):
+            return g
+
+        def _plan_restart(self, waiting):
+            planned.append((list(waiting), g.tried()))
+            self._hotkeys = "restarting"       # stands in for the restart: the waiter is done
+
+    async def go():
+        await asyncio.wait_for(D()._keys_once_allowed(every=0.0), 5)
+    asyncio.run(go())
+    # the 5th round: taken away (the old restart is forgotten); the 10th: allowed again, a new grant
+    assert len(asked) == 2 and planned == [(["accessibility"], [])]
+
+
+def test_a_restart_that_didnt_help_is_not_tried_again(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "managed", lambda name: True)
+    g, _ = _grants(tmp_path, {}, {})
+    g.mark(["screen"])
+    d = _RestartingDaemon(g, quiet=[])
+    restarting, stuck = _restart(d, ["screen"])
+    assert restarting == [] and stuck == ["screen"] and not d.stopped and not getattr(d, "_restart_task", None)
+
+
+def test_a_daemon_outside_its_launch_agent_leaves_the_restart_to_the_user(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "managed", lambda name: False)
+    g, _ = _grants(tmp_path, {}, {})
+    d = _RestartingDaemon(g, quiet=[])
+    assert _restart(d, ["microphone"]) == ([], ["microphone"]) and not d.stopped and g.tried() == []
+
+
+def test_talk_keys_that_failed_after_accessibility_get_one_restart(monkeypatch, tmp_path):
+    from auren import daemon
+    monkeypatch.setattr(service, "managed", lambda name: True)
+    monkeypatch.setattr(daemon.Daemon._restart_when_idle, "__defaults__", (0.0, 1))
+    g, _ = _grants(tmp_path, {}, {})
+    d = _RestartingDaemon(g, quiet=[])
+    d._keys_failed = True
+    assert _restart(d, [])[0] == ["keys"] and d.stopped and g.tried() == ["keys"]
+    d2 = _RestartingDaemon(g, quiet=[])
+    d2._keys_failed = True
+    assert _restart(d2, []) == ([], ["keys"]) and not d2.stopped
+
+
+def test_the_daemon_exits_with_the_restart_code_for_launchd():
+    src = (ROOT / "src/auren/daemon.py").read_text()
+    assert "return d.exit_code" in src and "RESTART_EXIT = 75" in src
+    assert service.plist("daemon")["KeepAlive"] == {"SuccessfulExit": False}
+
+
+def test_the_talk_keys_waiter_wakes_as_soon_as_accessibility_is_seen(monkeypatch):
+    import asyncio
+
+    from auren.daemon import Daemon
+    from auren.mac import permissions
+    monkeypatch.setattr(permissions, "accessibility", lambda: True)
+
+    class D:
+        _hotkeys = None
+    d = D()
+    d._listen_for_keys = lambda: setattr(d, "_hotkeys", "tap")
+
+    async def go():
+        task = asyncio.create_task(Daemon._keys_once_allowed(d, every=30))
+        await asyncio.sleep(0.05)
+        d._keys_wake.set()                       # the setup window's check saw it allowed
+        await asyncio.wait_for(task, 2)
+    asyncio.run(go())
+    assert d._hotkeys == "tap"
+
+
+def test_talk_keys_that_keep_failing_ask_for_a_restart(monkeypatch):
+    import asyncio
+
+    from auren.daemon import Daemon
+    from auren.mac import permissions
+    monkeypatch.setattr(permissions, "accessibility", lambda: True)
+
+    class D:
+        _hotkeys = None
+    d = D()
+    d._listen_for_keys = lambda: None            # the tap never starts
+
+    async def go():
+        task = asyncio.create_task(Daemon._keys_once_allowed(d, every=0.01))
+        for _ in range(3):
+            await asyncio.sleep(0.02)
+            d._keys_wake.set()
+        await asyncio.wait_for(task, 2)
+    asyncio.run(go())
+    assert d._keys_failed and d._hotkeys is None
+
+
+def _doctor(monkeypatch, st, cfg=None):
+    import json
+
+    from auren import ctl, settings
+    from auren.mac import doctor
+    monkeypatch.setattr(ctl, "send", lambda cmd, timeout=5: json.dumps(st))
+    monkeypatch.setattr(settings, "current", lambda: cfg or {"keys.talk": "ctrl+alt+a", "keys.talk_fresh": "ctrl+alt+shift+a"})
+    return {c.name: c for c in doctor._permissions()}
+
+
+def test_doctor_agrees_with_the_setup_window(monkeypatch):
+    from auren.mac.doctor import OK, WARN
+    st = {**ALLOWED, "program": "/Applications/Auren.app"}
+    turning = _doctor(monkeypatch, {**st, "screen": True, "waiting": ["screen"], "restarting": ["screen"]})
+    assert turning["Screen Recording"].status == OK and "restarts by itself" in turning["Screen Recording"].detail
+    stuck = _doctor(monkeypatch, {**st, "screen": True, "waiting": ["screen"], "restart": ["screen"]})
+    assert stuck["Screen Recording"].status == WARN and stuck["Screen Recording"].fix == "auren service restart"
+    keys = _doctor(monkeypatch, {**st, "talk_keys": False, "keys_waiting": True})
+    assert keys["talk keys"].status == OK
+    off = _doctor(monkeypatch, {**st, "talk_keys": False})
+    assert off["talk keys"].status == WARN and off["talk keys"].fix == "auren service restart"
+
+
+def test_check_mark_and_done_on_many_threads_never_lose_a_marker(tmp_path):
+    """The daemon's executor threads check while a restart marks: each read-modify-write goes whole."""
+    import threading
+
+    from auren.mac import permissions
+    live = {"microphone": "granted", "accessibility": True, "screen": False}
+    g, _ = _grants(tmp_path, live, {"screen": True})
+    stop = threading.Event()
+
+    def checking():
+        while not stop.is_set():
+            g.check()
+            g.done("nothing")
+    threads = [threading.Thread(target=checking) for _ in range(4)]
+    for t in threads:
+        t.start()
+    try:
+        for _ in range(200):
+            g.mark(["screen", "keys"])
+            assert set(g.tried()) == {"screen", "keys"}        # still waiting: nothing may drop them
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+    assert permissions.restarted(g.path)["for"] == ["screen", "keys"]
+    assert [p.name for p in tmp_path.iterdir()] == ["restart.json"]       # no temp file left behind
+
+
+def _quiet_daemon(state, listening=False, live=(), locked=False, batch=()):
+    import asyncio
+    from types import SimpleNamespace
+
+    from auren.daemon import Daemon
+    lock = asyncio.Lock()
+    if locked:
+        lock._locked = True
+    return SimpleNamespace(state=state, listening=listening, _live=lambda: tuple(live), busy=lock,
+                           tools=SimpleNamespace(batch=lambda sid: list(batch)), quiet=Daemon._quiet)
+
+
+def test_a_failed_listen_is_quiet_enough_to_restart_but_an_open_question_isnt():
+    from auren.daemon import Daemon
+    assert Daemon._quiet(_quiet_daemon("idle"))
+    assert Daemon._quiet(_quiet_daemon("error"))           # stays "error" until the next turn
+    for busy in (_quiet_daemon("thinking"), _quiet_daemon("error", listening=True),
+                 _quiet_daemon("idle", live=["turn"]), _quiet_daemon("idle", locked=True),
+                 _quiet_daemon("idle", batch=["a yes/no question"])):
+        assert not Daemon._quiet(busy)
+
+
+def _fake_quartz(monkeypatch):
+    enabled = []
+    q = types.SimpleNamespace(kCGEventTapDisabledByTimeout=-2, kCGEventTapDisabledByUserInput=-1,
+                              CGEventTapEnable=lambda tap, on: enabled.append(on))
+    monkeypatch.setitem(sys.modules, "Quartz", q)
+    return q, enabled
+
+
+def test_a_tap_slowed_down_after_accessibility_was_taken_away_stays_off(monkeypatch):
+    """Turned back on without Accessibility, the tap would hold up every key press (the keyboard lags):
+    it stays off, and the daemon is told once."""
+    from auren.mac import hotkey
+    q, enabled = _fake_quartz(monkeypatch)
+    lost = []
+    allowed = [True]
+    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, on_lost=lost.append,
+                          trusted=lambda: allowed[0], clock=lambda: 0.0)
+    monkeypatch.setattr(hotkey.threading, "Thread",
+                        lambda target, args, daemon: types.SimpleNamespace(start=lambda: target(*args)))
+    assert keys._callback(None, q.kCGEventTapDisabledByUserInput, "e", None) == "e" and enabled == [True]
+    assert keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None) == "e" and enabled == [True, True]
+    allowed[0] = False
+    keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True] and lost == [keys] and keys.lost
+
+
+def test_a_tap_macos_keeps_stopping_stays_off(monkeypatch):
+    from auren.mac import hotkey
+    q, enabled = _fake_quartz(monkeypatch)
+    now = [0.0]
+    keys = hotkey.Hotkeys({"talk": "ctrl+alt+a"}, lambda c: None, trusted=lambda: True, clock=lambda: now[0])
+    for t in (0.0, 40.0, 80.0):                # now and then: turned back on each time
+        now[0] = t
+        keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True, True]
+    for t in (150.0, 151.0, 152.0):            # three times in half a minute: left off on the third
+        now[0] = t
+        keys._callback(None, q.kCGEventTapDisabledByTimeout, "e", None)
+    assert enabled == [True, True, True, True, True] and keys.lost
+
+
+class _KeysDaemon:
+    from auren.daemon import Daemon
+    _keys_lost = Daemon._keys_lost
+    _drop_keys = Daemon._drop_keys
+    _keys_watchdog = Daemon._keys_watchdog
+
+    def __init__(self, keys):
+        import threading
+        self._hotkeys, self._keys_lock, self.calls = keys, threading.Lock(), []
+
+    async def _keys_once_allowed(self):
+        self.calls.append("wait")
+
+
+def test_the_daemon_drops_lost_talk_keys_and_waits_for_accessibility_again():
+    import asyncio
+    stopped = []
+
+    async def go():
+        old = types.SimpleNamespace(stop=lambda: stopped.append("old"))
+        new = types.SimpleNamespace(stop=lambda: stopped.append("new"))
+        d = _KeysDaemon(new)
+        await d._drop_keys(old)                # a late report about a tap a reload already replaced
+        assert d._hotkeys is new and stopped == [] and d.calls == []
+        d._keys_lost(new)
+        for _ in range(200):
+            if d._hotkeys is None and d.calls:
+                break
+            await asyncio.sleep(0.01)
+        return d
+    d = asyncio.run(go())
+    assert stopped == ["new"] and d._hotkeys is None and d.calls == ["wait"]
+
+
+def test_the_watchdog_drops_the_keys_only_when_a_new_process_agrees_accessibility_is_gone(monkeypatch):
+    import asyncio
+
+    from auren.mac import permissions
+    live, fresh = [True, False, False], [{"accessibility": True}, {"accessibility": False}]
+    monkeypatch.setattr(permissions, "accessibility", lambda: live.pop(0) if live else True)
+    monkeypatch.setattr(permissions, "fresh", lambda: fresh.pop(0))
+    stopped = []
+
+    async def go():
+        d = _KeysDaemon(types.SimpleNamespace(stop=lambda: stopped.append(1)))
+        task = asyncio.create_task(d._keys_watchdog(every=0.0))
+        for _ in range(200):                   # the checks run on worker threads
+            if d._hotkeys is None:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        return d
+    d = asyncio.run(go())
+    assert stopped == [1] and d._hotkeys is None and not fresh     # a stale no alone (the first) kept them

@@ -38,19 +38,40 @@ def _permissions() -> list[Check]:
                       "auren service start, then auren doctor")]
     program = st.get("program", "")
     program = "Auren" if program.endswith(".app") else program
+    waiting, restarting = list(st.get("waiting") or []), list(st.get("restarting") or [])
+
+    def later(name: str, label: str) -> Check | None:
+        """Allowed, but the daemon sees it only from its next start, as the setup window says."""
+        if name not in waiting:
+            return None
+        if name in restarting:
+            return Check(g, label, OK, "allowed: Auren restarts by itself to turn it on, once it's idle")
+        return Check(g, label, WARN, "allowed, but Auren hasn't picked it up yet", "auren service restart")
     out = []
     mic = st.get("microphone")
-    out.append(Check(g, "Microphone", OK, "allowed") if mic == "granted" else
-               Check(g, "Microphone", FAIL if mic in ("denied", "restricted") else WARN,
-                     {"not asked": "not asked yet"}.get(mic, str(mic)), FIX_PERMISSIONS))
+    out.append(later("microphone", "Microphone") or
+               (Check(g, "Microphone", OK, "allowed") if mic == "granted" else
+                Check(g, "Microphone", FAIL if mic in ("denied", "restricted") else WARN,
+                      {"not asked": "not asked yet"}.get(mic, str(mic)), FIX_PERMISSIONS)))
     out.append(Check(g, "Accessibility", OK, "allowed (talk keys, mouse and keyboard)") if st.get("accessibility") else
                Check(g, "Accessibility", FAIL, f"not allowed for {program}: no talk keys and no screen control",
                      FIX_PERMISSIONS))
-    out.append(Check(g, "Screen Recording", OK, "allowed") if st.get("screen") else
-               Check(g, "Screen Recording", WARN, f"not allowed for {program}: screenshots show only the desktop",
-                     FIX_PERMISSIONS))
+    out.append(later("screen", "Screen Recording") or
+               (Check(g, "Screen Recording", OK, "allowed") if st.get("screen") else
+                Check(g, "Screen Recording", WARN, f"not allowed for {program}: screenshots show only the desktop",
+                      FIX_PERMISSIONS)))
     if st.get("accessibility") and not st.get("talk_keys"):
-        out.append(Check(g, "talk keys", WARN, "allowed, but the daemon started before that", "auren service restart"))
+        from ..settings import current
+        from .setup import _keys_valid
+        if st.get("keys_waiting"):
+            out.append(Check(g, "talk keys", OK, "Accessibility is allowed: they're turning on"))
+        elif "keys" in restarting:
+            out.append(Check(g, "talk keys", OK, "Auren restarts by itself to turn them on, once it's idle"))
+        elif not _keys_valid(current()):
+            out.append(Check(g, "talk keys", FAIL, "a key in config.toml isn't a shortcut Auren can listen for",
+                             "auren config set keys.talk ctrl+alt+a"))
+        else:
+            out.append(Check(g, "talk keys", WARN, "allowed, but they didn't start", "auren service restart"))
     return out
 
 
