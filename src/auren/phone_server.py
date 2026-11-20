@@ -52,6 +52,7 @@ RETRY = 30                  # seconds before a port that was taken is tried agai
 SWEEP = 1.0                 # seconds between checks for revoked phones and new inbox items
 IDLE = 0.5                  # seconds between looks for a pairing, while no phone is paired
 IDLE_WHY = "no phone is paired: auren phone pair starts the server"
+TS_EVERY = 60               # seconds between looks at the Tailscale address while idle (phone.reach needs it)
 MAX_SHARE = 20 * 1024 * 1024
 MAX_PAIR = 4096             # a pairing request is a code and a name
 MAX_TEXT = 4000
@@ -676,6 +677,12 @@ def _save_status() -> None:
         tmp.replace(phone.STATUS)
 
 
+def _note_tailscale() -> None:
+    ip, _ = phone.tailscale_ip()
+    if ip:
+        phone.remember_tailscale(ip)
+
+
 def wanted() -> bool:
     """Is there a phone to serve: one paired, or a pairing open (auren phone pair)?"""
     return bool(phone.devices()) or phone.pairing_open()
@@ -752,6 +759,7 @@ async def supervise(daemon) -> None:
     running: _Running | None = None
     started_for, seen, tried, rows = None, None, 0.0, []
     idle = False
+    noted = -TS_EVERY
     try:
         certfile, keyfile, hub.fp = await asyncio.to_thread(phone.cert)
         while True:
@@ -764,6 +772,11 @@ async def supervise(daemon) -> None:
                 if not idle:
                     hub.addrs, started_for, seen, rows, idle = [], None, None, [], True
                     _write_status(False, port, fp=hub.fp, why=IDLE_WHY, idle=True)
+                # Keep the Tailscale address while nothing listens too, so a pairing opened after Tailscale went
+                # off still carries it (phone.reach). Serving, phone.addresses keeps it.
+                if time.monotonic() - noted >= TS_EVERY:
+                    noted = time.monotonic()
+                    await asyncio.to_thread(_note_tailscale)
                 await asyncio.sleep(IDLE)
                 continue
             idle = False

@@ -30,6 +30,7 @@ def phone_dir(tmp_path, monkeypatch):
                         "TAILSCALE_SEEN": d / "tailscale.json"}.items():
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: (None, "Tailscale is off"))     # never this machine's
     return d
 
 
@@ -1622,3 +1623,22 @@ def test_get_the_app_links_to_this_versions_apk(monkeypatch, capsys):
     assert out == {"url": "https://example.org/auren-phone-9.9.9.apk", "qr": str(phone.APP_QR), "version": "9.9.9"}
     assert phone.APP_QR.read_bytes().startswith(b"\x89PNG")
     assert phone.main(["app"]) == 0 and "auren-phone-9.9.9.apk" in capsys.readouterr().out
+
+
+def test_an_idle_server_still_keeps_the_tailscale_address(monkeypatch):
+    """No phone paired, so nothing listens: it still notes the Tailscale address, so turning Tailscale off and
+    then pairing on the Wi-Fi gives the phone it."""
+    monkeypatch.setattr(phone_server, "IDLE", 0.02)
+    monkeypatch.setattr(phone, "tailscale_ip", lambda: ("100.92.1.2", ""))
+
+    async def go():
+        task = asyncio.create_task(phone_server.supervise(_Daemon()))
+        try:
+            await _until(lambda: phone.known_tailscale() == "100.92.1.2")
+            return phone.status()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    assert asyncio.run(go()).get("on") is not True
