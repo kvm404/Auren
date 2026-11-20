@@ -7,10 +7,13 @@ import json
 import os
 import platform
 import plistlib
+import re
+import sys
+from pathlib import Path
 
 from .. import config
 from ..config import DATA_HOME
-from ..doctor import FAIL, OK, WARN, Check, _run, _shared, _version
+from ..doctor import FAIL, OK, WARN, Check, _run, _shared, _version, phone_checks
 from . import service
 
 FIX_PERMISSIONS = "open Auren's setup (menu bar icon → Set up Auren…, or `auren open`) and click Allow"
@@ -78,6 +81,7 @@ def checks() -> list[Check]:
         out.append(Check(g, "microphone", FAIL, f"no microphone ({e})", "pick one in System Settings → Sound → Input"))
     svc = service_path()
     out += _shared(svc, mac=True)
+    out += phone_checks()
 
     g = "Install"
     ctl = DATA_HOME / "bin/auren-ctl"
@@ -101,3 +105,114 @@ def checks() -> list[Check]:
     if code:
         out.append(Check(g, "osascript", FAIL, "missing (notifications, volume, Spotify)"))
     return out
+
+
+# --- the phone remote and the Application Firewall ------------------------------------------------
+
+SOCKETFILTERFW = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+FIREWALL_PANE = "System Settings → Network → Firewall → Options"
+
+
+def _fw(*args: str) -> tuple[int, str]:
+    return _run([SOCKETFILTERFW, *args])
+
+
+def firewall_state(text: str) -> str:
+    """--getglobalstate's answer: "on", "off", "block all" (State = 2 on older macOS) or "" (unknown)."""
+    t = text.lower()
+    if "state = 2" in t:
+        return "block all"
+    if "state = 0" in t or "disabled" in t:
+        return "off"
+    if "state = 1" in t or "enabled" in t:
+        return "on"
+    return ""
+
+
+def blocks_all(text: str) -> bool | None:
+    """--getblockall's answer ("... block all state set to enabled.", or "Block all ENABLED!" on older macOS)."""
+    t = text.lower()
+    return False if "disabled" in t else True if "enabled" in t else None
+
+
+def app_state(text: str) -> str:
+    """--getappblocked's answer for one program: "blocked", "allowed", or "" (not in the firewall's list yet,
+    or an answer this doesn't know)."""
+    t = text.lower()
+    if "not part of" in t or "not found" in t or "no such" in t:
+        return ""
+    if "not blocked" in t or "permitted" in t or "allowed" in t:
+        return "allowed"
+    return "blocked" if "blocked" in t else ""
+
+
+def listed_apps(text: str) -> dict[str, str] | None:
+    """--listapps's answer: {program path: "allowed" | "blocked" | ""}. Each program is a numbered line
+    ("1 :  /path"), with its rule on the next ("( Allow incoming connections )"). None: a format this
+    doesn't know (then nothing is taken as allowed)."""
+    apps: dict[str, str] = {}
+    last = None
+    for line in text.splitlines():
+        if m := re.match(r"^\s*\d+\s*:\s*(/.+?)\s*$", line):
+            last = m[1]
+            apps[last] = ""
+        elif last and apps[last] == "" and re.search(r"incoming", line, re.I):
+            t = line.lower()
+            apps[last] = "blocked" if "block" in t else "allowed" if "allow" in t else ""
+    if not apps and not re.search(r"total number of apps\s*=\s*0\b", text, re.I):
+        return None
+    return apps
+
+
+def listener() -> list[str]:
+    """The programs the firewall may know the phone server as: the venv's Python (as macOS runs it, links
+    followed) and Auren.app, whose child it is."""
+    from . import app
+    return [os.path.realpath(sys.executable), str(app.APP)]
+
+
+def firewall_check(port: int) -> Check | None:
+    """The Application Firewall (System Settings → Network → Firewall). On, it asks once whether the program
+    that listens may accept incoming connections; until then, or once denied, a phone can't connect. "Block
+    all incoming connections" stops every phone whatever is allowed. None: socketfilterfw isn't there."""
+    g = "Phone"
+    if not os.access(SOCKETFILTERFW, os.X_OK):
+        return None
+    code, out = _fw("--getglobalstate")
+    state = firewall_state(out) if code == 0 else ""
+    if state == "off":
+        return Check(g, "firewall", OK, "the macOS firewall is off")
+    block_all = state == "block all"
+    if not block_all:
+        code, out = _fw("--getblockall")
+        block_all = code == 0 and blocks_all(out) is True
+    if block_all:
+        return Check(g, "firewall", WARN, "the macOS firewall blocks all incoming connections: no phone can reach"
+                     " this Mac", f"{FIREWALL_PANE}: turn off Block all incoming connections")
+    programs = listener()
+    names = " or ".join(dict.fromkeys(Path(p).name for p in programs))
+    # The firewall's own list says allowed or blocked. --getappblocked is asked too, but only its "blocked"
+    # counts: it says "permitted" for programs that aren't in the list at all.
+    code, out = _fw("--listapps")
+    apps = listed_apps(out) if code == 0 else None
+    listed = {os.path.realpath(path): rule for path, rule in (apps or {}).items()}
+    found = {}
+    for prog in programs:
+        code, out = _fw("--getappblocked", prog)
+        asked = app_state(out) if code == 0 else ""
+        rule = listed.get(os.path.realpath(prog), "")
+        found[prog] = "blocked" if "blocked" in (rule, asked) else rule
+    blocked = [Path(p).name for p, st in found.items() if st == "blocked"]
+    if blocked:
+        return Check(g, "firewall", WARN, f"the macOS firewall blocks {', '.join(blocked)}: the phone can't connect",
+                     f"{FIREWALL_PANE}: set {', '.join(blocked)} to Allow incoming connections")
+    if any(st == "allowed" for st in found.values()):
+        return Check(g, "firewall", OK, f"the macOS firewall allows Auren's server (port {port})")
+    if state == "":
+        why = "couldn't ask the macOS firewall how it is"
+    else:
+        why = (f"the macOS firewall is on: when Auren first listens for a phone, macOS asks whether {names} may"
+               " accept incoming network connections. Click Allow")
+    return Check(g, "firewall", WARN, why,
+                 f"if you clicked Deny, or nothing asked: {FIREWALL_PANE}, set {names} to Allow incoming connections"
+                 " (add it with + if it isn't listed)")

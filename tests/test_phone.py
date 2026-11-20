@@ -9,6 +9,7 @@ import stat
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient, WebSocketDenialResponse
@@ -1342,26 +1343,387 @@ def test_phone_pair_says_when_the_daemon_isnt_running(monkeypatch, capsys):
     monkeypatch.setattr(phone, "status", lambda: {})
     assert phone.main(["pair", "--no-wait", "--no-qr"]) == 1
     assert "daemon isn't running" in capsys.readouterr().err and not phone.pairing_open()
+    monkeypatch.setattr(sys, "platform", "darwin")             # a Mac's daemon is a launch agent
+    assert phone.main(["pair", "--json"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"].endswith("(auren service start)") and not phone.pairing_open()
 
 
-# --- not on macOS yet ------------------------------------------------------------------------------------
+# --- on macOS ------------------------------------------------------------------------------------------
 
-def test_the_phone_remote_is_off_on_a_mac(monkeypatch, capsys):
+def test_the_phone_remote_works_on_a_mac(monkeypatch, capsys):
     monkeypatch.setattr(sys, "platform", "darwin")
-    _paired()
-    assert REAL_INSTALLED("phone") == (False, "the phone remote isn't on macOS yet")
-    assert phone.main(["devices"]) == 2 and "isn't on macOS yet" in capsys.readouterr().err
+    assert REAL_INSTALLED("phone") == (False, "no phone is paired (auren phone pair)")
+    dev, _ = _paired()
+    assert REAL_INSTALLED("phone") == (True, "")
+    assert phone.main(["devices", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["id"] == dev["id"]
+    assert phone.main(["revoke", dev["id"]]) == 0 and phone.devices() == []
 
 
-def test_the_daemon_serves_no_phone_on_a_mac(monkeypatch):
+def test_the_daemon_serves_the_phone_on_a_mac_unless_its_turned_off(monkeypatch):
     called = []
+
+    async def supervise(d):
+        called.append(d)
     monkeypatch.setattr(daemon, "MAC", True)
-    monkeypatch.setattr(phone_server, "supervise", lambda d: called.append(d))
+    monkeypatch.setattr(phone_server, "supervise", supervise)
     d = _Daemon()
     d.settings = {"phone.enabled": "auto"}
     asyncio.run(daemon.Daemon._serve_phone(d))
-    assert called == []
+    assert called == [d]
+    d.settings = {"phone.enabled": False}
+    phone.STATUS.write_text("{}")
+    asyncio.run(daemon.Daemon._serve_phone(d))
+    assert called == [d] and not phone.STATUS.exists()
 
+
+def test_a_mac_finds_tailscale_where_its_apps_put_it(monkeypatch, tmp_path):
+    import subprocess
+    app = tmp_path / "Tailscale.app/Contents/MacOS/Tailscale"
+    app.parent.mkdir(parents=True)
+    app.write_text("#!/bin/sh\n")
+    app.chmod(0o755)
+    monkeypatch.setattr(phone.shutil, "which", lambda name: None)
+    monkeypatch.setattr(phone, "MAC_TAILSCALE", ("/nowhere/tailscale", str(app)))
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert phone.tailscale_cli() is None                     # Linux: only what's in PATH
+    assert REAL_TAILSCALE_IP() == (None, "Tailscale isn't installed")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert phone.tailscale_cli() == str(app)
+    ran = []
+    monkeypatch.setattr(phone.subprocess, "run", lambda cmd, **kw: ran.append((cmd, kw["env"])) or
+                        subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(
+                            {"BackendState": "Stopped", "TailscaleIPs": ["100.100.1.2"]}), stderr=""))
+    ip, why = REAL_TAILSCALE_IP()
+    (cmd, env), = ran
+    assert cmd == [str(app), "status", "--json"]
+    assert env["TAILSCALE_BE_CLI"] == "1" and env["PATH"] == os.environ["PATH"]     # the app's binary acts as the CLI
+    assert ip is None and why == "Tailscale is off: turn Tailscale on (its menu bar icon, or tailscale up)"
+    monkeypatch.setattr(phone.shutil, "which", lambda name: "/opt/homebrew/bin/tailscale")
+    assert phone.tailscale_cli() == "/opt/homebrew/bin/tailscale"          # PATH first
+
+
+def test_doctor_asks_tailscale_where_it_is(monkeypatch):
+    from auren import doctor
+    asked = []
+    monkeypatch.setattr(phone, "tailscale_cli", lambda: "/Applications/Tailscale.app/Contents/MacOS/Tailscale")
+    monkeypatch.setattr(doctor, "_run", lambda cmd, env=None: asked.append((cmd, env)) or (0, '{"NetfilterMode": 2}'))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert doctor._tailscale_lets_in()
+    (cmd, env), = asked
+    assert cmd == ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "debug", "prefs"]
+    assert env["TAILSCALE_BE_CLI"] == "1"
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert phone.tailscale_env() is None
+
+
+IFCONFIG = """\
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+\toptions=1203<RXCSUM,TXCSUM,TXSTATUS,SW_TIMESTAMP>
+\tinet 127.0.0.1 netmask 0xff000000
+\tinet6 ::1 prefixlen 128
+\tinet6 fe80::1%lo0 prefixlen 64 scopeid 0x1
+\tnd6 options=201<PERFORMNUD,DAD>
+gif0: flags=8010<POINTOPOINT,MULTICAST> mtu 1280
+stf0: flags=0<> mtu 1280
+anpi0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\toptions=400<CHANNEL_IO>
+\tether 6e:3b:aa:bb:cc:01
+\tinet6 fe80::6c3b:aaff:febb:cc01%anpi0 prefixlen 64 scopeid 0x4
+\tnd6 options=201<PERFORMNUD,DAD>
+\tmedia: none
+\tstatus: inactive
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\toptions=6460<TSO4,TSO6,CHANNEL_IO,PARTIAL_CSUM,ZEROINVERT_CSUM>
+\tether 3c:22:fb:12:34:56
+\tinet6 fe80::1c8b:2f6a:9d0e:4b21%en0 prefixlen 64 secured scopeid 0xb
+\tinet 192.168.1.23 netmask 0xffffff00 broadcast 192.168.1.255
+\tinet6 2a02:a03f:1234:5600:10f2:3c4d:5e6f:7a8b prefixlen 64 autoconf secured
+\tnd6 options=201<PERFORMNUD,DAD>
+\tmedia: autoselect
+\tstatus: active
+en5: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether ac:de:48:00:11:22
+\tinet 169.254.12.34 netmask 0xffff0000 broadcast 169.254.255.255
+\tmedia: autoselect (100baseTX <full-duplex>)
+\tstatus: active
+en7: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether 00:e0:4c:68:00:01
+\tinet 10.0.0.15 netmask 0xffffff00 broadcast 10.0.0.255
+\tmedia: autoselect
+\tstatus: inactive
+en8: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether 00:e0:4c:68:00:02
+\tinet 10.20.30.40 netmask 0xffff0000 broadcast 10.20.255.255
+\tinet 10.20.30.41 netmask 0xffffffff
+\tmedia: autoselect (1000baseT <full-duplex>)
+\tstatus: active
+awdl0: flags=8863<UP,BROADCAST,SMART,RUNNING,PROMISC,SIMPLEX,MULTICAST> mtu 1500
+\tether 7a:9b:aa:bb:cc:dd
+\tinet6 fe80::789b:aaff:febb:ccdd%awdl0 prefixlen 64 scopeid 0xd
+\tmedia: autoselect
+\tstatus: active
+llw0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tinet6 fe80::789b:aaff:febb:ccdd%llw0 prefixlen 64 scopeid 0xe
+\tstatus: active
+bridge0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether 36:2b:aa:00:00:01
+\tinet 192.168.2.1 netmask 0xffffff00 broadcast 192.168.2.255
+\tmember: en1 flags=3<LEARNING,DISCOVER>
+\tstatus: active
+bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING,ALLMULTI,SIMPLEX,MULTICAST> mtu 1500
+\toptions=3<RXCSUM,TXCSUM>
+\tether be:d0:74:aa:bb:64
+\tinet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+\tinet6 fe80::bcd0:74ff:feaa:bb64%bridge100 prefixlen 64 scopeid 0x16
+\tmember: vmenet0 flags=3<LEARNING,DISCOVER>
+\tstatus: active
+vmenet0: flags=8b63<UP,BROADCAST,SMART,RUNNING,PROMISC,ALLMULTI,SIMPLEX,MULTICAST> mtu 1500
+\tether 9e:aa:bb:cc:dd:ee
+\tstatus: active
+vnic0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether 00:1c:42:00:00:08
+\tinet 10.211.55.2 netmask 0xffffff00 broadcast 10.211.55.255
+\tmedia: autoselect
+\tstatus: active
+utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+\tinet6 fe80::d1a3:9a1f:b2c4:1e2f%utun0 prefixlen 64 scopeid 0x10
+\tnd6 options=201<PERFORMNUD,DAD>
+utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+\tinet 100.101.102.103 --> 100.101.102.103 netmask 0xffffffff
+utun5: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+\tinet 172.16.0.2 --> 172.16.0.2 netmask 0xffffffff
+en9: flags=8822<BROADCAST,SMART,SIMPLEX,MULTICAST> mtu 1500
+\tether 00:e0:4c:68:00:09
+\tinet 192.168.9.9 netmask 0xffffff00 broadcast 192.168.9.255
+"""
+
+HARDWARE_PORTS = """\
+
+Hardware Port: Ethernet Adapter (en5)
+Device: en5
+Ethernet Address: ac:de:48:00:11:22
+
+Hardware Port: Wi-Fi
+Device: en0
+Ethernet Address: 3c:22:fb:12:34:56
+
+Hardware Port: USB 10/100/1000 LAN
+Device: en8
+Ethernet Address: 00:e0:4c:68:00:02
+
+Hardware Port: Thunderbolt Bridge
+Device: bridge0
+Ethernet Address: 36:2b:aa:00:00:01
+
+Hardware Port: Thunderbolt 1
+Device: en1
+Ethernet Address: 36:2b:aa:00:00:02
+
+VLAN Configurations
+===================
+"""
+
+
+def test_a_macs_lan_addresses_are_private_and_on_wifi_or_ethernet(monkeypatch):
+    from auren.mac import phone as mac_phone
+    links = {x["name"]: x for x in mac_phone.parse_ifconfig(IFCONFIG)}
+    assert links["en0"]["inet"] == [("192.168.1.23", 24)] and links["en0"]["status"] == "active"
+    assert links["utun4"]["flags"] >= {"UP", "POINTOPOINT"} and links["utun4"]["inet"] == [("100.101.102.103", 32)]
+    assert links["en8"]["inet"] == [("10.20.30.40", 16), ("10.20.30.41", 32)]
+    # No loopback, tunnel (Tailscale, a VPN), bridge, VM NIC, AirDrop, link-local, /32, cable unplugged, or down
+    assert mac_phone.pick_lan(list(links.values())) == ["192.168.1.23", "10.20.30.40"]
+    hardware = mac_phone.hardware_ports(HARDWARE_PORTS)
+    assert hardware == {"en0", "en1", "en5", "en8"}                  # not the Thunderbolt Bridge
+    assert mac_phone.pick_lan(list(links.values()), hardware) == ["192.168.1.23", "10.20.30.40"]
+    assert mac_phone.pick_lan(list(links.values()), {"en0"}) == ["192.168.1.23"]   # en8 isn't hardware here
+    answers = {mac_phone.IFCONFIG: IFCONFIG, mac_phone.NETWORKSETUP: HARDWARE_PORTS}
+    monkeypatch.setattr(mac_phone, "_run", lambda cmd: answers.get(cmd[0]))
+    assert mac_phone.lan_addresses() == (["192.168.1.23", "10.20.30.40"], "")
+    answers.pop(mac_phone.NETWORKSETUP)                              # networksetup didn't answer: names only
+    assert mac_phone.lan_addresses() == (["192.168.1.23", "10.20.30.40"], "")
+    answers.pop(mac_phone.IFCONFIG)
+    ips, why = mac_phone.lan_addresses()
+    assert ips == [] and "ifconfig" in why
+
+
+def test_a_file_sent_from_a_mac_is_judged_by_the_path_it_opened(monkeypatch, tmp_path):
+    """macOS has no /proc: the opened file's path comes from fcntl(F_GETPATH), links followed."""
+    real = tmp_path / "notes.txt"
+    real.write_text("hi")
+    asked = []
+
+    def fcntl_(fd, op, buf):
+        asked.append(op)
+        return str(real).encode() + b"\0" * (len(buf) - len(str(real)))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(phone.fcntl, "fcntl", fcntl_)
+    monkeypatch.setattr(phone.fcntl, "F_GETPATH", 50, raising=False)
+    with open(real) as f:
+        assert phone.opened_path(f.fileno()) == real
+    assert asked == [50]
+    entry = phone.add("file", path=str(real))
+    assert entry["file"]["name"] == "notes.txt"
+
+
+def test_doctor_on_a_mac_says_how_to_start_auren_and_checks_the_macos_firewall(monkeypatch):
+    from auren import doctor, settings
+    from auren.mac import doctor as mac_doctor
+    from auren.mac import service
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(settings, "current", lambda: {"phone.enabled": "auto", "phone.lan": True, "phone.port": 8735})
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("192.168.1.23", "lan")],
+                                                              {"tailscale": "Tailscale isn't installed"}))
+    monkeypatch.setattr(service, "running", lambda name: False)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: pytest.fail(f"ran {cmd} on a Mac"))      # no systemctl, no ufw
+    asked = []
+    monkeypatch.setattr(mac_doctor, "firewall_check", lambda port: asked.append(port) or doctor.Check(
+        "Phone", "firewall", doctor.OK, "off"))
+    phone.STATUS.write_text(json.dumps({"on": False, "why": "", "pid": 0}))
+    _paired()
+    found = {c.name: c for c in doctor.phone_checks()}
+    assert "tailscale.com/download/mac" in found["Tailscale"].fix
+    assert found["phone server"].fix == "auren service start"
+    assert asked == [8735] and found["firewall"].status == doctor.OK
+
+
+LISTAPPS = """ALF: total number of apps = 2
+
+1 :  /Applications/Spotify.app
+ \t ( Allow incoming connections )
+
+2 :  /u/python3.13
+ \t ( {python} incoming connections )
+"""
+
+
+@pytest.mark.parametrize("answers,status,says", [
+    ({"--getglobalstate": "Firewall is disabled. (State = 0)"}, "ok", "off"),
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)",
+      "--getblockall": "Firewall has block all state set to enabled."}, "warn", "blocks all incoming"),
+    ({"--getglobalstate": "Firewall is blocking all non-essential incoming connections. (State = 2)"},
+     "warn", "blocks all incoming"),
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Block all DISABLED!",
+      "python3.13": "The application /u/python3.13 is blocked from receiving incoming connections.",
+      "Auren.app": "The application /u/Auren.app is not part of the firewall."}, "warn", "blocks python3.13"),
+    # --getappblocked says "permitted" for programs that aren't even in the list: that alone isn't OK
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Firewall has block all state set to disabled.",
+      "python3.13": "The application /u/python3.13 is permitted to receive incoming connections.",
+      "--listapps": "ALF: total number of apps = 0 \n"}, "warn", "Click Allow"),
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Firewall has block all state set to disabled.",
+      "python3.13": "The application /u/python3.13 is permitted to receive incoming connections.",
+      "--listapps": LISTAPPS.format(python="Allow")}, "ok", "allows"),
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Firewall has block all state set to disabled.",
+      "python3.13": "The application /u/python3.13 is permitted to receive incoming connections.",
+      "--listapps": LISTAPPS.format(python="Block")}, "warn", "blocks python3.13"),
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Firewall has block all state set to disabled.",
+      "python3.13": "The application /u/python3.13 is permitted to receive incoming connections.",
+      "--listapps": "something new: /u/python3.13 allowed"}, "warn", "Click Allow"),     # a format it doesn't know
+    ({"--getglobalstate": "Firewall is enabled. (State = 1)", "--getblockall": "Firewall has block all state set to disabled.",
+      "python3.13": "The application /u/python3.13 is not part of the firewall.",
+      "Auren.app": "The application /u/Auren.app is not part of the firewall."}, "warn", "Click Allow"),
+    ({}, "warn", "couldn't ask"),
+])
+def test_the_macos_firewall_check(monkeypatch, answers, status, says):
+    from auren.mac import doctor as mac_doctor
+    monkeypatch.setattr(mac_doctor.os, "access", lambda path, mode: True)
+    monkeypatch.setattr(mac_doctor, "listener", lambda: ["/u/python3.13", "/Users/me/Applications/Auren.app"])
+
+    def fw(*args):
+        key = args[0] if args[0] != "--getappblocked" else args[1].rsplit("/", 1)[1]
+        return (0, answers[key]) if key in answers else (1, "")
+    monkeypatch.setattr(mac_doctor, "_fw", fw)
+    c = mac_doctor.firewall_check(8735)
+    assert c.status == status and says in c.detail, c
+    if status == "warn":
+        assert "System Settings → Network → Firewall → Options" in c.fix
+
+
+def test_no_socketfilterfw_no_firewall_check(monkeypatch):
+    from auren.mac import doctor as mac_doctor
+    monkeypatch.setattr(mac_doctor.os, "access", lambda path, mode: False)
+    assert mac_doctor.firewall_check(8735) is None
+
+
+def test_the_listener_the_firewall_knows_is_the_real_python_and_the_app():
+    from auren.mac import doctor as mac_doctor
+    python, app = mac_doctor.listener()
+    assert python == os.path.realpath(sys.executable) and app.endswith("Applications/Auren.app")
+
+
+def test_shared_images_go_to_the_macs_downloads(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(phone_server.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(phone_server.subprocess, "run", lambda *a, **k: pytest.fail("ran xdg-user-dir on a Mac"))
+    path = phone_server._save_download(b"\x89PNG", "image/png")
+    assert path.parent == tmp_path / "Downloads" and path.read_bytes() == b"\x89PNG"
+
+
+def test_a_shared_image_goes_on_the_clipboard_with_its_type(server, monkeypatch):
+    from auren.hands import clipboard
+    client, _, _ = server
+    _, token = _paired()
+    copied = []
+    monkeypatch.setattr(clipboard, "copy", lambda data, kind=None, sensitive=True: copied.append((data, kind, sensitive)))
+    r = client.post("/v1/share", headers=_auth(token), json={"id": "c2", "kind": "image", "action": "clipboard",
+                                                             "data": "/9j/4AAQ", "mime": "image/jpeg"})
+    assert r.json() == {"status": "ok"} and copied == [(b"\xff\xd8\xff\xe0\x00\x10", "image/jpeg", False)]
+
+    def broken(*a, **k):
+        raise clipboard.ClipboardError("the clipboard can't be written")
+    monkeypatch.setattr(clipboard, "copy", broken)
+    r = client.post("/v1/share", headers=_auth(token), json={"id": "c3", "kind": "text", "action": "clipboard", "text": "x"})
+    assert r.json() == {"status": "error: the clipboard can't be written"}
+
+
+def test_open_on_the_pc_uses_the_desktops_own_opener(server, monkeypatch, tmp_path):
+    from auren.hands import desktop
+    client, _, _ = server
+    _, token = _paired()
+    opened = []
+    monkeypatch.setattr(desktop, "open_url", lambda url, *a, **k: opened.append(("url", url)))
+    monkeypatch.setattr(desktop, "open_path", lambda p: opened.append(("path", p)))
+    monkeypatch.setattr(phone_server, "_downloads_dir", lambda: tmp_path)
+    client.post("/v1/share", headers=_auth(token), json={"id": "o1", "kind": "link", "action": "open",
+                                                         "text": "https://example.com"})
+    client.post("/v1/share", headers=_auth(token), json={"id": "o2", "kind": "image", "action": "open",
+                                                         "data": "iVBORw0KGgo=", "mime": "image/png"})
+    assert opened[0] == ("url", "https://example.com") and opened[1][0] == "path"
+    assert opened[1][1].startswith(str(tmp_path))
+
+
+def test_the_mac_pasteboard_gets_a_phones_jpeg_as_png(monkeypatch):
+    import types
+
+    from auren.mac import clipboard
+    board = {}
+
+    class Board:
+        def clearContents(self):
+            board.clear()
+
+        def setData_forType_(self, data, t):
+            board[t] = bytes(data)
+            return True
+
+    class Rep:
+        @staticmethod
+        def imageRepWithData_(data):
+            return Rep() if bytes(data).startswith(b"\xff\xd8") else None
+
+        def representationUsingType_properties_(self, kind, props):
+            return b"\x89PNG converted"
+    fake = types.SimpleNamespace(NSData=types.SimpleNamespace(dataWithBytes_length_=lambda d, n: d, data=lambda: b""),
+                                 NSPasteboardTypeString="public.utf8-plain-text", NSPasteboardTypePNG="public.png",
+                                 NSBitmapImageRep=Rep, NSBitmapImageFileTypePNG=4)
+    monkeypatch.setitem(sys.modules, "Foundation", fake)
+    monkeypatch.setitem(sys.modules, "AppKit", fake)
+    monkeypatch.setattr(clipboard, "_board", Board)
+    clipboard.copy(b"\xff\xd8\xff jpeg", "image/jpeg", sensitive=False)
+    assert board == {"public.png": b"\x89PNG converted"}
+    clipboard.copy(b"not an image", "image/jpeg", sensitive=False)   # unreadable: as it came, under its own name
+    assert board == {"public.jpeg": b"not an image"}
 
 
 # --- review fixes ----------------------------------------------------------------------------------
@@ -1381,10 +1743,11 @@ def test_a_clipboard_share_keeps_the_text_exactly(server, monkeypatch):
     client, d, _ = server
     _, token = _paired()
     copied = []
-    monkeypatch.setattr(phone_server.subprocess, "run", lambda cmd, input=None, **k: copied.append((cmd, input)))
+    from auren.hands import clipboard
+    monkeypatch.setattr(clipboard, "copy", lambda data, kind=None, sensitive=True: copied.append((data, kind, sensitive)))
     code = "    def f():\n        return 1\n" + "x" * 5000 + "\n"
     r = client.post("/v1/share", headers=_auth(token), json={"id": "c1", "kind": "text", "action": "clipboard", "text": code})
-    assert r.json() == {"status": "ok"} and copied == [(["wl-copy"], code.encode())]
+    assert r.json() == {"status": "ok"} and copied == [(code.encode(), None, False)]    # kept in clipboard history
 
 
 def test_pairing_a_phone_doesnt_hide_a_revoke_from_the_sweeper(server):
@@ -1526,7 +1889,7 @@ def test_doctor_sees_a_rule_for_every_port_and_tailscales_own(monkeypatch, tmp_p
     rules = tmp_path / "user.rules"
     monkeypatch.setattr(doctor, "UFW_RULES", rules)
     prefs = {"NetfilterMode": 2}
-    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps(prefs)) if cmd[0] == "tailscale" else (0, "active"))
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps(prefs)) if cmd[1:] == ["debug", "prefs"] else (0, "active"))
     rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
     assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.OK
     for other in ("-A ufw-user-input -p udp -s 192.168.31.0/24 -j ACCEPT",           # UDP only
@@ -1552,15 +1915,18 @@ def test_pair_json_gives_the_bar_panel_a_qr_code_then_the_phone(monkeypatch, cap
     def phone_scans(_):                    # while it waits: the panel shows the PNG, the phone pairs with its code
         if "line" not in seen:
             seen["line"] = json.loads(capsys.readouterr().out)
-            seen["png"] = phone.PAIR_QR.read_bytes()
+            seen["png"] = Path(seen["line"]["qr"]).read_bytes()
             phone.pair(parse_qs(urlparse(seen["line"]["uri"]).query)["code"][0], "Pixel")
     monkeypatch.setattr(phone.time, "sleep", phone_scans)
+    newer = phone.pair_qr_file()                       # another pairing's QR code: a late cleanup must leave it
+    newer.write_bytes(b"newer")
     assert phone.main(["pair", "--json"]) == 0
     line = seen["line"]
-    assert line["qr"] == str(phone.PAIR_QR) and line["where"] == [{"ip": "192.168.1.20", "via": "lan"}]
+    assert phone.is_pair_qr(line["qr"]) and Path(line["qr"]) != newer
+    assert line["where"] == [{"ip": "192.168.1.20", "via": "lan"}]
     assert "Tailscale is off on this PC" in line["warn"] and seen["png"].startswith(b"\x89PNG")
     assert json.loads(capsys.readouterr().out)["paired"]["name"] == "Pixel"
-    assert not phone.PAIR_QR.exists()                                      # gone once it's done
+    assert not Path(line["qr"]).exists() and newer.read_bytes() == b"newer"   # only its own is gone
 
 
 def test_pair_json_says_why_it_cant(monkeypatch, capsys):
@@ -1690,3 +2056,31 @@ def test_the_firewall_check_counts_only_rules_that_let_the_phone_in(monkeypatch,
                      ("-A ufw-user-input -p tcp -d 10.0.0.5 -j ACCEPT", False)]:
         rules.write_text(line + "\n")
         assert (doctor.firewall_check(8735, lan, tailscale=False).status == doctor.OK) is ok, line
+
+
+def test_the_firewalls_list_of_apps_is_read_defensively():
+    from auren.mac import doctor as mac_doctor
+    assert mac_doctor.listed_apps(LISTAPPS.format(python="Block")) == {"/Applications/Spotify.app": "allowed",
+                                                                        "/u/python3.13": "blocked"}
+    assert mac_doctor.listed_apps("ALF: total number of apps = 0") == {}
+    assert mac_doctor.listed_apps("") is None and mac_doctor.listed_apps("python3.13 allowed") is None
+    assert mac_doctor.listed_apps("1 : /u/python3.13\n  ( something else )") == {"/u/python3.13": ""}
+
+
+def test_without_networksetup_a_mac_keeps_only_en_interfaces(monkeypatch):
+    """A failed or empty hardware list never widens what's listened on: a VirtualBox host-only network
+    (vboxnet0) or an interface with a name no list knows is dropped; en<N> is kept."""
+    from auren.mac import phone as mac_phone
+    extra = ("vboxnet0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n"
+             "\tinet 192.168.56.1 netmask 0xffffff00 broadcast 192.168.56.255\n"
+             "foo0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n"
+             "\tinet 192.168.77.1 netmask 0xffffff00 broadcast 192.168.77.255\n")
+    links = mac_phone.parse_ifconfig(IFCONFIG + extra)
+    for hardware in (None, set()):
+        assert mac_phone.pick_lan(links, hardware) == ["192.168.1.23", "10.20.30.40"]
+    assert mac_phone.hardware_ports("Hardware Port: Thunderbolt Bridge\nDevice: bridge0\n") == set()
+    assert mac_phone.hardware_ports(None) is None
+    answers = {mac_phone.IFCONFIG: IFCONFIG + extra, mac_phone.NETWORKSETUP: "VLAN Configurations\n"}
+    monkeypatch.setattr(mac_phone, "_run", lambda cmd: answers.get(cmd[0]))
+    assert mac_phone.lan_addresses() == (["192.168.1.23", "10.20.30.40"], "")
+    assert mac_phone.pick_lan(links, {"foo0", "en0"}) == ["192.168.1.23", "192.168.77.1"]   # listed: trusted

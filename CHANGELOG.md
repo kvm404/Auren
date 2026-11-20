@@ -10,6 +10,12 @@
   After a `brew upgrade` on its own, `auren` reminds you to run `auren setup`. Each release is published
   to the tap `kvm404/homebrew-auren` by a new `brew` workflow. Installing from a clone with
   `./install-macos.sh` still works. See [docs/macos.md](docs/macos.md).
+- **The phone remote on macOS.** Pair the Android app from the menu bar icon's new **Phone…** window
+  (Get the app, Pair a phone with its QR code, the paired phones with Unpair), or with `auren phone
+  pair` in Terminal. Auren listens on the Mac's Wi-Fi or Ethernet address and on Tailscale (the Mac app
+  or Homebrew's), and `auren doctor` checks the macOS firewall instead of ufw: when the firewall is on,
+  macOS asks once whether Auren's Python may accept incoming connections. Click Allow. See
+  [docs/macos.md](docs/macos.md#your-phone).
 
 ### Changed
 

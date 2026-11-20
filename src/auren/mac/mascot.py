@@ -4,7 +4,8 @@ com.auren.mascot launch agent).
 On Omarchy the mascot is a Quickshell instance and the settings live in a bar plugin. Here the same QML
 characters run in mascot/mac.qml, fed by `Bridge` (the daemon's state file, the loudness file, the
 mascot's preferences and place), and a menu bar icon gives the panel's quick settings: talk, voice,
-brain, safety, auto-send, mascot, setup check, quit. It needs no permissions of its own.
+brain, safety, auto-send, mascot, setup check, the phone (mascot/mac-phone.qml, fed by phone_window.py),
+quit. It needs no permissions of its own.
 """
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
     from .. import settings as auren_settings
-    from . import service
+    from . import phone_window, service
     from . import setup as auren_setup
     from .app import SETUP_REQUEST, SETUP_REQUEST_TTL
 
@@ -370,8 +371,12 @@ def main() -> int:
         watch(scr)
     app.screenAdded.connect(lambda scr: (watch(scr), bridge.screensChanged.emit()))
     app.screenRemoved.connect(lambda *_: bridge.screensChanged.emit())
+    phone_ui = phone_window.bridge(lambda: bridge._alive)
+    app.aboutToQuit.connect(phone_ui.stop)
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("auren", bridge)
+    engine.rootContext().setContextProperty("phone", phone_ui)
+    phone_ui.setParent(engine)              # it goes after the window that reads it, not before
     qml = Path(os.environ.get("AUREN_MASCOT_DIR") or DATA_HOME / "mascot") / "mac.qml"
     if not qml.exists():
         qml = Path(__file__).resolve().parents[3] / "mascot" / "mac.qml"      # a checkout
@@ -380,13 +385,25 @@ def main() -> int:
         print(f"auren mascot: couldn't load {qml}", file=sys.stderr)
         return 1
     engine.load(QUrl.fromLocalFile(str(qml.with_name("mac-setup.qml"))))
+    engine.load(QUrl.fromLocalFile(str(qml.with_name("mac-phone.qml"))))
 
     timers = []
-    for ms, fn in ((250, bridge.poll_state), (50, bridge.poll_level), (2000, bridge.reload_files), (1200, bridge.check)):
+    for ms, fn in ((250, bridge.poll_state), (50, bridge.poll_level), (2000, bridge.reload_files), (1200, bridge.check),
+                    (1000, phone_ui.poll)):
         t = QTimer()
         t.timeout.connect(fn)
         t.start(ms)
         timers.append(t)
+
+    # launchd stops the mascot with SIGTERM: quit through Qt, so aboutToQuit ends a pairing that's open. The
+    # timer lets Python run its signal handlers while Qt waits.
+    import signal
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: app.quit())
+    wake = QTimer()
+    wake.timeout.connect(lambda: None)
+    wake.start(500)
+    timers.append(wake)
 
     # ---- the menu bar icon ----------------------------------------------------------------------
     def icon(color: str) -> QIcon:
@@ -448,6 +465,7 @@ def main() -> int:
                                           bridge.reload_files(), bridge.placeReset.emit()), mascot_menu)
     menu.addSeparator()
     item("Set up Auren…", bridge.openSetup)
+    item("Phone…", phone_ui.openWindow)
     item("Edit settings", lambda: subprocess.Popen(["open", "-t", str(CONFIG_DIR / "config.toml")]))
     item("Restart Auren", bridge.restart)
 

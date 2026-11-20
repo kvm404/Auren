@@ -12,6 +12,8 @@ from ..hands.clipboard import _TEXT, TEXT, ClipboardError
 __all__ = ["types", "save", "copy", "text", "restore"]
 
 CONCEALED = "org.nspasteboard.ConcealedType"
+UTI = {"image/jpeg": "public.jpeg", "image/tiff": "public.tiff", "image/gif": "com.compuserve.gif",
+       "image/heic": "public.heic", "image/webp": "org.webmproject.webp"}    # the pasteboard's names for them
 
 
 def _board():
@@ -25,7 +27,7 @@ def _ns_type(kind: str | None) -> str:
         return str(NSPasteboardTypeString)
     if kind == "image/png":
         return str(NSPasteboardTypePNG)
-    return kind
+    return UTI.get(kind, kind)
 
 
 def _mime(ns: str) -> str:
@@ -55,8 +57,25 @@ def save() -> tuple[str, list[tuple[str, bytes]]] | None:
     return ("pasteboard", held) if held else None
 
 
+def _as_png(data: bytes) -> bytes | None:
+    """An image in another format (a JPEG from the phone, say) as PNG, which every app pastes; None if it
+    can't be read."""
+    from AppKit import NSBitmapImageFileTypePNG, NSBitmapImageRep
+    from Foundation import NSData
+    rep = NSBitmapImageRep.imageRepWithData_(NSData.dataWithBytes_length_(data, len(data)))
+    png = rep.representationUsingType_properties_(NSBitmapImageFileTypePNG, {}) if rep is not None else None
+    return bytes(png) if png is not None else None
+
+
 def copy(data: bytes, kind: str | None = None, sensitive: bool = True) -> None:
     from Foundation import NSData
+    if kind and kind.startswith("image/") and kind != "image/png":
+        try:
+            png = _as_png(data)
+        except Exception:  # noqa: BLE001 - AppKit can't read it: put it on as it is
+            png = None
+        if png is not None:
+            data, kind = png, "image/png"
     try:
         board = _board()
         board.clearContents()

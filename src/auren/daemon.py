@@ -1062,9 +1062,8 @@ class Daemon:
             self._phone_task = asyncio.create_task(self._serve_phone())
 
     async def _serve_phone(self) -> None:
-        """The phone remote's server, on the Tailscale and private LAN addresses, while phone.enabled isn't false.
-        Not on macOS yet (its network and file code is Linux's)."""
-        if MAC or self.settings.get("phone.enabled") is False:
+        """The phone remote's server, on the Tailscale and private LAN addresses, while phone.enabled isn't false."""
+        if self.settings.get("phone.enabled") is False:
             from .phone import STATUS
             STATUS.unlink(missing_ok=True)
             return
