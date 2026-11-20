@@ -11,6 +11,7 @@ import re
 import sys
 from pathlib import Path
 
+from .. import config
 from ..config import DATA_HOME
 from ..doctor import FAIL, OK, WARN, Check, _run, _shared, _version, phone_checks
 from . import service
@@ -67,7 +68,7 @@ def checks() -> list[Check]:
         import Quartz  # noqa: F401
         out.append(Check(g, "macOS libraries (pyobjc)", OK, "installed"))
     except ImportError as e:
-        out.append(Check(g, "macOS libraries (pyobjc)", FAIL, str(e), "./install-macos.sh"))
+        out.append(Check(g, "macOS libraries (pyobjc)", FAIL, str(e), config.REINSTALL))
 
     out += _permissions()
 
@@ -85,14 +86,14 @@ def checks() -> list[Check]:
     g = "Install"
     ctl = DATA_HOME / "bin/auren-ctl"
     out.append(Check(g, "auren-ctl", OK, str(ctl)) if os.access(ctl, os.X_OK) else
-               Check(g, "auren-ctl", FAIL, f"{ctl} missing", "./install-macos.sh"))
+               Check(g, "auren-ctl", FAIL, f"{ctl} missing", config.REINSTALL))
     from . import app
     out.append(Check(g, "Auren.app", OK, str(app.APP)) if app.current() else
                Check(g, "Auren.app", WARN, "out of date" if app.installed() else
-                     "not installed: macOS lists the permissions under a Python, not Auren", "./install-macos.sh"))
+                     "not installed: macOS lists the permissions under a Python, not Auren", config.REINSTALL))
     for name, label in service.LABELS.items():
         if not service.plist_path(name).exists():
-            out.append(Check(g, label, FAIL, "launch agent not installed", "./install-macos.sh"))
+            out.append(Check(g, label, FAIL, "launch agent not installed", config.REINSTALL))
         elif service.running(name):
             out.append(Check(g, label, OK, "running"))
         else:

@@ -22,6 +22,15 @@ installed, but updating opens a terminal that waits until Auren is idle, stops i
 --needed auren` (it asks for your password there), and starts Auren again as it was. Updating the
 whole system (yay) updates Auren too; then restart it: systemctl --user restart auren auren-mascot.
 An install.sh install still updates itself, and after updating says once that the package exists.
+
+On a Mac, Homebrew's auren (brew install kvm404/auren/auren, then auren setup; install.json's mode is
+"brew") is Homebrew's to update. The check compares the version installed with the latest release (and
+with what Homebrew has already, after a brew upgrade without auren setup). Updating needs no password,
+so it runs in the background like a self-update: wait until Auren is idle, stop it, brew upgrade auren,
+run the new version's install-macos.sh --brew, and start Auren again as it was. If that install fails,
+the version that was there is set up again from the copy of its source kept outside the Cellar
+(ROLLBACK). A version Homebrew has already is set up without GitHub. A Homebrew install never updates
+from a git clone, and a git install never runs brew.
 """
 
 from __future__ import annotations
@@ -64,7 +73,12 @@ BUSY = {"starting", "listening", "thinking", "working", "speaking"}
 IDLE_WAIT = 15 * 60                                # how long an update waits for Auren to be idle
 INSTALL_TIMEOUT = 20 * 60
 LOCK_WAIT = 10 * 60                                # how long the update waits for a check to finish
-UPDATE_TIMEOUT = IDLE_WAIT + INSTALL_TIMEOUT * 2 + 10 * 60    # an "updating" status older than this is stale
+BREW_UPDATE_TIMEOUT = 5 * 60
+# An "updating" status older than this is stale: the wait, then at most three long steps (Homebrew's
+# upgrade, the install, and installing back), and brew update.
+UPDATE_TIMEOUT = IDLE_WAIT + INSTALL_TIMEOUT * 3 + BREW_UPDATE_TIMEOUT + 10 * 60
+BREW_FORMULA = "auren"
+ROLLBACK = CACHE_DIR / "brew-rollback"             # a Homebrew install's source, to go back to
 # The session's environment the update needs: the user manager's may lack PATH entries (uv), custom XDG
 # folders, and what git signs in with (gh, an SSH agent, tokens).
 PASS_ENV = ("PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
@@ -271,6 +285,11 @@ def check(notify: bool = False) -> dict:
                 _notify_once(result)
             return result
         info = installed()
+        if info.get("mode") == "brew":          # Homebrew's: versions, no commits (and no git clone)
+            result = _check_brew(info)
+            if notify and result.get("state") == "available":
+                _notify_once(result)
+            return result
         if not info.get("commit"):
             return _write(state="unknown", checked_at=time.time(),
                           message=f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
@@ -345,6 +364,47 @@ def _check_package() -> dict:
         return _write(state="current", latest=latest, commits=[], count=0, checked_at=time.time())
     return _write(state="available", latest=latest, commits=[], count=0, checked_at=time.time(),
                   note=f"Installed with pacman: updating runs yay -S {config.PACKAGE_NAME} in a terminal.")
+
+
+def _brew_bin(info: dict) -> Path:
+    """The brew that installed Auren (install-macos.sh --brew recorded it)."""
+    return Path(info.get("brew") or "/opt/homebrew/bin/brew")
+
+
+def _brew_libexec(brew: Path) -> Path:
+    """Homebrew's current copy of Auren's source: <prefix>/opt/auren/libexec/source, for <prefix>/bin/brew."""
+    return brew.parent.parent / "opt" / BREW_FORMULA / "libexec" / "source"
+
+
+def _keg_version(brew: Path) -> str:
+    """The version Homebrew has linked now (it may be newer than the one set up); '' if none."""
+    try:
+        text = (_brew_libexec(brew) / "pyproject.toml").read_text()
+    except OSError:
+        return ""
+    match = re.search(r'^version = "([^"]+)"$', text, re.M)
+    return match[1] if match else ""
+
+
+def _check_brew(info: dict) -> dict:
+    """Homebrew's install against the latest release, like the package: by version, not by commit. A
+    brew upgrade that wasn't set up yet (auren setup) counts as an update too."""
+    have, keg = info.get("version") or _version(), _keg_version(_brew_bin(info))
+    try:
+        release = _latest_release(DEFAULT_REMOTE)
+    except UpdateError as e:
+        if not (keg and _numbers(keg) > _numbers(have)):
+            return _write(state="error", message=str(e), checked_at=time.time())
+        release = {"tag": "v" + keg, "name": f"Auren {keg}", "url": ""}
+    latest = {**release, "commit": release["tag"], "short": release["tag"], "subject": release["name"], "date": 0}
+    if have and _numbers(release["tag"]) <= _numbers(have):
+        if keg and _numbers(keg) > _numbers(have):
+            return _write(state="available", latest={**latest, "tag": "v" + keg, "commit": "v" + keg, "short": "v" + keg},
+                          commits=[], count=0, checked_at=time.time(),
+                          note=f"Homebrew has {keg} already: updating sets it up (as auren setup does).")
+        return _write(state="current", latest=latest, commits=[], count=0, checked_at=time.time())
+    return _write(state="available", latest=latest, commits=[], count=0, checked_at=time.time(),
+                  note=f"Installed with Homebrew: updating runs brew upgrade {BREW_FORMULA}, then sets it up.")
 
 
 def _notify_once(result: dict) -> None:
@@ -541,22 +601,51 @@ def _wait_idle() -> None:
         time.sleep(2)
 
 
-def _install(repo: Path, dev: bool) -> None:
-    """Run install.sh, in its own process group so a timeout stops everything it started (uv, downloads)."""
-    _log(f"install.sh{' --dev' if dev else ''} from {repo}")
+def _logged(cmd: list[str], cwd: Path, env: dict, what: str, timeout: float = INSTALL_TIMEOUT) -> None:
+    """Run cmd into the log, in its own process group so a timeout stops everything it started (uv,
+    downloads)."""
     with LOG.open("a") as out:
-        script = INSTALLER if (repo / INSTALLER).exists() else "install.sh"
-        p = subprocess.Popen(["bash", str(repo / script), *(["--dev"] if dev else [])], cwd=repo,
-                             env={**os.environ, "AUREN_UPDATE": "1"}, start_new_session=True,
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         try:
-            code = p.wait(timeout=INSTALL_TIMEOUT)
+            code = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired as e:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
-            raise UpdateError(f"the install took more than {INSTALL_TIMEOUT // 60} minutes") from e
+            raise UpdateError(f"{what} took more than {int(timeout // 60)} minutes") from e
     if code:
-        raise UpdateError(f"install.sh failed (exit {code}): see {LOG}")
+        raise UpdateError(f"{what} failed (exit {code}): see {LOG}")
+
+
+def _install(repo: Path, dev: bool, brew: Path | None = None) -> None:
+    """Run install.sh (on a Mac install-macos.sh; for Homebrew's copy, with --brew, and Homebrew's bin
+    first on PATH, as the auren wrapper has it: uv and brew are there, whatever PATH this has)."""
+    script = "install-macos.sh" if brew else INSTALLER if (repo / INSTALLER).exists() else "install.sh"
+    flags = ["--dev"] if dev else ["--brew"] if brew else []
+    env = {**os.environ, "AUREN_UPDATE": "1"}
+    if brew:
+        env["PATH"] = os.pathsep.join(filter(None, (str(brew.parent), env.get("PATH", ""))))
+    _log(" ".join([script, *flags]) + f" from {repo}")
+    _logged(["bash", str(repo / script), *flags], repo, env, script)
+
+
+def _brew_upgrade(brew: Path) -> None:
+    """brew upgrade auren, in the background: Homebrew in /opt/homebrew needs no password."""
+    env = {**os.environ, "HOMEBREW_NO_ENV_HINTS": "1",
+           # Keep the version being replaced for now (brew cleanup, by hand or brew's own every 30 days,
+           # removes it later): going back uses ROLLBACK's copy, but the keg is a second way back.
+           "HOMEBREW_NO_INSTALL_CLEANUP": "1"}
+    # The tap must be fetched for brew to see the new formula. brew upgrade does that itself only once a
+    # day, and never with HOMEBREW_NO_AUTO_UPDATE, so update it now (if that fails, the upgrade still
+    # tries with what it has, and says it's up to date).
+    env.pop("HOMEBREW_NO_AUTO_UPDATE", None)
+    _log(f"{brew} update")
+    try:
+        _logged([str(brew), "update", "--quiet"], Path.home(), env, "brew update", timeout=BREW_UPDATE_TIMEOUT)
+    except UpdateError as e:
+        _log(str(e))
+    _log(f"{brew} upgrade {BREW_FORMULA}")
+    _logged([str(brew), "upgrade", "--formula", BREW_FORMULA], Path.home(), env, f"brew upgrade {BREW_FORMULA}")
 
 
 def _checkout(repo: Path, dev: bool, commit: str) -> None:
@@ -621,6 +710,8 @@ def _restart_shell() -> None:
 
 def _update() -> tuple[str, bool]:
     info = installed()
+    if info.get("mode") == "brew":             # Homebrew's to update: never from a git clone
+        return _update_brew(info), False
     before = info.get("commit", "")
     if not before:                             # not knowing what's there, don't replace it
         raise UpdateError(f"This install doesn't know its version: run {INSTALLER} from a git checkout once")
@@ -663,6 +754,15 @@ def _update() -> tuple[str, bool]:
             raise UpdateError(f"{e}. Auren is back on {back_to[:7]}.") from e
     except Exception as e:                     # whatever happened, Auren is started again below
         failure = e if isinstance(e, UpdateError) else UpdateError(f"unexpected error: {e}")
+    trouble = _restore(running, enabled)
+    if failure:
+        raise UpdateError(str(failure) + trouble) from failure
+    new = _commits(repo, target, 1)[0]
+    return f"Updated to {release['tag']} ({new['short']}): {new['subject']}" + trouble, plugin_changed
+
+
+def _restore(running: dict, enabled: dict) -> str:
+    """Start Auren and its mascot again as they were before the update; what didn't start, to report."""
     with contextlib.suppress(OSError):         # a full disk mustn't keep Auren stopped
         _step("Starting Auren…")
     for unit, was in enabled.items():          # an older install.sh enables them
@@ -672,11 +772,86 @@ def _update() -> tuple[str, bool]:
              if _systemctl("restart" if was else "stop", u) or (was and not _started(u))]
     where = ("~/.local/state/auren/" + ("daemon" if stuck[0] == "auren" else "mascot") + ".out.log"
              if sys.platform == "darwin" else f"journalctl --user -u {stuck[0]}") if stuck else ""
-    trouble = f" {' and '.join(stuck)} didn't start: see its log ({where})." if stuck else ""
+    return f" {' and '.join(stuck)} didn't start: see its log ({where})." if stuck else ""
+
+
+def _rollback_copy(info: dict, have: str) -> Path:
+    """The source set up now, outside the Cellar, to go back to: brew upgrade or brew cleanup may have
+    removed its keg. install-macos.sh --brew keeps one; if it's missing it's made here from install.json's
+    source. Without one, nothing is changed."""
+    name = have or "current"
+    dest = ROLLBACK / name
+    if (dest / "install-macos.sh").exists():
+        return dest
+    source = Path(info.get("source", ""))
+    if not (source.is_absolute() and (source / "install-macos.sh").exists()):
+        raise UpdateError(f"Auren couldn't go back to {name} if the update failed (Homebrew has removed its "
+                          "files), so nothing was changed: run auren setup")
+    tmp = ROLLBACK.with_name(ROLLBACK.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        tmp.mkdir(parents=True)
+        shutil.copytree(source, tmp / name, symlinks=True)
+        shutil.rmtree(ROLLBACK, ignore_errors=True)
+        tmp.rename(ROLLBACK)
+    except OSError as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise UpdateError(f"Couldn't keep a copy of {name} to go back to ({e}), so nothing was changed") from e
+    return dest
+
+
+def _update_brew(info: dict) -> str:
+    """Homebrew's install: brew upgrade, then the new version's install-macos.sh --brew."""
+    brew = _brew_bin(info)
+    if not os.access(brew, os.X_OK):
+        raise UpdateError(f"Homebrew isn't at {brew}: run brew upgrade {BREW_FORMULA}, then auren setup")
+    have = info.get("version") or _version()
+    keg = _keg_version(brew)
+    downloaded = bool(keg) and _numbers(keg) > _numbers(have)     # brew upgrade ran, auren setup didn't
+    if not downloaded:                         # then GitHub isn't needed: it's set up from here
+        _step("Looking for the newest version…")
+        release = _latest_release(DEFAULT_REMOTE)
+        if have and _numbers(release["tag"]) <= _numbers(have):
+            return "Already up to date"
+    back = _rollback_copy(info, have)          # before anything is stopped or changed
+    _step("Waiting for Auren to finish…")
+    _wait_idle()
+    running = {u: _systemctl("is-active", "--quiet", u) == 0 for u in UNITS}
+    enabled = {u: _systemctl("is-enabled", "--quiet", u) == 0 for u in UNITS}
+    _step("Stopping Auren…")
+    failure, message = None, ""
+    try:
+        if _systemctl("stop", *UNITS):
+            raise UpdateError("Couldn't stop Auren, so nothing was changed")
+        _step("Updating with Homebrew…")
+        try:
+            _brew_upgrade(brew)                # a failure here leaves Auren's environment as it was
+        except UpdateError as e:
+            if not downloaded:
+                raise
+            _log(f"{e}: setting up {keg}, which Homebrew has already")
+        new = _keg_version(brew)
+        if not new or _numbers(new) <= _numbers(have):
+            message = f"Homebrew has no newer Auren than {have} yet: try again later"
+        else:
+            _step("Installing…")
+            try:
+                _install(_brew_libexec(brew), False, brew=brew)
+            except UpdateError as e:
+                _step("The install failed: going back to the version that was there…")
+                try:
+                    _install(back, False, brew=brew)
+                except UpdateError as again:
+                    raise UpdateError(f"{e}. Going back failed too ({again}): run auren setup") from e
+                raise UpdateError(f"{e}. Auren is back on {have} (Homebrew has {new}: auren setup tries "
+                                  "it again).") from e
+            message = f"Updated to {new}"
+    except Exception as e:                     # whatever happened, Auren is started again below
+        failure = e if isinstance(e, UpdateError) else UpdateError(f"unexpected error: {e}")
+    trouble = _restore(running, enabled)
     if failure:
         raise UpdateError(str(failure) + trouble) from failure
-    new = _commits(repo, target, 1)[0]
-    return f"Updated to {release['tag']} ({new['short']}): {new['subject']}" + trouble, plugin_changed
+    return message + trouble
 
 
 def _started(unit: str, timeout: float = 20) -> bool:
@@ -723,7 +898,9 @@ def main(args: list[str]) -> int:
         return 0 if result.get("state") == "current" else 1
     try:
         answer = input("Update now? Auren restarts, which takes about a minute"
-                       + (" (yay asks for your password)" if config.PACKAGED else "") + ". [y/N] ")
+                       + (" (yay asks for your password)" if config.PACKAGED else
+                          f" (it runs brew upgrade {BREW_FORMULA})" if installed().get("mode") == "brew" else "")
+                       + ". [y/N] ")
     except EOFError:
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
@@ -746,6 +923,8 @@ def _print(result: dict) -> None:
     have = result.get("installed", {})
     if have.get("mode") == "package" or config.PACKAGED:      # pacman knows the version, not a commit
         print(f"Installed: {have.get('version', '')} (Arch package)")
+    elif have.get("mode") == "brew":
+        print(f"Installed: {have.get('version', '')} (Homebrew)")
     else:
         print(f"Installed: {have.get('version', '')} {have.get('short') or '(unknown)'} ({_ago(have.get('date', 0))})")
     state = result.get("state")

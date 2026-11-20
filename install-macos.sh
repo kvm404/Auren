@@ -5,6 +5,7 @@
 #   ./install-macos.sh            install into ~/.local/share/auren (a copy: the checkout can move or go)
 #   ./install-macos.sh --dev      the same, but linked to this checkout: code changes need only a restart
 #   ./install-macos.sh --check    only report what's missing (auren doctor, once installed)
+#   ./install-macos.sh --brew     from Homebrew's copy (what `auren setup` runs): brew's auren is on PATH
 #   --browser / --no-browser      set up the browser tools (Open Browser Use) or turn them off, without asking
 #   --keys=default / --no-keys    use Ctrl+Option+A as the talk key, or leave the keys as they are, without asking
 #
@@ -14,28 +15,37 @@
 #   ~/.local/share/auren/bin/auren-ctl  what the mascot and the menu call
 #   ~/.cache/huggingface/hub/           the voice model (Phonon), fetched by `auren voice-model`
 #   ~/Applications/Auren.app            the app: macOS gives the permissions to it (src/auren/mac/app.py)
+#   ~/Library/Application Support/Auren/venv-python   a link to the venv's python, for Auren.app
+#   ~/.cache/auren/brew-rollback/       with --brew: a copy of the source set up, for auren update to go back to
 #   ~/Library/LaunchAgents/com.auren.daemon.plist, com.auren.mascot.plist   start at login, through Auren.app
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config="${XDG_CONFIG_HOME:-$HOME/.config}"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 share="$data/auren"
 userbin="$HOME/.local/bin"
 mode=install
 browser=ask
 keys=ask
+brew=false
 for arg in "$@"; do
   case "$arg" in
+    --brew) brew=true ;;
     --dev) mode=dev ;;
     --check) mode=check ;;
     --browser) browser=yes ;;
     --no-browser) browser=no ;;
     --keys=default) keys=default ;;
     --no-keys) keys=keep ;;
-    *) echo "usage: $0 [--dev|--check] [--browser|--no-browser] [--keys=default|--no-keys]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--dev|--check|--brew] [--browser|--no-browser] [--keys=default|--no-keys]" >&2; exit 2 ;;
   esac
 done
+if $brew && [[ $mode == dev ]]; then
+  echo "usage: $0: --brew installs Homebrew's copy, --dev a checkout: not both" >&2
+  exit 2
+fi
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
@@ -44,12 +54,28 @@ warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
 [[ $(uname -s) == Darwin ]] || { warn "this is the macOS installer: on Omarchy run ./install.sh"; exit 1; }
 if [[ $mode == check ]]; then
   [[ -x "$share/venv/bin/auren" ]] && exec "$share/venv/bin/auren" doctor
-  warn "Auren isn't installed yet: run ./install-macos.sh"
+  if $brew; then warn "Auren isn't set up yet: run auren setup"; else warn "Auren isn't installed yet: run ./install-macos.sh"; fi
   exit 1
 fi
 [[ $(uname -m) == arm64 ]] || { warn "Auren's voice needs an Apple Silicon Mac (this one is $(uname -m))"; exit 1; }
 macos=$(sw_vers -productVersion)
 (( ${macos%%.*} >= 14 )) || { warn "Auren needs macOS 14 or newer (this is $macos)"; exit 1; }
+if $brew; then
+  # The keg's own folder (Cellar/auren/X.Y.Z/libexec/source, not opt/auren), and the brew that installed it,
+  # which auren update runs. Run from auren update's copy of an older version, brew is on PATH.
+  source=$(cd "$repo" && pwd -P)
+  # >>> brew
+  if [[ $source == */Cellar/auren/* && -x "${source%%/Cellar/auren/*}/bin/brew" ]]; then
+    brew_bin="${source%%/Cellar/auren/*}/bin/brew"
+  elif command -v brew >/dev/null; then
+    brew_bin="$(brew --prefix)/bin/brew"
+  else
+    brew_bin=/opt/homebrew/bin/brew
+  fi
+  # <<< brew
+  brew_prefix="${brew_bin%/bin/brew}"
+  PATH="$brew_prefix/bin:$PATH"          # uv, from Homebrew, whatever PATH auren update has
+fi
 if ! command -v uv >/dev/null; then
   warn "uv is missing: install it with  brew install uv  or  curl -LsSf https://astral.sh/uv/install.sh | sh"
   exit 1
@@ -121,10 +147,29 @@ sync=(uv sync --project "$repo" --frozen --no-dev)
 [[ $mode == dev ]] || sync+=(--no-editable --reinstall-package auren)
 UV_PROJECT_ENVIRONMENT="$share/venv" "${sync[@]}"
 ln -sfn "$share/venv/bin/auren-ctl" "$share/bin/auren-ctl"
-mkdir -p "$userbin"
-ln -sfn "$share/venv/bin/auren" "$userbin/auren"
-ln -sfn "$share/venv/bin/auren-ctl" "$userbin/auren-ctl"
-[[ ":$PATH:" == *":$userbin:"* ]] || warn "$userbin isn't in your PATH: add it to ~/.zprofile, or run $share/venv/bin/auren"
+# Homebrew's auren and auren-ctl (in its bin, on PATH) run this venv. Links in ~/.local/bin from an
+# earlier ./install-macos.sh would run the venv directly, ahead of Homebrew's on PATH (and auren setup
+# would then open the setup window instead of setting up), so they're moved to Homebrew's. Only those:
+# anything else there is yours.
+if $brew; then
+  # >>> links
+  for cmd in auren auren-ctl; do
+    if [[ -L "$userbin/$cmd" && "$(readlink "$userbin/$cmd")" == "$share/venv/bin/$cmd" && -x "$brew_prefix/bin/$cmd" ]]; then
+      ln -sfn "$brew_prefix/bin/$cmd" "$userbin/$cmd"
+    fi
+  done
+  # <<< links
+else
+  mkdir -p "$userbin"
+  ln -sfn "$share/venv/bin/auren" "$userbin/auren"
+  ln -sfn "$share/venv/bin/auren-ctl" "$userbin/auren-ctl"
+  [[ ":$PATH:" == *":$userbin:"* ]] || warn "$userbin isn't in your PATH: add it to ~/.zprofile, or run $share/venv/bin/auren"
+fi
+# Where Auren.app finds this Python when it's opened from Finder (no AUREN_PYTHON), wherever the data
+# folder is: a fixed place, outside XDG
+locator="$HOME/Library/Application Support/Auren/venv-python"
+mkdir -p "${locator%/*}"
+ln -sfn "$share/venv/bin/python" "$locator"
 auren="$share/venv/bin/auren"
 
 # ---- the mascot's files ------------------------------------------------------------------------
@@ -179,7 +224,33 @@ else
 fi
 
 # ---- what's installed, for auren update ----------------------------------------------------------
-if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+if $brew; then
+  [[ -x $brew_bin ]] || warn "Homebrew isn't at $brew_bin: auren update can't run brew upgrade auren"
+  "$share/venv/bin/python" - "$share/install.json" "$source" "$brew_bin" <<'PY'
+import json, os, sys, time
+from importlib.metadata import version
+path, source, brew = sys.argv[1:]
+with open(path + ".tmp", "w") as f:
+    json.dump({"version": version("auren"), "mode": "brew", "source": source, "brew": brew,
+               "installed_at": int(time.time())}, f)
+os.replace(path + ".tmp", path)
+PY
+  # A copy of this version's source, outside the Cellar: brew upgrade (or brew cleanup) removes the old
+  # keg, and if setting up the next version fails, auren update sets this one up again from here.
+  version=$("$share/venv/bin/python" -c 'from importlib.metadata import version; print(version("auren"))')
+  rollback="$cache/auren/brew-rollback"
+  if [[ "$source" != "$rollback/$version" ]]; then
+    rm -rf -- "$rollback.tmp"
+    mkdir -p "$rollback.tmp"
+    if cp -R "$source" "$rollback.tmp/$version"; then
+      rm -rf -- "$rollback"
+      mv "$rollback.tmp" "$rollback"
+    else
+      rm -rf -- "$rollback.tmp"
+      warn "couldn't copy the source to $rollback: auren update can't go back if an update fails"
+    fi
+  fi
+elif git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
   dirty=false
   [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]] || dirty=true
   "$share/venv/bin/python" - "$share/install.json" "$repo" "$mode" \
@@ -209,7 +280,11 @@ case $browser in
     "$auren" config set integrations.browser false >/dev/null
     say "Browser tools: off (auren browser setup turns them on)" ;;
   later)
-    warn "the browser tools aren't set up: run auren browser setup (or ./install-macos.sh --browser)" ;;
+    if $brew; then
+      warn "the browser tools aren't set up: run auren browser setup (or auren setup --browser)"
+    else
+      warn "the browser tools aren't set up: run auren browser setup (or ./install-macos.sh --browser)"
+    fi ;;
 esac
 
 # ---- setup -------------------------------------------------------------------------------------

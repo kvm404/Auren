@@ -13,6 +13,9 @@ puts it in /usr (PACKAGE_LIB, PACKAGE_SHARE, /usr/bin), and `auren setup` links 
 mascot/ and bar-plugin/ to it, so key bindings, the mascot and the bar plugin find everything at the
 same paths either way.
 
+On macOS, install-macos.sh puts the program in DATA_HOME too, from a clone or, for Homebrew's `auren`
+(BREW), from brew's copy of the source when you run `auren setup`.
+
 On macOS the same folders are used (XDG variables are rarely set there), except RUNTIME_DIR, which is
 ~/Library/Application Support/auren-runtime/auren: not $TMPDIR, which macOS empties of files unused
 for 3 days, sockets included. The brain's working folder stays outside $HOME, in $TMPDIR.
@@ -121,8 +124,20 @@ def _packaged() -> bool:
 
 
 PACKAGED = _packaged()                         # running from the Arch package, not an install.sh install
+
+
+def _brew() -> bool:
+    """Installed from Homebrew (packaging/homebrew/): install-macos.sh --brew recorded mode "brew"."""
+    import json
+    try:
+        return json.loads((DATA_HOME / "install.json").read_text()).get("mode") == "brew"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+BREW = MAC and not PACKAGED and _brew()
 REINSTALL = (f"yay -S {PACKAGE_NAME}" if PACKAGED              # what puts missing program files back
-             else "./install-macos.sh" if MAC else "./install.sh")
+             else "auren setup" if BREW else "./install-macos.sh" if MAC else "./install.sh")
 
 
 def secret(name: str) -> str | None:

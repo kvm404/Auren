@@ -1,0 +1,97 @@
+name: brew
+
+# Publishes a release to the Homebrew tap kvm404/homebrew-auren (brew install kvm404/auren/auren):
+# packaging/homebrew/auren.rb with the release's url and the checksum of GitHub's source tarball for
+# its tag, as Formula/auren.rb. Needs the secret HOMEBREW_TAP_KEY: the private half of an SSH deploy key
+# with write access on that repository only (see docs/releases.md). Run it by hand for a release that
+# wasn't published (Actions → brew).
+
+permissions:
+  contents: read
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, like v0.1.8"
+        required: true
+      force:
+        description: "Publish it even if the tap has a newer version (a downgrade)"
+        type: boolean
+        default: false
+
+# One publish at a time, in order: two releases close together mustn't race to the tap.
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAP: kvm404/homebrew-auren
+      FORCE: ${{ inputs.force && 'true' || 'false' }}
+    steps:
+      - name: Check the tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}       # the tag, never a branch of the same name
+          persist-credentials: false
+      - name: Fill in the url and checksum
+        run: |
+          # The formula from this tag; the tarball GitHub serves for the same tag
+          version="${TAG#v}"
+          grep -q "^version = \"$version\"$" pyproject.toml || { echo "pyproject.toml isn't version $version"; exit 1; }
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/$TAG.tar.gz"
+          curl -fsSL -o /tmp/source.tar.gz "$url"
+          sum=$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)
+          mkdir /tmp/tap-out
+          sed -e "s#^  url \".*\"\$#  url \"$url\"#" -e "s#^  sha256 \".*\"\$#  sha256 \"$sum\"#" \
+            packaging/homebrew/auren.rb >/tmp/tap-out/auren.rb
+          grep -qF "  url \"$url\"" /tmp/tap-out/auren.rb && grep -qF "  sha256 \"$sum\"" /tmp/tap-out/auren.rb ||
+            { echo "couldn't fill in packaging/homebrew/auren.rb"; exit 1; }
+          ruby -c /tmp/tap-out/auren.rb
+          cat /tmp/tap-out/auren.rb
+      - name: Push to the tap
+        env:
+          HOMEBREW_TAP_KEY: ${{ secrets.HOMEBREW_TAP_KEY }}
+        run: |
+          [ -n "$HOMEBREW_TAP_KEY" ] || { echo "The HOMEBREW_TAP_KEY secret isn't set: see docs/releases.md"; exit 1; }
+          keys=$(mktemp -d)
+          printf '%s\n' "$HOMEBREW_TAP_KEY" >"$keys/tap"
+          chmod 600 "$keys/tap"
+          # GitHub's published host key (gh api meta --jq .ssh_keys)
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >"$keys/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $keys/tap -o IdentitiesOnly=yes -o UserKnownHostsFile=$keys/known_hosts -o StrictHostKeyChecking=yes"
+          git clone "git@github.com:$TAP.git" /tmp/tap
+          # Never replace a newer version (a late run for an older release): the same one is fine, like a
+          # fixed checksum. FORCE (by hand) allows it.
+          version="${TAG#v}"
+          if [ -f /tmp/tap/Formula/auren.rb ]; then
+            have=$(sed -n 's#^  url ".*/v\([0-9][0-9.]*\)\.tar\.gz"$#\1#p' /tmp/tap/Formula/auren.rb)
+            echo "the tap has ${have:-an unknown version}, publishing $version"
+            if [ -n "$have" ] && [ "$have" != "$version" ] &&
+               [ "$(printf '%s\n%s\n' "$have" "$version" | sort -V | tail -1)" = "$have" ]; then
+              if [ "$FORCE" = true ]; then
+                echo "replacing the tap's newer $have with $version (force)"
+              else
+                echo "The tap has $have, newer than $version: not replacing it (run by hand with force to)"
+                exit 1
+              fi
+            fi
+          fi
+          mkdir -p /tmp/tap/Formula
+          cp /tmp/tap-out/auren.rb /tmp/tap/Formula/auren.rb
+          cd /tmp/tap
+          git config user.name "kvm404"
+          git config user.email "kvm404@users.noreply.github.com"
+          git add Formula/auren.rb
+          if git diff --cached --quiet; then echo "the tap already has this"; exit 0; fi
+          git commit -m "auren ${TAG#v}"
+          git push origin HEAD

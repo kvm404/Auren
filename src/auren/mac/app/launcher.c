@@ -35,7 +35,7 @@ static void alert(const char *python) {
     char script[PATH_MAX + 256];
     snprintf(script, sizeof script,
              "display alert \"Auren isn't installed\" message \"There's no Python at %s. "
-             "Run ./install-macos.sh in Auren's folder.\"", python);
+             "Run auren setup (or ./install-macos.sh in Auren's folder).\"", python);
     char *args[] = {"/usr/bin/osascript", "-e", script, NULL};
     pid_t pid;
     if (posix_spawn(&pid, args[0], NULL, NULL, args, environ) == 0) waitpid(pid, NULL, 0);
@@ -53,24 +53,34 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Auren's Python: AUREN_PYTHON (the launch agents set it), else next to the auren command the
-    // installer linked into ~/.local/bin (wherever its data folder is), else the default place
-    char fallback[PATH_MAX], link[PATH_MAX], target[PATH_MAX];
+    // Auren's Python: AUREN_PYTHON (the launch agents set it), else what the installer's link in
+    // ~/Library/Application Support/Auren names (wherever its data folder is), else the default place,
+    // else next to the auren command an older installer linked into ~/.local/bin
+    char fallback[PATH_MAX], link[PATH_MAX], target[PATH_MAX], locator[PATH_MAX], named[PATH_MAX];
     const char *python = getenv("AUREN_PYTHON");
     if (!python || !*python) {
         const char *home = getenv("HOME");
         if (!home) return 1;
-        snprintf(fallback, sizeof fallback, "%s/.local/share/auren/venv/bin/python", home);
-        snprintf(link, sizeof link, "%s/.local/bin/auren", home);
-        char *slash;
-        if (access(fallback, X_OK) != 0 && realpath(link, target) && (slash = strrchr(target, '/'))) {
-            *slash = '\0';
-            if (strlen(target) + sizeof "/python" <= sizeof fallback) {
-                strcpy(fallback, target);
-                strcat(fallback, "/python");
+        // One step only: the venv's python is itself a link, and Python finds its venv from the path
+        // it's started by, so the venv's own path, not where its links end
+        snprintf(locator, sizeof locator, "%s/Library/Application Support/Auren/venv-python", home);
+        ssize_t len = readlink(locator, named, sizeof named - 1);
+        if (len > 0) named[len] = '\0';
+        if (len > 0 && named[0] == '/' && access(named, X_OK) == 0) {
+            python = named;
+        } else {
+            snprintf(fallback, sizeof fallback, "%s/.local/share/auren/venv/bin/python", home);
+            snprintf(link, sizeof link, "%s/.local/bin/auren", home);
+            char *slash;
+            if (access(fallback, X_OK) != 0 && realpath(link, target) && (slash = strrchr(target, '/'))) {
+                *slash = '\0';
+                if (strlen(target) + sizeof "/python" <= sizeof fallback) {
+                    strcpy(fallback, target);
+                    strcat(fallback, "/python");
+                }
             }
+            python = fallback;
         }
-        python = fallback;
     }
     if (access(python, X_OK) != 0) {
         alert(python);

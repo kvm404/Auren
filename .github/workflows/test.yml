@@ -44,6 +44,49 @@ jobs:
       - run: bash -n install-macos.sh
       - run: uv run pytest -q tests/test_mac.py
       - run: uv run python tests/mac_smoke.py
+      # The Homebrew formula, installed from this commit the way the tap installs a release: a tarball laid
+      # out like GitHub's, in a local tap (brew installs formulae only from taps). Not set up: auren setup
+      # would install Auren.app and launch agents. HOMEBREW_NO_INSTALL_FROM_API stays unset: a local tap
+      # works with it, and uv comes from homebrew/core's API without cloning homebrew/core.
+      - name: Install the Homebrew formula
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          tarball="$RUNNER_TEMP/auren-$version.tar.gz"
+          git archive --format=tar.gz --prefix="Auren-$version/" -o "$tarball" HEAD
+          sum=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+          brew tap-new --no-git local/auren-ci
+          formula="$(brew --repository local/auren-ci)/Formula/auren.rb"
+          mkdir -p "$(dirname "$formula")"
+          sed -e "s#^  url \".*\"\$#  url \"file://$tarball\"#" -e "s#^  sha256 \".*\"\$#  sha256 \"$sum\"#" \
+            packaging/homebrew/auren.rb >"$formula"
+          grep -qF "  sha256 \"$sum\"" "$formula"
+          brew install --formula local/auren-ci/auren
+          brew test local/auren-ci/auren
+          # Brew's auren on PATH, for a user who hasn't run auren setup (a home of its own)
+          home="$RUNNER_TEMP/brew-home"
+          mkdir -p "$home"
+          for cmd in auren auren-ctl; do
+            if out=$(env -u XDG_DATA_HOME HOME="$home" "$(brew --prefix)/bin/$cmd" status 2>&1); then
+              echo "$cmd ran without auren setup: $out"; exit 1
+            fi
+            [[ $out == "Auren isn't set up yet: run auren setup" ]] || { echo "$cmd said: $out"; exit 1; }
+          done
+          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/install-macos.sh"
+          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/README.md"   # Homebrew moves it out of libexec itself
+          # What auren setup builds first: Auren's environment from Homebrew's copy of the source (not the
+          # rest of the setup: Auren.app and the launch agents are the user's)
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/brew-venv" uv sync --project "$(brew --prefix local/auren-ci/auren)/libexec/source" \
+            --frozen --no-dev --no-editable
+          "$RUNNER_TEMP/brew-venv/bin/python" -I -c 'import auren.cli, auren.daemon, auren.phone_server'
+      - name: Check the formula's style
+        run: brew style --formula local/auren-ci/auren
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
 
   # The Arch package, built from this commit the way the AUR builds a release, installed in a clean Arch,
   # then set up and removed for a user (no systemd user session or Omarchy here: setup says so and goes on).

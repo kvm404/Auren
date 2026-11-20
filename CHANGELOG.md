@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Install on a Mac with Homebrew**: `brew install kvm404/auren/auren`, then `auren setup`. Until it's
+  set up, `auren` says to run `auren setup`. `auren update` updates it with `brew upgrade auren`, in the
+  background, and sets the new version up; if that fails, it goes back to the version that was there.
+  After a `brew upgrade` on its own, `auren` reminds you to run `auren setup`. Each release is published
+  to the tap `kvm404/homebrew-auren` by a new `brew` workflow. Installing from a clone with
+  `./install-macos.sh` still works. See [docs/macos.md](docs/macos.md).
 - **The phone remote on macOS.** Pair the Android app from the menu bar icon's new **Phone…** window
   (Get the app, Pair a phone with its QR code, the paired phones with Unpair), or with `auren phone
   pair` in Terminal. Auren listens on the Mac's Wi-Fi or Ethernet address and on Tailscale (the Mac app
@@ -12,6 +18,10 @@
   [docs/macos.md](docs/macos.md#your-phone).
 
 ### Changed
+
+- Auren.app finds Auren's Python through a link in `~/Library/Application Support/Auren`, so opening it
+  from Finder works with any data folder. The app changes, so the next install rebuilds it and macOS asks
+  for its permissions again.
 
 - The browser tools click and type with real input in the page, not script events, so `browser_type`
   works in rich text boxes (Google Docs, Notion, Gmail, X, Slack, WhatsApp Web) and clicks work on sites

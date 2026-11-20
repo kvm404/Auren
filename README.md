@@ -79,17 +79,17 @@ from a checkout.
 
 ### macOS (preview)
 
-You need an Apple Silicon Mac on macOS 14 or newer, and [uv](https://docs.astral.sh/uv/)
-(`brew install uv`).
+You need an Apple Silicon Mac on macOS 14 or newer, and [Homebrew](https://brew.sh).
 
 ```bash
-git clone --branch v0.1.7 --depth 1 https://github.com/kvm404/Auren.git auren
-cd auren && ./install-macos.sh
+brew install kvm404/auren/auren
+auren setup
 ```
 
-It installs Auren.app and opens its setup window, which walks through the permissions, the AssemblyAI
-key and the brain. Then press **Control+Option+A** to talk. `auren update` installs new versions.
-[Auren on macOS](docs/macos.md) has the details and what doesn't work yet.
+`auren setup` installs Auren.app and opens its setup window, which walks through the permissions, the
+AssemblyAI key and the brain. Then press **Control+Option+A** to talk. `auren update` installs new
+versions. [Auren on macOS](docs/macos.md) has the details, installing from a clone, and what doesn't
+work yet.
 
 ## Using it
 

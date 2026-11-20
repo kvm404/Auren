@@ -8,7 +8,8 @@ expect rough edges and please report them.
 
 - An Apple Silicon Mac (M1 or newer) on macOS 14 Sonoma or newer. The voice model's runtime has no
   build for Intel Macs.
-- [uv](https://docs.astral.sh/uv/): `brew install uv`.
+- [Homebrew](https://brew.sh). It brings [uv](https://docs.astral.sh/uv/), which builds Auren's
+  Python environment (installing from a clone instead needs `brew install uv`).
 - Claude Code or Codex, signed in (`brew install --cask codex`, then `codex` once).
 - Apple's Command Line Tools, to build Auren.app (Homebrew installs them; else `xcode-select --install`).
 - An [AssemblyAI](https://www.assemblyai.com/) API key.
@@ -19,15 +20,15 @@ expect rough edges and please report them.
 ## Install
 
 ```bash
-git clone --branch v0.1.7 --depth 1 https://github.com/kvm404/Auren.git auren
-cd auren && ./install-macos.sh
+brew install kvm404/auren/auren
+auren setup
 ```
 
-The installer asks whether to set up the browser tools and which keys start Auren (Control+Option+A
-by default, Control+Option+Shift+A for a fresh conversation). It installs into
-`~/.local/share/auren`, links `auren` and `auren-ctl` into `~/.local/bin`, downloads the voice model,
-builds **Auren.app** in `~/Applications`, and adds two launch agents that start at login and run
-Auren through the app:
+Homebrew installs Auren's source and the `auren` and `auren-ctl` commands. `auren setup` does the rest
+for your user, which Homebrew can't: it asks whether to set up the browser tools and which keys start
+Auren (Control+Option+A by default, Control+Option+Shift+A for a fresh conversation). It builds Auren's
+Python environment in `~/.local/share/auren`, downloads the voice model, builds **Auren.app** in
+`~/Applications`, and adds two launch agents that start at login and run Auren through the app:
 
 | Agent | Runs | Log |
 |---|---|---|
@@ -46,6 +47,23 @@ Then it opens Auren, and Auren's setup window takes over: each step has one butt
 
 The window comes back from the menu bar icon (**Set up Auren…**), from opening Auren.app in Finder or
 Spotlight, or with `auren open`. `auren doctor` checks the same things in a terminal.
+
+Until `auren setup` has run, `auren` only says to run it. Run it again any time: it keeps your
+settings, keys and voice model.
+
+Installed from a clone before? Run `$(brew --prefix)/bin/auren setup` once (the old `auren` in
+`~/.local/bin` may come first on your PATH). It moves that `auren` and `auren-ctl` over to Homebrew's and
+keeps your settings, keys and voice model.
+
+### From a clone
+
+The other way, and the one for working on Auren, is to run the installer from a clone. It does what
+`auren setup` does, and links `auren` and `auren-ctl` into `~/.local/bin`:
+
+```bash
+git clone --branch v0.1.7 --depth 1 https://github.com/kvm404/Auren.git auren
+cd auren && ./install-macos.sh
+```
 
 `./install-macos.sh --dev` links the checkout instead of copying it, for working on Auren.
 
@@ -134,14 +152,28 @@ what it replaces, so everything else (the brain, safety, speech, the tool defini
 - Auren.app is signed ad hoc, not by a registered developer, so it can't be passed to another Mac as
   a download yet: each Mac builds its own with the installer.
 
-## Updating and removing
+## Updating
 
-`auren update` works as on Omarchy. To remove Auren:
+`auren update` checks for a new release and installs it in the background, as on Omarchy. Installed
+with Homebrew, it waits until Auren is idle, stops it, runs `brew update` and `brew upgrade auren` (no
+password needed), runs `auren setup` for the new version without asking anything, and starts Auren
+again. If that setup fails, it sets up the version that was there again, from a copy `auren setup` keeps
+in `~/.cache/auren/brew-rollback` (Homebrew removes the old version's own files). If Homebrew already
+has a newer version (after a `brew upgrade` on its own), `auren update` sets it up without GitHub.
+
+`brew upgrade` on its own (or as part of upgrading everything) updates Homebrew's copy only. Auren keeps
+running the version it was set up with, and each `auren` command reminds you to run `auren setup` to finish.
+
+Installed from a clone, Auren updates from its own clone in `~/.cache/auren/source` instead
+([docs/releases.md](releases.md)).
+
+## Removing
 
 ```bash
 auren service uninstall
 auren app uninstall
-rm -rf ~/.local/share/auren ~/.local/bin/auren ~/.local/bin/auren-ctl
+brew uninstall auren                          # from a clone instead: rm ~/.local/bin/auren ~/.local/bin/auren-ctl
+rm -rf ~/.local/share/auren "$HOME/Library/Application Support/Auren"
 rm -rf ~/.config/auren ~/.local/state/auren ~/.cache/auren      # your settings and history too
 ```
 
