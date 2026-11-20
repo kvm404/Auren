@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8
 
 ### Added
 
@@ -27,29 +27,35 @@
 ### Changed
 
 - **macOS setup notices permissions by itself.** Allow the microphone, Accessibility or Screen Recording
-  in System Settings (or in macOS's own prompt) and Auren turns it on without a restart by hand: it checks with a new process (a running one
-  sees those only from its next start) and restarts itself once it isn't busy, while the setup window
-  says **Turning on Screen Recording…**. It restarts once per permission; if that didn't help, the window
-  offers **Restart Auren**. The talk keys start by themselves once Accessibility is allowed (with a restart
-  when macOS still tells the running Auren no, as after a reset), without the window asking for one. The window checks again when it comes back to the front, and
-  finds Claude Code or Codex installed after Auren (in `~/.local/bin` or `~/.claude/local`).
-  `auren doctor` says the same as the window. Taking Accessibility away while Auren runs (in System
-  Settings, or `tccutil reset`) turns the talk keys off instead of slowing the keyboard down, and they
-  come back once it's allowed again.
+  in System Settings (or in macOS's own prompt) and Auren turns it on without a restart by hand. A
+  running program sees those only from its next start, so Auren checks with a new process and restarts
+  itself once it isn't busy, while the setup window says **Turning on Screen Recording…**.
+- It restarts once per permission you allow. If that didn't turn it on, the setup window offers
+  **Restart Auren**.
+- The talk keys start by themselves once Accessibility is allowed, with that one restart when macOS still
+  tells the running Auren no (as after a reset).
+- The setup window checks again when it comes back to the front, and finds Claude Code or Codex
+  installed after Auren (in `~/.local/bin` or `~/.claude/local`). `auren doctor` says the same as the
+  window.
 - **A tidier menu bar menu on macOS**: what Auren is doing at the top, Talk and Fresh conversation with
   their keys, Stop only while Auren is busy, **Open Auren…**, **Phone…**, **Set up Auren…** (marked
   while setup needs you), **Update to …** only when a release is waiting, then Restart and Quit. Edit
   settings is gone: the Auren window opens the settings file.
-
 - Auren.app finds Auren's Python through a link in `~/Library/Application Support/Auren`, so opening it
   from Finder works with any data folder. The app changes, so the next install rebuilds it and macOS asks
   for its permissions again.
-
 - The browser tools click and type with real input in the page, not script events, so `browser_type`
   works in rich text boxes (Google Docs, Notion, Gmail, X, Slack, WhatsApp Web) and clicks work on sites
   that ignore script clicks. Your own mouse and keyboard aren't used. Rich text boxes are listed as
   `textbox` items when a page is read. A new line in the text never presses Enter, and if the box ends up
   reading differently from what was typed, Auren says so and doesn't send it.
+
+### Fixed
+
+- **macOS: taking Accessibility away no longer slows the keyboard down.** After `tccutil reset` or
+  turning Auren off in System Settings, the talk keys' keyboard hook kept turning itself back on, and
+  every key press waited on it until Auren restarted. Now the talk keys turn off, and come back once
+  Accessibility is allowed again.
 
 ## 0.1.7
 

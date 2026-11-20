@@ -71,7 +71,7 @@ The other way, and the one for working on Auren, is to run the installer from a 
 `auren setup` does, and links `auren` and `auren-ctl` into `~/.local/bin`:
 
 ```bash
-git clone --branch v0.1.7 --depth 1 https://github.com/kvm404/Auren.git auren
+git clone --branch v0.1.8 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren && ./install-macos.sh
 ```
 
