@@ -171,7 +171,7 @@ private fun Sheet(shared: Shared?, onDone: () -> Unit, openApp: () -> Unit) {
                 }
                 shared == null -> {
                     Text("Auren can take text, a link or an image.", color = Au.Text, fontSize = 15.sp, modifier = Modifier.padding(top = 10.dp))
-                    QuietButton("Close", Modifier.padding(top = 14.dp), onDone)
+                    QuietButton("Close", Modifier.padding(top = 14.dp), onClick = onDone)
                     return@Column
                 }
             }
