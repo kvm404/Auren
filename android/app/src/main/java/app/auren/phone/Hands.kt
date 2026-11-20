@@ -94,8 +94,8 @@ class HandsService : AccessibilityService() {
         val node = nodes[n] ?: throw Refused("no item $n on the phone's screen: read it again")
         if (!node.refresh()) throw Refused("item $n is gone from the phone's screen: read it again")
         val expect = o.optString("expect")
-        if (o.has("expect") && label(node) != expect) {
-            throw Refused("item $n is now “${label(node)}”, not “$expect”: read the phone's screen again")
+        if (o.has("expect") && name(node) != expect) {
+            throw Refused("item $n is now “${name(node)}”, not “$expect”: read the phone's screen again")
         }
         if (field && !node.isEditable) throw Refused("item $n isn't a text field")
         return node
@@ -233,6 +233,7 @@ class HandsService : AccessibilityService() {
     /** What shows now: the app in front (and the notification shade or a system dialog over it, if open). */
     private fun read(): JSONObject {
         nodes.clear()
+        if (Build.VERSION.SDK_INT >= 34) clearCache()     // never a stale screen, whatever events arrived
         val out = Dump()
         val shown = windows.filter { w ->
             when (w.type) {
@@ -248,7 +249,7 @@ class HandsService : AccessibilityService() {
             val pkg = root.packageName?.toString().orEmpty()
             val title = w?.title?.toString()?.takeIf { it.isNotBlank() }
             out.line("== ${appName(pkg)}${title?.takeIf { it != appName(pkg) }?.let { " — $it" } ?: ""} ($pkg)")
-            walk(root, out, 0)
+            walk(root, out, 0, "")
         }
         if (roots.isEmpty()) out.line("(the phone shows nothing readable: it may be locked or asleep)")
         if (keyboard) out.line("(the keyboard is open)")
@@ -276,31 +277,55 @@ class HandsService : AccessibilityService() {
         fun text() = sb.toString().trimEnd()
     }
 
-    private fun walk(n: AccessibilityNodeInfo, out: Dump, depth: Int) {
+    /** [above]: the name of the nearest numbered item holding this one, so its words aren't listed twice. */
+    private fun walk(n: AccessibilityNodeInfo, out: Dump, depth: Int, above: String) {
         if (!n.isVisibleToUser || depth > 40 || out.full) return
         val actionable = n.isClickable || n.isLongClickable || n.isEditable || n.isCheckable || n.isScrollable
         val own = label(n)
+        var inside = above
         if (actionable) {
             val number = nodes.size + 1
             nodes[number] = n
-            // A row with no words of its own (a chat in a list) is named by what it holds.
-            val name = own.ifBlank { inner(n).take(100) }
+            val name = name(n)
+            inside = name
             val kind = kind(n)
             val state = buildList {
                 if (n.isEditable) n.text?.toString()?.takeIf { it.isNotBlank() && it != own }?.let { add("holds “${it.take(80)}”") }
                 if (n.isCheckable) add(if (n.isChecked) "on" else "off")
-                if (n.isScrollable && !n.isClickable) add("scrolls")
+                if (n.isScrollable) add(more(n))
                 if (n.isFocused) add("focused")
                 if (!n.isEnabled) add("disabled")
             }
-            out.line("[$number] ${if (kind.isEmpty()) "" else "$kind "}“$name”${if (state.isEmpty()) "" else " (${state.joinToString()})"}")
+            val shown = listOf(kind, if (name.isEmpty()) "" else "“$name”").filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "(no label)" }
+            out.line("[$number] $shown${if (state.isEmpty()) "" else " (${state.joinToString()})"}")
             out.items.put(JSONObject().put("n", number).put("label", name).put("field", n.isEditable)
                 .put("search", n.isEditable && searchy(n)))
             if (own.isBlank() && !n.isScrollable) return       // its words are its name now; don't list them twice
-        } else if (own.isNotBlank()) {
+        } else if (own.isNotBlank() && own != above) {
             out.line(own.take(300))
         }
-        for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, out, depth + 1) }
+        for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, out, depth + 1, inside) }
+    }
+
+    /**
+     * What a numbered item is called, at the read and again before acting on it: its own words, or for a row
+     * or field with none (a chat in a list, a field whose placeholder is a child), the words it holds. A list
+     * is named only by its own words: what it holds is listed under it.
+     */
+    private fun name(n: AccessibilityNodeInfo): String =
+        label(n).ifBlank { if (n.isScrollable && !n.isClickable) "" else inner(n).take(100) }
+
+    /** Which way a list still goes: the brain otherwise takes what shows for all there is. */
+    private fun more(n: AccessibilityNodeInfo): String {
+        val ids = n.actionList.map { it.id }.toSet()
+        val fwd = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD in ids || AccessibilityAction.ACTION_SCROLL_DOWN.id in ids
+        val back = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD in ids || AccessibilityAction.ACTION_SCROLL_UP.id in ids
+        return when {
+            fwd && back -> "more above and below: scroll to see it"
+            fwd -> "more below: scroll down to see it"
+            back -> "more above: scroll up to see it"
+            else -> "scrolls"
+        }
     }
 
     private fun label(n: AccessibilityNodeInfo): String {
@@ -308,7 +333,7 @@ class HandsService : AccessibilityService() {
         val text = if (n.isEditable) null else n.text?.toString()
         return listOfNotNull(text, n.contentDescription?.toString(), if (n.isEditable) hint else null,
             if (n.isEditable && hint == null) n.viewIdResourceName?.substringAfterLast('/') else null)
-            .map { it.replace('\n', ' ').trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
+            .map { clean(it) }.firstOrNull { it.isNotBlank() }.orEmpty()
     }
 
     private fun inner(n: AccessibilityNodeInfo): String {
@@ -316,7 +341,7 @@ class HandsService : AccessibilityService() {
         fun walk(c: AccessibilityNodeInfo?, depth: Int) {
             c ?: return
             if (depth > 8 || parts.size > 6) return
-            (c.text ?: c.contentDescription)?.toString()?.replace('\n', ' ')?.trim()?.takeIf { it.isNotBlank() }?.let(parts::add)
+            (c.text ?: c.contentDescription)?.toString()?.let(::clean)?.takeIf { it.isNotBlank() }?.let(parts::add)
             for (i in 0 until c.childCount) walk(c.getChild(i), depth + 1)
         }
         for (i in 0 until n.childCount) walk(n.getChild(i), 0)
@@ -350,6 +375,14 @@ class HandsService : AccessibilityService() {
         val on: StateFlow<Boolean> = _on
     }
 }
+
+/** One line of screen text: no line breaks, and no icon-font glyphs (private-use characters) that read as junk. */
+fun clean(s: String): String = buildString {
+    s.codePoints().forEach { c ->
+        val private = c in 0xE000..0xF8FF || c >= 0xF0000
+        if (!private) appendCodePoint(if (c == '\n'.code) ' '.code else c)
+    }
+}.trim()
 
 /** The index of the app whose name matches best: exactly, then starting with it, then containing it (ignoring case). */
 fun matchApp(name: String, labels: List<String>): Int? {

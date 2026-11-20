@@ -27,6 +27,11 @@ class HandsTest {
     }
 
     @Test
+    fun `screen text loses line breaks and icon-font glyphs`() {
+        assertEquals("20° smoky", clean("\ue33d 20°\nsmoky \uDB80\uDD40"))
+    }
+
+    @Test
     fun `a control action parses and its answer names it`() {
         val m = Incoming.parse("""{"type":"control","id":"ab12","action":"tap","n":3,"expect":"Send"}""") as Incoming.Control
         assertEquals("ab12", m.id)
