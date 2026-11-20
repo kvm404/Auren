@@ -19,7 +19,7 @@ expect rough edges and please report them.
 ## Install
 
 ```bash
-git clone --branch v0.1.6 --depth 1 https://github.com/kvm404/Auren.git auren
+git clone --branch v0.1.7 --depth 1 https://github.com/kvm404/Auren.git auren
 cd auren && ./install-macos.sh
 ```
 

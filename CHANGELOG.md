@@ -1,24 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.1.7
 
 ### Added
 
-- A phone remote: an Android app (`android/`) that talks to Auren on your PC over the same Wi-Fi or
-  Tailscale. Hold to talk, type, or turn on hands-free for a live conversation (after each reply it
-  listens again, until you go quiet for 12 s or tap it off, and it keeps going with the screen off); see what Auren is doing and its replies (read
-  aloud on the phone if you like); answer its questions and stop it; get the links, text, images and
-  files it sends with the new `send_to_phone` tool; share from any app to Auren, the PC's clipboard or
-  the PC's browser; start a fresh conversation (which clears the phone's chat), pick who answers (Auto, Claude, Codex)
-  and the effort; a Quick Settings tile.
-  Get the app (a QR code to its download), pair, see and unpair phones on the bar panel's new Phone page, or with `auren phone pair` (a QR code),
-  `auren phone devices` and `auren phone revoke`. One turn at a time across the desk and the
-  phone; phone replies aren't spoken on the PC. Replies are spoken on the phone itself with the same
-  Phonon voices. The server listens only on the Tailscale address and private LAN addresses, over TLS
-  pinned to the PC's own certificate, and the phone moves between them by itself (the PC hands out its
-  Tailscale address even while Tailscale is off, so pairing on the Wi-Fi is enough); `[phone]` in `config.toml` turns it off, and `auren doctor`
-  checks it, the firewall included. Omarchy only for now. The app comes with each release, as
-  `auren-phone-X.Y.Z.apk`. See [docs/phone.md](docs/phone.md).
+- **Auren on your phone.** An Android app (`android/`) is a remote for Auren on your PC, over the same
+  Wi-Fi or Tailscale. Get it from the bar panel's new Phone page (**Get the app** shows a QR code to its
+  download), or as `auren-phone-0.1.7.apk` on this release. See [docs/phone.md](docs/phone.md).
+- Hold to talk, type, or turn on **hands-free** for a live conversation: after each reply it listens
+  again, until you go quiet for 12 s or tap it off. It keeps going with the screen off.
+- See what Auren is doing and its replies, read aloud on the phone in the same Phonon voices. Answer its
+  yes/no questions (by tapping or by voice) and stop it. One turn at a time across the desk and the
+  phone; the PC doesn't speak a phone turn's reply.
+- From the app: start a fresh conversation (it clears the phone's chat), and pick who answers (Auto,
+  Claude, Codex) and the effort.
+- An inbox for the links, text, images and files Auren sends with the new `send_to_phone` tool. Share
+  from any app to Auren, the PC's clipboard or the PC's browser. A Quick Settings tile starts hands-free.
+- **Pairing** with a one-time QR code, from the Phone page or `auren phone pair`. The page also shows
+  where Auren listens and which phone is connected over which network, and unpairs a phone (also
+  `auren phone devices`, `auren phone revoke`).
+- The phone moves between Wi-Fi and Tailscale by itself. Pairing on the Wi-Fi is enough: the PC hands
+  out its Tailscale address even while Tailscale is off.
+- Private by design: the server listens only on the Tailscale address and private LAN addresses, only
+  while a phone is paired or a pairing is open, over TLS pinned to the PC's own certificate.
+  `[phone]` in `config.toml` turns it off, and `auren doctor` checks it, the firewall included.
+- The phone remote works with Auren on Omarchy; macOS gets it in a later release.
 
 ### Changed
 
