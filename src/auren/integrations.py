@@ -41,7 +41,7 @@ INTEGRATIONS = {
                          frozenset({"list_agents", "read_agent", "prompt_agent", "start_agent", "show_agent"})),
     "browser": Integration("browser", "browser tools (Open Browser Use)",
                            frozenset({"browser_open", "browser_read", "browser_click", "browser_type", "browser_scroll",
-                                      "browser_close", "browser_bookmarks", "recent_downloads"}), offer_unset=True),
+                                      "browser_tabs", "browser_switch", "browser_close_tab", "browser_close", "browser_bookmarks", "recent_downloads"}), offer_unset=True),
     "screen": Integration("screen", "mouse control",
                           frozenset({"click_at", "drag_at", "scroll_at", "excalidraw_draw", "excalidraw_read",
                                      "spotify_play"})),

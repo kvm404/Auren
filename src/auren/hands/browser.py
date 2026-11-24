@@ -5,6 +5,9 @@
   name a browser or profile). Every command goes to that host's own socket.
 - auren works in tabs it opens itself (an Open Browser Use session, grouped as
   "auren" in the browser). It never closes or reuses the user's own tabs.
+- Several auren tabs can be open: `browser_tabs` lists them, `browser_switch` picks the current one,
+  `browser_close_tab` closes one (CDP `Page.close`; `finalize-tabs` can only close all but the ones it keeps,
+  and those leave the session), and `browser_open` reuses a tab already on that address.
 - Pages are read as text plus a numbered list of links, buttons and fields;
   `browser_click` / `browser_type` act on those numbers (or on visible text).
 - Clicks and typing are real input (CDP Input events, inside the page only: never the user's mouse or
@@ -27,7 +30,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from .. import safety
 from . import browsers
 from . import obu as hosts
 
@@ -73,6 +78,9 @@ class Link:
 
 
 _state: dict = {"tab": None, "link": None}
+# (browser, tab id) of the tabs auren opened itself. Only those may be closed one at a time: a tab the user
+# dragged into auren's group is theirs, and closing it can lose their unsaved work.
+_opened: set[tuple[str, int]] = set()
 
 SETUP_HINT = "Call browser_setup to set it up (it asks the user first), unless the user has said no."
 
@@ -134,7 +142,7 @@ class _NotConnected(BrowserError):
     pass
 
 
-def obu(link: Link, *args: str, timeout: float = 30, retry: bool = True) -> dict:
+def obu(link: Link, *args: str, timeout: float = 30, retry: bool = True) -> dict | list:
     """Run an Open Browser Use command. If the browser isn't connected, start/wait for it and retry once."""
     if link.conn is None:
         ensure_connected(link)
@@ -175,7 +183,16 @@ def _eval(browser: Link, tab: int, js: str, timeout: float = 30):
     # In a block, so the helpers a script declares (const find, ...) don't stay behind in the page: declaring
     # them again in the next script would be a SyntaxError. A block still gives its last value.
     params = json.dumps({"expression": "{\n" + js + "\n}", "returnByValue": True, "awaitPromise": True})
-    r = obu(browser, "cdp", "--tab-id", str(tab), "--method", "Runtime.evaluate", "--params", params, timeout=timeout)
+    try:
+        r = obu(browser, "cdp", "--tab-id", str(tab), "--method", "Runtime.evaluate", "--params", params, timeout=timeout)
+    except BrowserError as e:
+        if "not part of browser session" not in str(e):
+            raise
+        # The tab was closed, or left auren's session. Say so and show what is open, instead of failing on the
+        # same dead id every time (the brain picks one with browser_switch).
+        if _state["tab"] == tab:
+            _state["tab"] = None
+        raise BrowserError(f"tab {tab} is gone. {_tab_list(browser)}") from None
     if r.get("exceptionDetails"):     # reply shape: {"result": {"type", "value"}, "exceptionDetails"?}
         raise BrowserError("page script failed: " + str(r["exceptionDetails"].get("text"))[:200])
     return (r.get("result") or {}).get("value")
@@ -184,8 +201,56 @@ def _eval(browser: Link, tab: int, js: str, timeout: float = 30):
 def _tab(tab: int | None) -> int:
     t = tab or _state["tab"]
     if not t:
-        raise BrowserError("no browser tab open yet: use browser_open first")
+        raise BrowserError(f"no browser tab selected. {_tab_list(_current())}")
     return int(t)
+
+
+# --- auren's tabs -------------------------------------------------------------------------
+
+def _session_tabs(b: Link) -> list[dict]:
+    """The tabs open in auren's session: id, title, url, active."""
+    r = obu(b, "tabs")
+    return r if isinstance(r, list) else []
+
+
+def _fmt_tabs(b: Link, tabs: list[dict], wrap: bool = True) -> str:
+    """One line per tab. Titles are page text, so errors carry them as untrusted (wrap); a tool result is
+    wrapped whole by the tools layer. `(current)` only in the browser the current tab belongs to."""
+    here = _state["link"] is not None and _state["link"].label() == b.label()
+    rows = "\n".join(f"[{t['id']}] {(t.get('title') or '(no title)')[:70]} — {_mask_url(t.get('url') or '')[:90]}"
+                     f"{' (current)' if here and t['id'] == _state['tab'] else ''}" for t in tabs)
+    return safety.untrusted(rows, "web page titles") if wrap else rows
+
+
+def _tab_list(b: Link, wrap: bool = True) -> str:
+    """What to do next, with auren's open tabs. Never starts the browser, and never fails."""
+    try:
+        if b.conn is None and _live(b) is None:
+            return "The browser isn't connected: use browser_open."
+        tabs = _session_tabs(b)
+    except BrowserError:
+        return "Use browser_open for a page, or browser_tabs to see what is open."
+    if not tabs:
+        return "Auren has no tabs open: use browser_open."
+    return "Auren's tabs (use browser_switch to pick one):\n" + _fmt_tabs(b, tabs, wrap)
+
+
+def _pick(b: Link, which) -> dict:
+    """The one tab `which` names: its id, or words of its title or address. Several matches (two tabs on the
+    same video) or none is an error that lists the tabs, so the brain names one by id."""
+    tabs = _session_tabs(b)
+    w = str(which).strip().lower()
+    if not tabs:
+        raise BrowserError("auren has no tabs open: use browser_open")
+    if w.isdigit():
+        hits = [t for t in tabs if str(t["id"]) == w]
+    else:
+        words = w.split()
+        hits = [t for t in tabs if words and all(x in f"{t.get('title', '')} {t.get('url', '')}".lower() for x in words)]
+    if len(hits) == 1:
+        return hits[0]
+    raise BrowserError(f"{'several tabs match' if hits else 'no tab matches'} '{which}': name one by its number.\n"
+                       + _fmt_tabs(b, hits or tabs))
 
 
 # --- page reading -------------------------------------------------------------------
@@ -450,6 +515,11 @@ def browser_open(url: str, browser: str = "") -> str:
     elif not re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I):
         url = "https://" + url
     obu(b, "name-session", "--name", "auren")
+    same = _open_at(b, url)
+    if same:      # already open in auren's tabs: use it, not a second copy
+        _state.update(tab=same, link=b)
+        _front(b, same, force=True)
+        return f"(tab {same} in {b.label()}, already open: switched to it)\n" + browser_read(same)
     try:
         r = obu(b, "open-tab", "--url", url, timeout=40)
     except BrowserError as e:
@@ -463,15 +533,28 @@ def browser_open(url: str, browser: str = "") -> str:
     if not tab:
         raise BrowserError(f"couldn't open a tab: {str(r)[:200]}")
     _state.update(tab=tab, link=b)
+    _opened.add((b.label(), tab))
     _wait_ready(b, tab)
     return f"(tab {tab} in {b.label()})\n" + browser_read(tab)
 
 
-def _front(browser: Link, tab: int) -> None:
+def _open_at(b: Link, url: str) -> int | None:
+    """An auren tab already on this address. Only a trailing slash on the path is ignored: a #fragment or a
+    query value can be a different page (a single-page app's route, a search)."""
+    def norm(u: str):
+        p = urlsplit(u or "")
+        return (p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), p.query, p.fragment)
+    try:
+        return next((t["id"] for t in _session_tabs(b) if norm(t.get("url")) == norm(url)), None)
+    except BrowserError:
+        return None
+
+
+def _front(browser: Link, tab: int, force: bool = False) -> None:
     """Bring auren's tab to the front of its window. Chrome doesn't lay out background tabs, so their
     visible text reads as empty (Google Drive rows, for example)."""
     try:
-        if _eval(browser, tab, "document.visibilityState", timeout=5) != "visible":
+        if force or _eval(browser, tab, "document.visibilityState", timeout=5) != "visible":
             obu(browser, "cdp", "--tab-id", str(tab), "--method", "Page.bringToFront", "--params", "{}")
             time.sleep(0.8)
     except BrowserError:
@@ -836,13 +919,64 @@ def recent_downloads(browser: str = "", minutes: int = 30) -> str:
     return "\n".join(f"{p} ({p.stat().st_size // 1024} KB)" for p in files[:15]) or f"no downloads in the last {minutes} minutes"
 
 
+def browser_tabs(browser: str = "") -> str:
+    """Auren's open tabs: number, title, address, and which is current. A higher number was opened later."""
+    b = _browser(browser) if browser else _current()
+    if b.conn is None and _live(b) is None:
+        return "no auren tabs are open (the browser isn't connected)"
+    tabs = _session_tabs(b)
+    if not tabs:
+        return "auren has no tabs open"
+    return f"Auren's tabs in {b.label()}:\n" + _fmt_tabs(b, tabs, wrap=False)
+
+
+def browser_switch(tab: str, browser: str = "") -> str:
+    """Make one of auren's open tabs the current one (its number, or words of its title or address), bring
+    it to the front of its window, and read it. browser: the one browser_tabs listed, if not the current."""
+    b = _browser(browser) if browser else _current()
+    t = _pick(b, tab)["id"]
+    _state.update(tab=t, link=b)
+    _front(b, t, force=True)
+    return f"(switched to tab {t} in {b.label()})\n" + browser_read(t)
+
+
+def browser_close_tab(tab: str = "", browser: str = "") -> str:
+    """Close one of auren's own tabs (the current one if none is named), leaving the others open. A tab the
+    user put in auren's group is theirs and is left alone."""
+    b = _browser(browser) if browser else _current()
+    which = tab or (_state["tab"] if _state["link"] is not None and _state["link"].label() == b.label() else None)
+    if not which:
+        raise BrowserError(f"no tab named and none is current. {_tab_list(b)}")
+    t = _pick(b, which)["id"]
+    if (b.label(), t) not in _opened:
+        raise BrowserError(f"tab {t} wasn't opened by auren, so it may be the user's: don't close it, ask them to")
+    obu(b, "cdp", "--tab-id", str(t), "--method", "Page.close", "--params", "{}")
+    for _ in range(8):      # a page can answer with its own "Leave site?" dialog: check it is really gone
+        if not any(x["id"] == t for x in _session_tabs(b)):
+            break
+        time.sleep(0.25)
+    else:
+        raise BrowserError(f"tab {t} didn't close: the page may be asking the user to confirm leaving")
+    _opened.discard((b.label(), t))
+    if _state["tab"] == t and _state["link"] is not None and _state["link"].label() == b.label():
+        _state["tab"] = None
+    return f"closed tab {t}. {_tab_list(b, wrap=False)}"
+
+
 def browser_close(keep_current: bool = False) -> str:
-    """Close the tabs auren opened (never the user's own). keep_current leaves the last one open."""
+    """Close every tab in auren's session in the current browser, including one the user dragged into
+    auren's group (finalize-tabs closes the whole session). keep_current leaves the current one open."""
     b = _state["link"] or _browser()
     if b.conn is None and _live(b) is None:      # nothing to close, and no reason to start the browser for it
         return "no auren tabs are open (the browser isn't connected)"
-    keep = [{"tabId": _state["tab"], "status": "deliverable"}] if keep_current and _state["tab"] else []
+    keep = []
+    if keep_current:
+        # An empty keep list closes every tab: only go on when the current tab is really still open.
+        if not _state["tab"] or not any(t["id"] == _state["tab"] for t in _session_tabs(b)):
+            _state["tab"] = None
+            raise BrowserError(f"no current tab to keep, so nothing was closed. {_tab_list(b)}")
+        keep = [{"tabId": _state["tab"], "status": "deliverable"}]
     obu(b, "finalize-tabs", "--keep", json.dumps(keep))
-    if not keep_current:
-        _state["tab"] = None
+    _state["tab"] = None      # a kept tab leaves auren's session too (the browser no longer answers for it)
+    _opened.difference_update({o for o in _opened if o[0] == b.label()})      # other browsers keep theirs
     return "closed auren's browser tabs" + (" (kept the current one)" if keep_current else "")

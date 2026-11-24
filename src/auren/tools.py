@@ -818,7 +818,7 @@ def _sent_by(label: str, here: dict, button: str | None) -> tuple[str, Callable[
 @tool(repeatable=True, lock=BROWSER)
 def browser_open(url: str, browser: str = "") -> str:
     """Open a page in a new auren tab of the user's real browser and read it: text plus numbered clickable
-    items. url can be 'bookmark:<name or folder/name>'. browser: leave empty for the user's browser, or
+    items. If auren already has a tab on that exact address, that tab is used instead of a second copy. url can be 'bookmark:<name or folder/name>'. browser: leave empty for the user's browser, or
     name one (chrome, brave, chromium, helium, edge, vivaldi) when the user or a routine asks for it. If
     the browser isn't open, this starts it and waits for it to connect (up to ~25 s): don't launch it first."""
     return _web(_run(web.browser_open, url, browser))
@@ -898,6 +898,28 @@ def browser_type(target: str, text: str, submit: bool = False) -> str:
 def browser_scroll(direction: str = "down") -> str:
     """Scroll the current auren tab down or up and read it again."""
     return _web(_run(web.browser_scroll, direction))
+
+
+@tool(repeatable=True, lock=BROWSER)
+def browser_tabs(browser: str = "") -> str:
+    """List auren's open browser tabs: number, title and address, and which is current. A higher number was
+    opened later. browser: leave empty for the current one; browser_switch and browser_close_tab take the same."""
+    return _web(_run(web.browser_tabs, browser))
+
+
+@tool(repeatable=True, lock=BROWSER)
+def browser_switch(tab: str, browser: str = "") -> str:
+    """Make one of auren's open tabs the current one, bring it to the front of its browser window, and read
+    it. tab: its number from browser_tabs, or words of its title or address. This doesn't move the user's
+    window or workspace: use focus_window / switch_workspace for that."""
+    return _web(_run(web.browser_switch, tab, browser))
+
+
+@tool(lock=BROWSER)
+def browser_close_tab(tab: str = "", browser: str = "") -> str:
+    """Close just one of the tabs auren opened (never the user's), leaving the others open. tab: its number
+    from browser_tabs, or words of its title or address; empty closes the current tab."""
+    return _web(_run(web.browser_close_tab, tab, browser))
 
 
 @tool(lock=BROWSER)
