@@ -964,7 +964,8 @@ def browser_close_tab(tab: str = "", browser: str = "") -> str:
 
 
 def browser_close(keep_current: bool = False) -> str:
-    """Close the tabs auren opened (never the user's own). keep_current leaves the last one open."""
+    """Close every tab in auren's session in the current browser, including one the user dragged into
+    auren's group (finalize-tabs closes the whole session). keep_current leaves the current one open."""
     b = _state["link"] or _browser()
     if b.conn is None and _live(b) is None:      # nothing to close, and no reason to start the browser for it
         return "no auren tabs are open (the browser isn't connected)"
@@ -977,5 +978,5 @@ def browser_close(keep_current: bool = False) -> str:
         keep = [{"tabId": _state["tab"], "status": "deliverable"}]
     obu(b, "finalize-tabs", "--keep", json.dumps(keep))
     _state["tab"] = None      # a kept tab leaves auren's session too (the browser no longer answers for it)
-    _opened.clear()
+    _opened.difference_update({o for o in _opened if o[0] == b.label()})      # other browsers keep theirs
     return "closed auren's browser tabs" + (" (kept the current one)" if keep_current else "")
