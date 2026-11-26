@@ -1,5 +1,5 @@
 #!/bin/sh
-# @COMMAND@, as Homebrew installs it (packaging/homebrew/auren.rb fills in the @...@ values).
+# @COMMAND@, as Homebrew installs it (packaging/homebrew/auren-macos.rb fills in the @...@ values).
 # Auren runs from its own environment in ~/.local/share/auren/venv, which `auren setup` builds
 # (install-macos.sh --brew, from Homebrew's copy of the source). This only finds it.
 version="@VERSION@"

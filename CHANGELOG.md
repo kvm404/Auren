@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.9
+
+### Added
+
+- **Auren keeps track of its browser tabs.** It can list the tabs it has open (`browser_tabs`), switch to
+  one and bring it to the front (`browser_switch`, by number or words of its title or address), and
+  close just one (`browser_close_tab`). It closes only tabs it opened itself, never one of yours, even
+  one you dragged into its group. Opening an address it already has open goes to that tab instead of
+  opening a second copy.
+
+### Changed
+
+- **The mascot's mouth follows the voice.** While Auren speaks, the bars of its mouth rise and fall with
+  how loud the voice is: a dot when it's quiet, the whole row when it's loud.
+- **The Homebrew formula is now `auren-macos`**: `brew install kvm404/auren/auren-macos`, then
+  `auren setup`. The commands are still `auren` and `auren-ctl`. **Installed with 0.1.8 or older**
+  (the formula `auren`)? Homebrew doesn't carry its trust over to a renamed formula, so run this once,
+  then update as usual:
+
+  ```bash
+  brew trust --formula kvm404/auren/auren-macos
+  auren update
+  ```
+
+  Homebrew then moves the install to `auren-macos` by itself. Uninstall with `brew uninstall auren-macos`.
+
+### Fixed
+
+- **A closed or paused browser tab no longer stops the browser tools.** Auren used to keep reading a tab
+  that was gone and fail on every read. Now it says which tabs are open, so it can switch to one.
+
 ## 0.1.8
 
 ### Added

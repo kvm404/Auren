@@ -25,19 +25,14 @@ mouse and keyboard.
 
 ## What's new
 
-**Auren on your phone.** The Auren Android app is a remote for the Auren on your PC. Hold to talk, or turn
-on hands-free and just keep talking, back and forth, until you go quiet. Type a request, watch what Auren
-is doing, answer its yes/no questions, stop it, and switch who answers and how hard it thinks. Links,
-images and files it finds land in the app's inbox. Share anything from another app to Auren, to the PC's
-clipboard or to the PC's browser. It works on your Wi-Fi, and away from home over Tailscale.
-[From your phone](#from-your-phone) shows how to set it up.
+**Auren keeps track of its browser tabs.** It can list the tabs it has open, switch to one and close
+just that one, and a tab that was closed no longer stops it. It closes only tabs it opened itself.
 
-**A new voice.** Auren now speaks with Gradium's Phonon, in four voices: Everly, Juniper, Hugh and
-Trevor. It starts talking sooner, and the model is a quarter of the old one's size. Updating downloads it
-for you and deletes the old one.
+**The mascot's mouth follows the voice.** Its mouth now moves with how loud Auren is speaking.
 
-**A Phone page in the bar panel** pairs a phone with a QR code, shows which phone is connected and over
-which network, and unpairs one.
+**On a Mac, the Homebrew formula is now `auren-macos`.** `brew install kvm404/auren/auren-macos`, then
+`auren setup`. Installed 0.1.8 with Homebrew? Run `brew trust --formula kvm404/auren/auren-macos` once
+(Homebrew's trust doesn't follow a rename), then `auren update`. [macOS](#macos-preview) has the details.
 
 Everything else is in the [changelog](CHANGELOG.md).
 
@@ -82,7 +77,7 @@ from a checkout.
 You need an Apple Silicon Mac on macOS 14 or newer, and [Homebrew](https://brew.sh).
 
 ```bash
-brew install kvm404/auren/auren
+brew install kvm404/auren/auren-macos
 auren setup
 ```
 
@@ -98,7 +93,7 @@ work yet.
 | **Super+A** (Mac: Control+Option+A) | Start talking. Press again to send, or while it works to stop it. |
 | **Super+Shift+A** (Mac: Control+Option+Shift+A) | Start a fresh conversation. |
 | **Mascot** | Click to talk. Drag to move it, scroll to resize it. |
-| **Bar icon** (Mac: menu bar icon) | Change the mascot, voice, brain and vocabulary, pair a phone, and install updates. |
+| **Bar icon** (Mac: menu bar icon → **Open Auren…**) | Change the mascot, voice, brain and vocabulary, pair a phone, and install updates. |
 
 Things to try:
 
@@ -117,7 +112,7 @@ If something doesn't work, run `auren doctor`.
 The Auren app for Android talks to the Auren on your PC. Your phone is the microphone and the screen;
 the PC does the work, with the same brain, tools and safety level as at the desk.
 
-1. On the PC, open the bar panel's **Phone** page (on a Mac: the menu bar icon → **Phone…**), click
+1. On the PC, open the bar panel's **Phone** page (on a Mac: the menu bar icon → **Phone…**, the Auren window's Phone page), click
    **Get the app** and scan the QR code with your phone's camera. Open the download. Android asks once to allow installs from your browser. (Or get
    `auren-phone-X.Y.Z.apk` from the [latest release](https://github.com/kvm404/Auren/releases/latest).)
 2. On the same page (or window), click **Pair a phone**.

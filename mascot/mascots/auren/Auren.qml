@@ -340,8 +340,10 @@ MascotBase {
             model: 5
             Rectangle {
               required property int index
-              readonly property real hh: Math.min(1.45, 0.22 + c.mouthOpen * (0.7 + 0.9 * c.pulse(2.3 + index * 0.7, index * 0.21))
-                                                   * (index === 2 ? 1.2 : index % 2 ? 1.0 : 0.75))
+              // loudness spreads over the whole height: quiet speech is a dot, loud speech fills the row
+              readonly property real amp: Math.max(0, Math.min(1, (c.mouthOpen - 0.15) / 0.6))
+              readonly property real hh: Math.min(1.45, 0.2 + 1.25 * amp * (index === 2 ? 1.0 : index % 2 ? 0.8 : 0.6)
+                                                   * (0.35 + 0.65 * c.pulse(2.3 + index * 0.7, index * 0.21)))
               width: 0.32 * c.u
               height: hh * c.u
               radius: width / 2
