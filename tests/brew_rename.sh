@@ -40,8 +40,8 @@ brew install --formula "$tap/auren"                       # as the README said u
 [[ $(realpath "$prefix/opt/auren") == "$(realpath "$prefix/Cellar/auren/0.1.8")" ]]
 
 # The first release after the rename, as brew.yml publishes it
-git_ rm -q Formula/auren.rb
 formula 0.1.9 AurenMacos >"$work/src/Formula/auren-macos.rb"
+git_ rm -q Formula/auren.rb
 echo '{"auren": "auren-macos"}' >"$work/src/formula_renames.json"
 git_ add -A && git_ commit -qm "auren-macos 0.1.9" && git_ push -q "$work/tap.git" main
 
