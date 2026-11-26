@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -23,6 +24,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.ConnectionPool
@@ -219,12 +222,29 @@ object Remote {
         send(Outgoing.controlReady(HandsService.instance != null))
     }
 
+    private val controlTurn = Mutex()                       // one action at a time: each reads the screen the last left
+    private val controls = HashMap<String, Job>()           // actions not done yet, by id, so the PC can call them off
+
     private fun control(m: Incoming.Control) {
-        scope.launch {
-            val out = HandsService.instance?.run(m.body)
-                ?: JSONObject().put("ok", false).put("error", "phone control is off on the phone")
-            send(Outgoing.controlResult(m.id, out))
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val out = controlTurn.withLock {
+                    HandsService.instance?.run(m.body)
+                        ?: JSONObject().put("ok", false).put("error", "phone control is off on the phone")
+                }
+                send(Outgoing.controlResult(m.id, out))
+            } finally {
+                controls.remove(m.id)
+            }
         }
+        controls[m.id] = job
+        job.start()
+    }
+
+    /** The link dropped: the PC won't wait for these, so none of them may happen later, unasked. */
+    private fun cancelControls() {
+        controls.values.toList().forEach { it.cancel() }
+        controls.clear()
     }
 
     /**
@@ -346,6 +366,7 @@ object Remote {
                 host = null
                 stopMic()
                 endConversation("lost the PC")
+                cancelControls()
             }
             socket.cancel()
         }
@@ -510,6 +531,7 @@ object Remote {
                 else _notices.tryEmit(m.error)
             }
             is Incoming.Control -> control(m)
+            is Incoming.ControlCancel -> controls.remove(m.id)?.cancel()
             is Incoming.Revoked, is Incoming.Pong -> Unit
         }
     }

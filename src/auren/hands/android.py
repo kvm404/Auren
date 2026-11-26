@@ -15,6 +15,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
+from .. import safety
+
 TIMEOUT = 20.0          # seconds an action may take on the phone (opening an app, a slow screen)
 KEYS = ("back", "home", "recents", "notifications", "quick_settings", "lock")
 
@@ -24,7 +26,8 @@ class PhoneError(Exception):
 
 
 _link: Callable[[dict, float], dict] | None = None
-_items: dict[str, dict] = {}         # the last screen's numbered items: number -> {label, field, search}
+_items: dict[str, dict] = {}         # the last screen's numbered items: number -> {label, field, search, password, draft}
+_device: str | None = None           # the phone that screen came from: numbered actions go only to it
 _lock = threading.Lock()
 
 
@@ -33,22 +36,54 @@ def attach(link: Callable[[dict, float], dict] | None) -> None:
     _link = link
 
 
-def _call(action: str, **args) -> str:
+def forget() -> None:
+    """The last screen no longer counts (an action may or may not have happened): read it again first."""
+    global _device
+    with _lock:
+        _items.clear()
+        _device = None
+
+
+def device() -> str | None:
+    with _lock:
+        return _device
+
+
+def _call(action: str, numbered: bool = False, **args) -> str:
+    global _device
     if _link is None:
         raise PhoneError("phone control isn't available here (it runs in the Auren daemon)")
-    msg = {"action": action, **{k: v for k, v in args.items() if v not in (None, "")}}
+    msg = {"action": action, **{k: v for k, v in args.items() if v is not None}}
+    if numbered:                # a number means something only on the phone it was read from
+        with _lock:
+            if _device:
+                msg["device"] = _device
     out = _link(msg, TIMEOUT)
     if not out.get("ok"):
-        raise PhoneError(str(out.get("error") or "the phone couldn't do that"))
+        if out.get("unknown"):          # it may have happened: the numbers may point elsewhere now
+            forget()
+        error = str(out.get("error") or "the phone couldn't do that")
+        if out.get("local"):            # the PC's own words (not connected, timed out)
+            raise PhoneError(error)
+        # The phone's refusals quote what its screen shows (labels, app names): data, not instructions.
+        raise PhoneError("the phone refused:\n" + safety.untrusted(error, "phone"))
     items = out.get("items")
     if isinstance(items, list):
         with _lock:
             _items.clear()
+            _device = str(out["device"]) if out.get("device") else None
             for it in items:
                 if isinstance(it, dict) and it.get("n") is not None:
                     _items[str(it["n"])] = {"label": str(it.get("label") or ""), "field": bool(it.get("field")),
-                                            "search": bool(it.get("search"))}
+                                            "search": bool(it.get("search")), "password": bool(it.get("password")),
+                                            "draft": bool(it.get("draft"))}
     return str(out.get("screen") or "")
+
+
+def drafting() -> bool:
+    """The last screen has a message typed and not sent yet (a chat box that holds text)."""
+    with _lock:
+        return any(it["draft"] for it in _items.values())
 
 
 def item(target: str) -> tuple[str, dict] | None:
@@ -81,21 +116,23 @@ def screen() -> str:
 
 def tap(target: str, long: bool = False, expect: str | None = None) -> str:
     n, it = resolve(target)
-    return _call("tap", n=int(n), long=long, expect=it["label"] if expect is None else expect)
+    return _call("tap", True, n=int(n), long=long, expect=it["label"] if expect is None else expect)
 
 
 def type_text(target: str, text: str, submit: bool = False, expect: str | None = None) -> str:
     n, it = resolve(target)
     if not it["field"]:
         raise PhoneError(f"item {n} ({it['label'] or 'no label'}) isn't a text field")
-    return _call("type", n=int(n), text=text, submit=submit, expect=it["label"] if expect is None else expect)
+    return _call("type", True, n=int(n), text=text, submit=submit, expect=it["label"] if expect is None else expect)
 
 
 def scroll(direction: str = "down", target: str = "") -> str:
     if direction not in ("down", "up", "left", "right"):
         raise PhoneError("direction is down, up, left or right")
-    n = int(resolve(target)[0]) if target else None
-    return _call("scroll", direction=direction, n=n)
+    if not target:
+        return _call("scroll", direction=direction)
+    n, it = resolve(target)
+    return _call("scroll", True, direction=direction, n=int(n), expect=it["label"])
 
 
 def key(name: str) -> str:

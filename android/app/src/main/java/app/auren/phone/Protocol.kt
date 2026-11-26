@@ -233,6 +233,8 @@ sealed interface Incoming {
     data class Pong(val id: String) : Incoming
     /** Phone control: one action for [HandsService] to do here; answered with [Outgoing.controlResult]. */
     data class Control(val id: String, val body: JSONObject) : Incoming
+    /** The PC gave up waiting for that action (or the brain stopped): don't do it, or stop doing it. */
+    data class ControlCancel(val id: String) : Incoming
 
     companion object {
         /** null for anything this version doesn't know (a newer PC may send more). */
@@ -258,6 +260,7 @@ sealed interface Incoming {
                 "error" -> Error(o.optString("id"), o.optString("error"))
                 "pong" -> Pong(o.optString("id"))
                 "control" -> Control(o.optString("id"), o)
+                "control.cancel" -> ControlCancel(o.optString("id"))
                 else -> null
             }
         }

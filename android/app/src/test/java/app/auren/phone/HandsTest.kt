@@ -40,5 +40,6 @@ class HandsTest {
         assertEquals("control.result", out.getString("type"))
         assertEquals("ab12", out.getString("id"))
         assertEquals("""{"type":"control.ready","on":true}""", Outgoing.controlReady(true))
+        assertEquals(Incoming.ControlCancel("ab12"), Incoming.parse("""{"type":"control.cancel","id":"ab12"}"""))
     }
 }

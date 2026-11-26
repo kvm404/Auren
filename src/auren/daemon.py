@@ -483,11 +483,14 @@ class Daemon:
         over the server's loop, and this thread waits for the answer."""
         hub, loop = self.phone, self.loop
         if hub is None or loop is None:
-            return {"ok": False, "error": "the phone server isn't running (auren doctor, Phone section)"}
+            return {"ok": False, "local": True, "error": "the phone server isn't running (auren doctor, Phone section)"}
+        fut = asyncio.run_coroutine_threadsafe(hub.control(action, timeout), loop)
         try:
-            return asyncio.run_coroutine_threadsafe(hub.control(action, timeout), loop).result(timeout + 5)
+            return fut.result(timeout + 5)
         except TimeoutError:
-            return {"ok": False, "error": "the phone didn't answer"}
+            fut.cancel()                    # the hub then tells the phone not to do it any more
+            return {"ok": False, "local": True, "unknown": True,
+                    "error": "the phone didn't answer. It may still have done it: read its screen before trying again"}
 
     async def phone_paired_changed(self) -> None:
         """The first phone was paired or the last one unpaired: Claude's tools and rules change with it, and

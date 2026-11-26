@@ -626,8 +626,19 @@ def send_to_phone(kind: str, title: str = "", content: str = "", path: str = "")
 
 # --- the phone's own screen (the app's accessibility service) -----------------------------------------
 
-def _phone(out: str) -> str:
-    return out if out.startswith("error:") else safety.untrusted(out, "phone screen")
+def _phone(out: str, source: str = "phone screen") -> str:
+    return out if out.startswith("error:") else safety.untrusted(out, source)
+
+
+def _still(n: str, label: str, dev: str | None) -> Callable[[], None]:
+    """The check before an asked-about phone action runs: the same phone, and its item n still the one asked
+    about (the phone checks the label again on its live screen)."""
+    def check() -> None:
+        now = android.item(n)
+        if android.device() != dev or not now or now[1]["label"] != label:
+            raise PermissionError(f"“{label or f'item {n}'}” isn't item {n} on that phone any more: "
+                                  "read the phone again and ask the user again")
+    return check
 
 
 @tool(repeatable=True, lock=PHONE)
@@ -641,43 +652,50 @@ def phone_screen() -> str:
 @tool(lock=PHONE)
 def phone_tap(target: str, long_press: bool = False) -> str:
     """Tap an item on the phone: its number from the last phone screen, or words from its label. Returns the
-    screen after the tap. long_press=True holds it. Taps that buy, pay, send, post or delete make the tool
-    ask the user itself: just tap, don't ask in words first."""
+    screen after the tap. long_press=True holds it. Taps that buy, pay, send, post, delete, install or erase
+    make the tool ask the user itself: just tap, don't ask in words first."""
     try:
         n, it = android.resolve(target)
     except android.PhoneError as e:
         return f"error: {e}"
     label = it["label"]
-    if label and web.RISKY_CLICK.search(label):
-        def check() -> None:
-            now = android.item(n)
-            if not now or now[1]["label"] != label:
-                raise PermissionError(f"“{label}” isn't item {n} any more: read the phone again and ask the user again")
-        return _gate({safety.click_kind(label)}, f"Tap “{label}” on your phone? That could buy, send, post or delete something.",
-                     lambda: _phone(android.tap(n, long_press, label)), check)
-    return _phone(_run(android.tap, n, long_press))
+    kinds = safety.phone_tap_kinds(label, web.RISKY_CLICK)
+    if kinds:
+        question = f"Tap “{label}” on your phone?"
+    elif not label and android.drafting():
+        # A typed message waits unsent: a button with no name may well be its Send (icon-only buttons).
+        kinds, question = {safety.SEND}, f"Tap item {n} (a button with no name) on your phone? A typed message is waiting there, and this may send it."
+    else:
+        return _phone(_run(android.tap, n, long_press))
+    return _gate(kinds, question, lambda: _phone(android.tap(n, long_press, label)), _still(n, label, android.device()))
 
 
 @tool(lock=PHONE)
 def phone_type(target: str, text: str, submit: bool = False) -> str:
     """Type text into a numbered text field on the phone, replacing what it holds. submit=True presses the
     keyboard's action key (search, go, send) afterwards. Submitting a search box runs straight away;
-    submitting any other field (a chat message, a form) makes the tool ask the user itself: just call it."""
+    submitting any other field (a chat message, a form) or typing a password makes the tool ask the user
+    itself: just call it."""
     try:
         n, it = android.resolve(target)
     except android.PhoneError as e:
         return f"error: {e}"
-    if submit and it["field"] and not it["search"]:
-        label = it["label"]
-
-        def check() -> None:
-            now = android.item(n)
-            if not now or now[1]["label"] != label:
-                raise PermissionError("that field isn't there any more: read the phone again and ask the user again")
+    if not it["field"]:
+        return _phone(_run(android.type_text, n, text, submit))         # says it isn't a text field
+    label, where = it["label"], it["label"] or "the field"
+    kinds: set[str] = set()
+    if it["password"]:              # never in the question: questions are logged and shown
+        kinds.add(safety.SECRETS)
+        question = f"Type the password into “{where}” on your phone{' and submit it' if submit else ''}?"
+    else:
         short = text if len(text) <= 60 else text[:57] + "…"
-        return _gate({safety.SEND}, f"Type “{short}” into “{label or 'the field'}” on your phone and send it?",
-                     lambda: _phone(android.type_text(n, text, True, label)), check)
-    return _phone(_run(android.type_text, n, text, submit))
+        question = f"Type “{short}” into “{where}” on your phone and send it?"
+    if submit and not it["search"]:
+        kinds.add(safety.PUBLISH if safety.PUBLISH_FIELD.search(label) else safety.SEND)
+    if not kinds:
+        return _phone(_run(android.type_text, n, text, submit))
+    return _gate(kinds, question, lambda: _phone(android.type_text(n, text, submit, label)),
+                 _still(n, label, android.device()))
 
 
 @tool(repeatable=True, lock=PHONE)
@@ -691,6 +709,8 @@ def phone_scroll(direction: str = "down", target: str = "") -> str:
 def phone_key(key: str) -> str:
     """Press one of the phone's system keys: back, home, recents, notifications (pull down the shade),
     quick_settings or lock. Returns the screen after it."""
+    if key.strip().lower() == "lock":         # like lock_screen on the laptop
+        return _gate({safety.WINDOW}, "Lock your phone now?", lambda: _phone(android.key("lock")))
     return _phone(_run(android.key, key))
 
 
@@ -704,7 +724,7 @@ def phone_open_app(app: str) -> str:
 @tool(repeatable=True)
 def phone_apps(query: str = "") -> str:
     """The apps installed on the phone (names you can open), optionally only those matching words."""
-    return _run(android.apps, query)
+    return _phone(_run(android.apps, query), "phone apps")
 
 
 @tool()

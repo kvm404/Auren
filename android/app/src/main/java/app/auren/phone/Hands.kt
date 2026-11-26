@@ -12,6 +12,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityWindowInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,19 +83,28 @@ class HandsService : AccessibilityService() {
         }
     } catch (e: Refused) {
         fail(e.message ?: "refused")
+    } catch (e: CancellationException) {
+        throw e                                     // the PC gave up on it: no answer goes
+    } catch (e: Exception) {                        // a node gone mid-action, an app uninstalled meanwhile...
+        fail("the phone couldn't do that (${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})")
     }
 
     private class Refused(why: String) : Exception(why)
 
     private fun fail(why: String) = JSONObject().put("ok", false).put("error", why)
 
-    /** The numbered node the action names, still showing the label it was read with. */
+    /**
+     * The numbered node the action names, still showing the label it was read with (an empty label too: an
+     * unnamed button that became "Pay" is refused), and never one of Auren's own screens.
+     */
     private fun item(o: JSONObject, field: Boolean = false): AccessibilityNodeInfo {
         val n = o.optInt("n", -1)
         val node = nodes[n] ?: throw Refused("no item $n on the phone's screen: read it again")
-        if (!node.refresh()) throw Refused("item $n is gone from the phone's screen: read it again")
+        if (!node.refresh() || !node.isVisibleToUser) throw Refused("item $n is gone from the phone's screen: read it again")
+        if (node.packageName?.toString() == packageName) throw Refused(OWN)
+        if (!o.has("expect")) throw Refused("the PC didn't say what item $n should be: update Auren on the PC")
         val expect = o.optString("expect")
-        if (o.has("expect") && name(node) != expect) {
+        if (name(node) != expect) {
             throw Refused("item $n is now “${name(node)}”, not “$expect”: read the phone's screen again")
         }
         if (field && !node.isEditable) throw Refused("item $n isn't a text field")
@@ -106,7 +116,10 @@ class HandsService : AccessibilityService() {
         var target: AccessibilityNodeInfo? = node
         while (target != null && !(if (long) target.isLongClickable else target.isClickable)) target = target.parent
         if (target?.performAction(action) == true) return
-        val r = Rect().also(node::getBoundsInScreen)          // nothing takes the click: touch it where it shows
+        // Nothing takes the click: touch it where it shows, if it still shows there and Auren isn't in front.
+        if (!node.refresh() || !node.isVisibleToUser) throw Refused("the item went away before the tap")
+        if (rootInActiveWindow?.packageName?.toString() == packageName) throw Refused(OWN)
+        val r = Rect().also(node::getBoundsInScreen)
         if (!gesture(r.exactCenterX(), r.exactCenterY(), r.exactCenterX(), r.exactCenterY(), if (long) 700 else 60)) {
             throw Refused("the tap didn't go through")
         }
@@ -243,15 +256,19 @@ class HandsService : AccessibilityService() {
             }
         }.sortedByDescending { it.layer }
         val keyboard = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        // Never Auren's own screens: its settings and buttons aren't for the PC to press.
         val roots = shown.mapNotNull { w -> w.root?.let { w to it } }.filter { it.second.packageName != packageName }
-            .ifEmpty { listOfNotNull(rootInActiveWindow?.let { null to it }) }
+            .ifEmpty { listOfNotNull(rootInActiveWindow?.takeIf { it.packageName != packageName }?.let { null to it }) }
         for ((w, root) in roots) {
             val pkg = root.packageName?.toString().orEmpty()
             val title = w?.title?.toString()?.takeIf { it.isNotBlank() }
             out.line("== ${appName(pkg)}${title?.takeIf { it != appName(pkg) }?.let { " — $it" } ?: ""} ($pkg)")
             walk(root, out, 0, "")
         }
-        if (roots.isEmpty()) out.line("(the phone shows nothing readable: it may be locked or asleep)")
+        if (roots.isEmpty()) {
+            out.line(if (rootInActiveWindow?.packageName?.toString() == packageName) "($OWN)"
+                else "(the phone shows nothing readable: it may be locked or asleep)")
+        }
         if (keyboard) out.line("(the keyboard is open)")
         return JSONObject().put("ok", true).put("screen", out.text()).put("items", out.items)
     }
@@ -290,9 +307,8 @@ class HandsService : AccessibilityService() {
             inside = name
             val kind = kind(n)
             val state = buildList {
-                if (n.isEditable && !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && n.isShowingHintText)) {
-                    n.text?.toString()?.takeIf { it.isNotBlank() && it != own }?.let { add("holds “${it.take(80)}”") }
-                }
+                if (n.isPassword) add("password")       // what it holds never leaves the phone
+                else held(n, own)?.let { add("holds “${it.take(80)}”") }
                 if (n.isCheckable) add(if (n.isChecked) "on" else "off")
                 if (n.isScrollable) add(more(n))
                 if (n.isFocused) add("focused")
@@ -300,15 +316,24 @@ class HandsService : AccessibilityService() {
             }
             val shown = listOf(kind, if (name.isEmpty()) "" else "“$name”").filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "(no label)" }
             out.line("[$number] $shown${if (state.isEmpty()) "" else " (${state.joinToString()})"}")
+            val search = n.isEditable && searchy(n)
             out.items.put(JSONObject().put("n", number).put("label", name).put("field", n.isEditable)
-                .put("search", n.isEditable && searchy(n)))
+                .put("search", search).put("password", n.isPassword)
+                // a message typed and not sent: the PC then asks before a tap that may send it
+                .put("draft", n.isEditable && !search && !n.isPassword && held(n, own) != null))
             // Its words are its name now: don't list them twice, unless something inside acts on its own (a
             // chat's message box and buttons sit inside one tappable bar), which needs its own number.
             if (own.isBlank() && !n.isScrollable && !holdsActionable(n)) return
-        } else if (own.isNotBlank() && own != above) {
+        } else if (own.isNotBlank() && own != above && !n.isPassword) {
             out.line(own.take(300))
         }
         for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, out, depth + 1, inside) }
+    }
+
+    /** What a field holds (not its placeholder), or null. */
+    private fun held(n: AccessibilityNodeInfo, own: String): String? {
+        if (!n.isEditable || n.isPassword || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && n.isShowingHintText)) return null
+        return n.text?.toString()?.takeIf { it.isNotBlank() && it != own }
     }
 
     private fun holdsActionable(n: AccessibilityNodeInfo, depth: Int = 0): Boolean {
@@ -357,7 +382,7 @@ class HandsService : AccessibilityService() {
         val parts = ArrayList<String>()
         fun walk(c: AccessibilityNodeInfo?, depth: Int) {
             c ?: return
-            if (depth > 8 || parts.size > 6) return
+            if (depth > 8 || parts.size > 6 || c.isPassword) return
             (c.text ?: c.contentDescription)?.toString()?.let(::clean)?.takeIf { it.isNotBlank() }?.let(parts::add)
             for (i in 0 until c.childCount) walk(c.getChild(i), depth + 1)
         }
@@ -384,6 +409,7 @@ class HandsService : AccessibilityService() {
 
     companion object {
         const val MAX_TEXT = 8_000
+        const val OWN = "Auren itself is in front on the phone: open another app, or press home"
 
         @Volatile var instance: HandsService? = null
             private set
