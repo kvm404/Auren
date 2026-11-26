@@ -25,7 +25,7 @@ mouse and keyboard.
 
 ## What's new
 
-**Install on a Mac with Homebrew.** `brew install kvm404/auren/auren`, then `auren setup`. `auren update`
+**Install on a Mac with Homebrew.** `brew install kvm404/auren/auren-macos`, then `auren setup`. `auren update`
 keeps it current through Homebrew. [macOS](#macos-preview) has the details.
 
 **The Auren window on macOS.** Every setting from Omarchy's bar panel, in one window: the mascot, voice,
@@ -82,7 +82,7 @@ from a checkout.
 You need an Apple Silicon Mac on macOS 14 or newer, and [Homebrew](https://brew.sh).
 
 ```bash
-brew install kvm404/auren/auren
+brew install kvm404/auren/auren-macos
 auren setup
 ```
 

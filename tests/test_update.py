@@ -616,19 +616,19 @@ printf '{"version": "%s", "mode": "brew", "source": "%s", "brew": "%s"}' "$versi
 """
 
 FAKE_BREW = """#!/usr/bin/env bash
-# brew update | brew upgrade --formula auren: upgrading links the version in $BREW_NEXT, if any
+# brew update | brew upgrade --formula auren-macos: upgrading links the version in $BREW_NEXT, if any
 echo "$* CLEANUP=${HOMEBREW_NO_INSTALL_CLEANUP:-} NO_AUTO_UPDATE=${HOMEBREW_NO_AUTO_UPDATE:-}" >>"$BREW_CALLS"
 prefix="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ $1 == upgrade ]]; then
   [[ ! -f "$prefix/upgrade-fails" ]] || exit 1
   next=$(cat "$BREW_NEXT" 2>/dev/null || true)
   [[ -n $next ]] || exit 0
-  mkdir -p "$prefix/Cellar/auren/$next/libexec"
-  cp -R "$prefix/Cellar/auren/0.1.0/libexec/source" "$prefix/Cellar/auren/$next/libexec/source"
-  rm -f "$prefix/Cellar/auren/$next/libexec/source/fail"
-  echo "version = \\"$next\\"" >"$prefix/Cellar/auren/$next/libexec/source/pyproject.toml"
-  [[ ! -f "$prefix/next-fails" ]] || touch "$prefix/Cellar/auren/$next/libexec/source/fail"
-  ln -sfn "../Cellar/auren/$next" "$prefix/opt/auren"
+  mkdir -p "$prefix/Cellar/auren-macos/$next/libexec"
+  cp -R "$prefix/Cellar/auren-macos/0.1.0/libexec/source" "$prefix/Cellar/auren-macos/$next/libexec/source"
+  rm -f "$prefix/Cellar/auren-macos/$next/libexec/source/fail"
+  echo "version = \\"$next\\"" >"$prefix/Cellar/auren-macos/$next/libexec/source/pyproject.toml"
+  [[ ! -f "$prefix/next-fails" ]] || touch "$prefix/Cellar/auren-macos/$next/libexec/source/fail"
+  ln -sfn "../Cellar/auren-macos/$next" "$prefix/opt/auren-macos"
 fi
 """
 
@@ -637,12 +637,12 @@ fi
 def brew(env, monkeypatch, tmp_path):
     """A fake Homebrew prefix with Auren 0.1.0 set up from it, and a GitHub with release v0.1.0."""
     prefix = tmp_path / "homebrew"
-    keg = prefix / "Cellar/auren/0.1.0/libexec/source"
+    keg = prefix / "Cellar/auren-macos/0.1.0/libexec/source"
     keg.mkdir(parents=True)
     (keg / "pyproject.toml").write_text('version = "0.1.0"\n')
     (keg / "install-macos.sh").write_text(BREW_INSTALLER)
     (prefix / "opt").mkdir()
-    (prefix / "opt/auren").symlink_to("../Cellar/auren/0.1.0")
+    (prefix / "opt/auren-macos").symlink_to("../Cellar/auren-macos/0.1.0")
     (prefix / "bin").mkdir()
     bin_ = prefix / "bin/brew"
     bin_.write_text(FAKE_BREW)
@@ -670,7 +670,7 @@ def test_a_brew_install_is_compared_by_version_without_git(brew):
     assert r["state"] == "current" and r["installed"]["mode"] == "brew" and r["installed"]["version"] == "0.1.0"
     commit(brew.remote, "a.py")                                 # v0.1.1
     r = update.check()
-    assert r["state"] == "available" and r["latest"]["tag"] == "v0.1.1" and "brew upgrade auren" in r["note"]
+    assert r["state"] == "available" and r["latest"]["tag"] == "v0.1.1" and "brew upgrade auren-macos" in r["note"]
     assert not update.SOURCE.exists() and brew.brew_calls() == []    # no clone, and checking runs no brew
 
 
@@ -681,12 +681,22 @@ def test_a_brew_upgrade_not_set_up_yet_is_offered(brew):
     assert r["state"] == "available" and r["latest"]["tag"] == "v0.1.1" and "Homebrew has 0.1.1" in r["note"]
 
 
+def test_homebrew_s_copy_is_found_before_and_after_the_rename_to_auren_macos(tmp_path):
+    brew = tmp_path / "homebrew/bin/brew"
+    opt = tmp_path / "homebrew/opt"
+    (opt / "auren/libexec/source").mkdir(parents=True)          # 0.1.8, not moved by brew update yet
+    assert update._brew_libexec(brew) == opt / "auren/libexec/source"
+    (opt / "auren-macos/libexec/source").mkdir(parents=True)
+    assert update._brew_libexec(brew) == opt / "auren-macos/libexec/source"
+    assert update._brew_libexec(tmp_path / "nothing/bin/brew") == tmp_path / "nothing/opt/auren-macos/libexec/source"
+
+
 def test_a_brew_update_upgrades_then_sets_up_the_new_version(brew):
     commit(brew.remote, "a.py")
     brew.next("0.1.1")
     assert update.run() == 0
-    assert brew.brew_calls() == ["update --quiet CLEANUP=1 NO_AUTO_UPDATE=", "upgrade --formula auren CLEANUP=1 NO_AUTO_UPDATE="]
-    new = (brew.prefix / "Cellar/auren/0.1.1/libexec/source").resolve()
+    assert brew.brew_calls() == ["update --quiet CLEANUP=1 NO_AUTO_UPDATE=", "upgrade --formula auren-macos CLEANUP=1 NO_AUTO_UPDATE="]
+    new = (brew.prefix / "Cellar/auren-macos/0.1.1/libexec/source").resolve()
     assert brew.installs() == [str(new), "--brew", "AUREN_UPDATE=1"]
     assert ("stop", "auren", "auren-mascot") in brew.calls
     assert brew.active["auren"] and not brew.active["auren-mascot"]      # as they were
@@ -715,7 +725,7 @@ def test_a_failed_brew_upgrade_leaves_auren_as_it_was(brew):
     (brew.prefix / "upgrade-fails").write_text("")
     assert update.run() == 1
     assert brew.installs() == [] and brew.active["auren"]
-    assert "brew upgrade auren failed" in update.status()["message"]
+    assert "brew upgrade auren-macos failed" in update.status()["message"]
 
 
 def test_a_release_homebrew_doesnt_have_yet_changes_nothing(brew):
@@ -777,10 +787,10 @@ def test_without_anything_to_go_back_to_a_brew_install_isnt_touched(brew):
     import shutil
     commit(brew.remote, "a.py")
     shutil.rmtree(brew.keg.parent)                              # brew cleanup removed it; no copy either
-    (brew.prefix / "Cellar/auren/0.1.1/libexec/source").mkdir(parents=True)
-    (brew.prefix / "Cellar/auren/0.1.1/libexec/source/pyproject.toml").write_text('version = "0.1.1"\n')
-    (brew.prefix / "opt/auren").unlink()
-    (brew.prefix / "opt/auren").symlink_to("../Cellar/auren/0.1.1")
+    (brew.prefix / "Cellar/auren-macos/0.1.1/libexec/source").mkdir(parents=True)
+    (brew.prefix / "Cellar/auren-macos/0.1.1/libexec/source/pyproject.toml").write_text('version = "0.1.1"\n')
+    (brew.prefix / "opt/auren-macos").unlink()
+    (brew.prefix / "opt/auren-macos").symlink_to("../Cellar/auren-macos/0.1.1")
     assert update.run() == 1
     assert "nothing was changed" in update.status()["message"] and "auren setup" in update.status()["message"]
     assert brew.calls == [] and brew.brew_calls() == [] and brew.installs() == []

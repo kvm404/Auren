@@ -23,10 +23,10 @@ installed, but updating opens a terminal that waits until Auren is idle, stops i
 whole system (yay) updates Auren too; then restart it: systemctl --user restart auren auren-mascot.
 An install.sh install still updates itself, and after updating says once that the package exists.
 
-On a Mac, Homebrew's auren (brew install kvm404/auren/auren, then auren setup; install.json's mode is
+On a Mac, Homebrew's auren-macos (brew install kvm404/auren/auren-macos, then auren setup; install.json's mode is
 "brew") is Homebrew's to update. The check compares the version installed with the latest release (and
 with what Homebrew has already, after a brew upgrade without auren setup). Updating needs no password,
-so it runs in the background like a self-update: wait until Auren is idle, stop it, brew upgrade auren,
+so it runs in the background like a self-update: wait until Auren is idle, stop it, brew upgrade auren-macos,
 run the new version's install-macos.sh --brew, and start Auren again as it was. If that install fails,
 the version that was there is set up again from the copy of its source kept outside the Cellar
 (ROLLBACK). A version Homebrew has already is set up without GitHub. A Homebrew install never updates
@@ -77,7 +77,7 @@ BREW_UPDATE_TIMEOUT = 5 * 60
 # An "updating" status older than this is stale: the wait, then at most three long steps (Homebrew's
 # upgrade, the install, and installing back), and brew update.
 UPDATE_TIMEOUT = IDLE_WAIT + INSTALL_TIMEOUT * 3 + BREW_UPDATE_TIMEOUT + 10 * 60
-BREW_FORMULA = "auren"
+BREW_FORMULA = "auren-macos"          # auren until 0.1.8: the tap renamed it, and brew follows
 ROLLBACK = CACHE_DIR / "brew-rollback"             # a Homebrew install's source, to go back to
 # The session's environment the update needs: the user manager's may lack PATH entries (uv), custom XDG
 # folders, and what git signs in with (gh, an SSH agent, tokens).
@@ -372,8 +372,11 @@ def _brew_bin(info: dict) -> Path:
 
 
 def _brew_libexec(brew: Path) -> Path:
-    """Homebrew's current copy of Auren's source: <prefix>/opt/auren/libexec/source, for <prefix>/bin/brew."""
-    return brew.parent.parent / "opt" / BREW_FORMULA / "libexec" / "source"
+    """Homebrew's current copy of Auren's source: <prefix>/opt/auren-macos/libexec/source, for <prefix>/bin/brew.
+    An install from before the rename that brew hasn't moved yet has only opt/auren."""
+    opt = brew.parent.parent / "opt"
+    new, old = opt / BREW_FORMULA / "libexec" / "source", opt / "auren" / "libexec" / "source"
+    return old if not new.exists() and old.exists() else new
 
 
 def _keg_version(brew: Path) -> str:
@@ -630,7 +633,7 @@ def _install(repo: Path, dev: bool, brew: Path | None = None) -> None:
 
 
 def _brew_upgrade(brew: Path) -> None:
-    """brew upgrade auren, in the background: Homebrew in /opt/homebrew needs no password."""
+    """brew upgrade auren-macos, in the background: Homebrew in /opt/homebrew needs no password."""
     env = {**os.environ, "HOMEBREW_NO_ENV_HINTS": "1",
            # Keep the version being replaced for now (brew cleanup, by hand or brew's own every 30 days,
            # removes it later): going back uses ROLLBACK's copy, but the keg is a second way back.

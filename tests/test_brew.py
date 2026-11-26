@@ -15,7 +15,7 @@ import pytest
 from auren import config
 
 ROOT = Path(__file__).parents[1]
-FORMULA = ROOT / "packaging/homebrew/auren.rb"
+FORMULA = ROOT / "packaging/homebrew/auren-macos.rb"
 WRAPPER = ROOT / "packaging/homebrew/wrapper.sh"
 INSTALL = ROOT / "install-macos.sh"
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
@@ -154,7 +154,8 @@ def test_the_installer_finds_the_brew_that_installed_it(tmp_path):
                            env={"HOME": str(tmp_path), "PATH": path}, capture_output=True, text=True, check=True)
         return r.stdout
 
-    assert brew_for(f"{prefix}/Cellar/auren/0.1.7/libexec") == f"{prefix}/bin/brew"
+    assert brew_for(f"{prefix}/Cellar/auren-macos/0.1.9/libexec") == f"{prefix}/bin/brew"
+    assert brew_for(f"{prefix}/Cellar/auren/0.1.7/libexec") == f"{prefix}/bin/brew"      # before the rename
     assert brew_for("/elsewhere/auren", path="/nowhere") == "/opt/homebrew/bin/brew"
 
 

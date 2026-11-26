@@ -77,7 +77,7 @@ def test_the_version_line_names_homebrew_or_the_commit():
     assert sw.version_text({"mode": "brew", "version": "0.1.7"}, {}) == "Auren 0.1.7 (Homebrew)"
     assert sw.version_text({"mode": "brew", "version": "0.1.7"}, {"installed": {"version": "0.1.8"}}) == "Auren 0.1.8 (Homebrew)"
     assert sw.version_text({"mode": "clone", "version": "0.1.7", "commit": "abcdef123"}, {}) == "Auren 0.1.7 · abcdef1"
-    assert "brew upgrade auren" in sw.update_plan({"mode": "brew"}) and "brew" not in sw.update_plan({})
+    assert "brew upgrade auren-macos" in sw.update_plan({"mode": "brew"}) and "brew" not in sw.update_plan({})
 
 
 def test_logs_open_in_console_and_settings_as_text(monkeypatch, tmp_path):

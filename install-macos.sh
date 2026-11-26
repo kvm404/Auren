@@ -61,11 +61,14 @@ fi
 macos=$(sw_vers -productVersion)
 (( ${macos%%.*} >= 14 )) || { warn "Auren needs macOS 14 or newer (this is $macos)"; exit 1; }
 if $brew; then
-  # The keg's own folder (Cellar/auren/X.Y.Z/libexec/source, not opt/auren), and the brew that installed it,
+  # The keg's own folder (Cellar/auren-macos/X.Y.Z/libexec/source, not opt/auren-macos; Cellar/auren until
+  # 0.1.8), and the brew that installed it,
   # which auren update runs. Run from auren update's copy of an older version, brew is on PATH.
   source=$(cd "$repo" && pwd -P)
   # >>> brew
-  if [[ $source == */Cellar/auren/* && -x "${source%%/Cellar/auren/*}/bin/brew" ]]; then
+  if [[ $source == */Cellar/auren-macos/* && -x "${source%%/Cellar/auren-macos/*}/bin/brew" ]]; then
+    brew_bin="${source%%/Cellar/auren-macos/*}/bin/brew"
+  elif [[ $source == */Cellar/auren/* && -x "${source%%/Cellar/auren/*}/bin/brew" ]]; then
     brew_bin="${source%%/Cellar/auren/*}/bin/brew"
   elif command -v brew >/dev/null; then
     brew_bin="$(brew --prefix)/bin/brew"
@@ -225,7 +228,7 @@ fi
 
 # ---- what's installed, for auren update ----------------------------------------------------------
 if $brew; then
-  [[ -x $brew_bin ]] || warn "Homebrew isn't at $brew_bin: auren update can't run brew upgrade auren"
+  [[ -x $brew_bin ]] || warn "Homebrew isn't at $brew_bin: auren update can't run brew upgrade auren-macos"
   "$share/venv/bin/python" - "$share/install.json" "$source" "$brew_bin" <<'PY'
 import json, os, sys, time
 from importlib.metadata import version

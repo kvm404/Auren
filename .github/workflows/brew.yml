@@ -1,8 +1,10 @@
 name: brew
 
-# Publishes a release to the Homebrew tap kvm404/homebrew-auren (brew install kvm404/auren/auren):
-# packaging/homebrew/auren.rb with the release's url and the checksum of GitHub's source tarball for
-# its tag, as Formula/auren.rb. Needs the secret HOMEBREW_TAP_KEY: the private half of an SSH deploy key
+# Publishes a release to the Homebrew tap kvm404/homebrew-auren (brew install kvm404/auren/auren-macos):
+# packaging/homebrew/auren-macos.rb with the release's url and the checksum of GitHub's source tarball
+# for its tag, as Formula/auren-macos.rb. The formula was Formula/auren.rb until 0.1.8: publishing removes
+# that and keeps formula_renames.json saying auren is now auren-macos, so brew update moves those installs
+# and brew upgrade auren still works. Needs the secret HOMEBREW_TAP_KEY: the private half of an SSH deploy key
 # with write access on that repository only (see docs/releases.md). Run it by hand for a release that
 # wasn't published (Actions → brew).
 
@@ -48,16 +50,19 @@ jobs:
           # The formula from this tag; the tarball GitHub serves for the same tag
           version="${TAG#v}"
           grep -q "^version = \"$version\"$" pyproject.toml || { echo "pyproject.toml isn't version $version"; exit 1; }
+          # 0.1.8 and older had Formula/auren.rb: this workflow publishes only auren-macos, so not those
+          [ -f packaging/homebrew/auren-macos.rb ] ||
+            { echo "$TAG is from before the formula was renamed auren-macos: this workflow can't publish it"; exit 1; }
           url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/$TAG.tar.gz"
           curl -fsSL -o /tmp/source.tar.gz "$url"
           sum=$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)
           mkdir /tmp/tap-out
           sed -e "s#^  url \".*\"\$#  url \"$url\"#" -e "s#^  sha256 \".*\"\$#  sha256 \"$sum\"#" \
-            packaging/homebrew/auren.rb >/tmp/tap-out/auren.rb
-          grep -qF "  url \"$url\"" /tmp/tap-out/auren.rb && grep -qF "  sha256 \"$sum\"" /tmp/tap-out/auren.rb ||
-            { echo "couldn't fill in packaging/homebrew/auren.rb"; exit 1; }
-          ruby -c /tmp/tap-out/auren.rb
-          cat /tmp/tap-out/auren.rb
+            packaging/homebrew/auren-macos.rb >/tmp/tap-out/auren-macos.rb
+          grep -qF "  url \"$url\"" /tmp/tap-out/auren-macos.rb && grep -qF "  sha256 \"$sum\"" /tmp/tap-out/auren-macos.rb ||
+            { echo "couldn't fill in packaging/homebrew/auren-macos.rb"; exit 1; }
+          ruby -c /tmp/tap-out/auren-macos.rb
+          cat /tmp/tap-out/auren-macos.rb
       - name: Push to the tap
         env:
           HOMEBREW_TAP_KEY: ${{ secrets.HOMEBREW_TAP_KEY }}
@@ -73,8 +78,10 @@ jobs:
           # Never replace a newer version (a late run for an older release): the same one is fine, like a
           # fixed checksum. FORCE (by hand) allows it.
           version="${TAG#v}"
-          if [ -f /tmp/tap/Formula/auren.rb ]; then
-            have=$(sed -n 's#^  url ".*/v\([0-9][0-9.]*\)\.tar\.gz"$#\1#p' /tmp/tap/Formula/auren.rb)
+          old=/tmp/tap/Formula/auren-macos.rb
+          [ -f "$old" ] || old=/tmp/tap/Formula/auren.rb       # the name until 0.1.8
+          if [ -f "$old" ]; then
+            have=$(sed -n 's#^  url ".*/v\([0-9][0-9.]*\)\.tar\.gz"$#\1#p' "$old")
             echo "the tap has ${have:-an unknown version}, publishing $version"
             if [ -n "$have" ] && [ "$have" != "$version" ] &&
                [ "$(printf '%s\n%s\n' "$have" "$version" | sort -V | tail -1)" = "$have" ]; then
@@ -87,11 +94,14 @@ jobs:
             fi
           fi
           mkdir -p /tmp/tap/Formula
-          cp /tmp/tap-out/auren.rb /tmp/tap/Formula/auren.rb
+          cp /tmp/tap-out/auren-macos.rb /tmp/tap/Formula/auren-macos.rb
           cd /tmp/tap
+          # auren is auren-macos now: the old file must go (a tap can't have both), and the rename stays
+          git rm -q --ignore-unmatch Formula/auren.rb
+          echo '{"auren": "auren-macos"}' >formula_renames.json
           git config user.name "kvm404"
           git config user.email "kvm404@users.noreply.github.com"
-          git add Formula/auren.rb
+          git add Formula/auren-macos.rb formula_renames.json
           if git diff --cached --quiet; then echo "the tap already has this"; exit 0; fi
-          git commit -m "auren ${TAG#v}"
+          git commit -m "auren-macos ${TAG#v}"
           git push origin HEAD

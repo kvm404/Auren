@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The Homebrew formula is now `auren-macos`**: `brew install kvm404/auren/auren-macos`, then
+  `auren setup`. The commands are still `auren` and `auren-ctl`. **Installed with 0.1.8 or older**
+  (the formula `auren`)? Homebrew doesn't carry its trust over to a renamed formula, so run this once,
+  then update as usual:
+
+  ```bash
+  brew trust --formula kvm404/auren/auren-macos
+  auren update
+  ```
+
+  Homebrew then moves the install to `auren-macos` by itself. Uninstall with `brew uninstall auren-macos`.
+
 ## 0.1.8
 
 ### Added

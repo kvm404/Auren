@@ -28,12 +28,12 @@ with `yay -Syu` updates Auren too; restart it afterwards (pacman's message says 
 
 ### Homebrew (macOS)
 
-`brew install kvm404/auren/auren` installs Auren's source, and `auren setup` builds the install from it
+`brew install kvm404/auren/auren-macos` installs Auren's source, and `auren setup` builds the install from it
 (install-macos.sh --brew, recorded as mode `brew` in `~/.local/share/auren/install.json`). `auren update
 check` compares the installed version with the latest release, like the Arch package, and also offers a
 newer version Homebrew has already (after a `brew upgrade` that wasn't followed by `auren setup`).
 Updating runs in the background: it waits until Auren is idle, stops its launch agents, runs `brew
-update` and `brew upgrade auren`, runs the new version's installer, and starts Auren again as it was. `auren setup` keeps a copy of the source it set up in `~/.cache/auren/brew-rollback/<version>`, outside
+update` and `brew upgrade auren-macos`, runs the new version's installer, and starts Auren again as it was. `auren setup` keeps a copy of the source it set up in `~/.cache/auren/brew-rollback/<version>`, outside
 the Cellar, and a failed install sets the old version up again from there (the update makes the copy
 first if it's missing, and changes nothing if it can't). A version Homebrew has already is set up
 without GitHub. A release the tap doesn't have yet changes nothing. A Homebrew install never
@@ -67,7 +67,7 @@ merged commit. The first release is **v0.1.0**, an early release for Omarchy use
 It is a regular GitHub release so the release-only updater can discover it.
 
 1. Update the version in `pyproject.toml`, `omarchy-plugin/manifest.json`, `pkgver` in
-   `packaging/arch/PKGBUILD` (reset `pkgrel` to 1) and the `url` in `packaging/homebrew/auren.rb`,
+   `packaging/arch/PKGBUILD` (reset `pkgrel` to 1) and the `url` in `packaging/homebrew/auren-macos.rb`,
    refresh `uv.lock` if needed, and add release notes under that version in `CHANGELOG.md`.
 2. Update user docs and `docs/ipc.md` for changed behavior. Run the contributor checks, including Qt
    tests, and smoke-test an install on an Omarchy session: build the package from the release commit
@@ -90,13 +90,17 @@ It is a regular GitHub release so the release-only updater can discover it.
    version. If it failed, fix the cause and run it again from Actions (`aur`, with the tag).
 6. The `brew` workflow publishes the release to the Homebrew tap: it sets the formula's `url` to the
    tag's source tarball and its `sha256` to the tarball's checksum, and pushes it to
-   `kvm404/homebrew-auren` as `Formula/auren.rb`. Check that it passed and that `brew info
-   kvm404/auren/auren` (after `brew update`) shows the new version. If it failed, fix the cause and run
+   `kvm404/homebrew-auren` as `Formula/auren-macos.rb`, with `formula_renames.json` mapping the old name
+   `auren` to it. Check that it passed and that `brew info
+   kvm404/auren/auren-macos` (after `brew update`) shows the new version. If it failed, fix the cause and run
    it again from Actions (`brew`, with the tag). It refuses to replace a newer version in the tap
    (publishing the same version again is fine); to go back to an older one on purpose, run it with
-   `force`.
+   `force`. It can't publish 0.1.8 or older: those tags have the formula under its old name, `auren`.
+   For the first release after the rename, the release notes must tell 0.1.8 Mac users to run
+   `brew trust --formula kvm404/auren/auren-macos` once before `auren update` (Homebrew's trust
+   doesn't follow a rename; see [docs/macos.md](macos.md#from-018-or-older)).
 7. Run `auren update check` from an existing install and verify the tag. Check that a clean
-   `yay -S auren` works, and on a Mac `brew install kvm404/auren/auren` then `auren setup`. Confirm later
+   `yay -S auren` works, and on a Mac `brew install kvm404/auren/auren-macos` then `auren setup`. Confirm later
    pushes to `main` leave the installed release current.
 
 Publishing a release does not change the repository's visibility.
@@ -119,11 +123,11 @@ key off the old account.
 
 ### The Homebrew tap, once
 
-`brew install kvm404/auren/auren` reads the formula from the tap repository `kvm404/homebrew-auren`
+`brew install kvm404/auren/auren-macos` reads the formula from the tap repository `kvm404/homebrew-auren`
 (Homebrew adds the `homebrew-` itself). To set it up:
 
 1. Create the public repository `kvm404/homebrew-auren` with a README (so it has a `main` branch), for
-   example: "Homebrew tap for Auren: `brew install kvm404/auren/auren`, then `auren setup`. The formula
+   example: "Homebrew tap for Auren: `brew install kvm404/auren/auren-macos`, then `auren setup`. The formula
    is published from packaging/homebrew/ in kvm404/Auren on each release: don't edit it here."
 2. Make an SSH key for the workflow, add its public half to the tap as a deploy key with write access,
    and its private half to kvm404/Auren's Actions secrets as `HOMEBREW_TAP_KEY`, then delete the key
@@ -137,7 +141,7 @@ key off the old account.
    ```
 
 3. Run the `brew` workflow from Actions for the latest tag, then check `brew install
-   kvm404/auren/auren` on a Mac.
+   kvm404/auren/auren-macos` on a Mac.
 
 The formula in this repository has a placeholder `sha256` (all zeros); only the tap's copy carries the
 checksum, filled in by the workflow from the published tarball.

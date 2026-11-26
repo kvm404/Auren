@@ -60,13 +60,13 @@ jobs:
           git archive --format=tar.gz --prefix="Auren-$version/" -o "$tarball" HEAD
           sum=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
           brew tap-new --no-git local/auren-ci
-          formula="$(brew --repository local/auren-ci)/Formula/auren.rb"
+          formula="$(brew --repository local/auren-ci)/Formula/auren-macos.rb"
           mkdir -p "$(dirname "$formula")"
           sed -e "s#^  url \".*\"\$#  url \"file://$tarball\"#" -e "s#^  sha256 \".*\"\$#  sha256 \"$sum\"#" \
-            packaging/homebrew/auren.rb >"$formula"
+            packaging/homebrew/auren-macos.rb >"$formula"
           grep -qF "  sha256 \"$sum\"" "$formula"
-          brew install --formula local/auren-ci/auren
-          brew test local/auren-ci/auren
+          brew install --formula local/auren-ci/auren-macos
+          brew test local/auren-ci/auren-macos
           # Brew's auren on PATH, for a user who hasn't run auren setup (a home of its own)
           home="$RUNNER_TEMP/brew-home"
           mkdir -p "$home"
@@ -76,17 +76,30 @@ jobs:
             fi
             [[ $out == "Auren isn't set up yet: run auren setup" ]] || { echo "$cmd said: $out"; exit 1; }
           done
-          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/install-macos.sh"
-          test -f "$(brew --prefix local/auren-ci/auren)/libexec/source/README.md"   # Homebrew moves it out of libexec itself
+          test -f "$(brew --prefix local/auren-ci/auren-macos)/libexec/source/install-macos.sh"
+          test -f "$(brew --prefix local/auren-ci/auren-macos)/libexec/source/README.md"   # Homebrew moves it out of libexec itself
           # What auren setup builds first: Auren's environment from Homebrew's copy of the source (not the
           # rest of the setup: Auren.app and the launch agents are the user's)
-          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/brew-venv" uv sync --project "$(brew --prefix local/auren-ci/auren)/libexec/source" \
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/brew-venv" uv sync --project "$(brew --prefix local/auren-ci/auren-macos)/libexec/source" \
             --frozen --no-dev --no-editable
           "$RUNNER_TEMP/brew-venv/bin/python" -I -c 'import auren.cli, auren.daemon, auren.phone_server'
       - name: Check the formula's style
-        run: brew style --formula local/auren-ci/auren
+        run: brew style --formula local/auren-ci/auren-macos
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
+
+  # The Homebrew formula's rename from auren (0.1.8) to auren-macos, on real Homebrew: a 0.1.8 install
+  # gets across with the one brew trust command docs/macos.md gives (tests/brew_rename.sh).
+  brew-rename:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: brew update --quiet       # brew trust is Homebrew 6.0.0 or newer
+      - run: tests/brew_rename.sh
+        env:
+          HOMEBREW_NO_ANALYTICS: "1"
 
   # The Arch package, built from this commit the way the AUR builds a release, installed in a clean Arch,
   # then set up and removed for a user (no systemd user session or Omarchy here: setup says so and goes on).
