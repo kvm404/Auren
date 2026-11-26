@@ -25,19 +25,14 @@ mouse and keyboard.
 
 ## What's new
 
-**Install on a Mac with Homebrew.** `brew install kvm404/auren/auren-macos`, then `auren setup`. `auren update`
-keeps it current through Homebrew. [macOS](#macos-preview) has the details.
+**Auren keeps track of its browser tabs.** It can list the tabs it has open, switch to one and close
+just that one, and a tab that was closed no longer stops it. It closes only tabs it opened itself.
 
-**The Auren window on macOS.** Every setting from Omarchy's bar panel, in one window: the mascot, voice,
-brain, vocabulary, your phone and updates. Open it from the menu bar icon (**Open Auren…**). Setup now
-notices by itself when you allow the microphone, Accessibility or Screen Recording, so there's nothing to
-restart.
+**The mascot's mouth follows the voice.** Its mouth now moves with how loud Auren is speaking.
 
-**Your phone, on a Mac too.** The Android app now works with Auren on a Mac, over Wi-Fi or Tailscale.
-[From your phone](#from-your-phone) shows how to set it up.
-
-**Typing in rich text boxes.** The browser tools now click and type like a real person in the page, so
-Auren can write in Google Docs, Notion, Gmail, X, Slack and WhatsApp Web.
+**On a Mac, the Homebrew formula is now `auren-macos`.** `brew install kvm404/auren/auren-macos`, then
+`auren setup`. Installed 0.1.8 with Homebrew? Run `brew trust --formula kvm404/auren/auren-macos` once
+(Homebrew's trust doesn't follow a rename), then `auren update`. [macOS](#macos-preview) has the details.
 
 Everything else is in the [changelog](CHANGELOG.md).
 
