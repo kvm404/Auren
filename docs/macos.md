@@ -20,7 +20,7 @@ expect rough edges and please report them.
 ## Install
 
 ```bash
-brew install kvm404/auren/auren
+brew install kvm404/auren/auren-macos
 auren setup
 ```
 
@@ -186,7 +186,7 @@ what it replaces, so everything else (the brain, safety, speech, the tool defini
 ## Updating
 
 `auren update` checks for a new release and installs it in the background, as on Omarchy. Installed
-with Homebrew, it waits until Auren is idle, stops it, runs `brew update` and `brew upgrade auren` (no
+with Homebrew, it waits until Auren is idle, stops it, runs `brew update` and `brew upgrade auren-macos` (no
 password needed), runs `auren setup` for the new version without asking anything, and starts Auren
 again. If that setup fails, it sets up the version that was there again, from a copy `auren setup` keeps
 in `~/.cache/auren/brew-rollback` (Homebrew removes the old version's own files). If Homebrew already
@@ -198,12 +198,26 @@ running the version it was set up with, and each `auren` command reminds you to 
 Installed from a clone, Auren updates from its own clone in `~/.cache/auren/source` instead
 ([docs/releases.md](releases.md)).
 
+### From 0.1.8 or older
+
+Until 0.1.8 the formula was called `auren` (`brew install kvm404/auren/auren`). It's `auren-macos` now,
+and Homebrew trusts a tap's formulae one by one, by name: trusting `auren` doesn't cover `auren-macos`,
+so `auren update` fails until you trust it. Once:
+
+```bash
+brew trust --formula kvm404/auren/auren-macos
+auren update
+```
+
+Homebrew moves the install over to `auren-macos` itself (the old `opt/auren` and `Cellar/auren` paths
+point at the new ones), and later updates need nothing more.
+
 ## Removing
 
 ```bash
 auren service uninstall
 auren app uninstall
-brew uninstall auren                          # from a clone instead: rm ~/.local/bin/auren ~/.local/bin/auren-ctl
+brew uninstall auren-macos                    # from a clone instead: rm ~/.local/bin/auren ~/.local/bin/auren-ctl
 rm -rf ~/.local/share/auren "$HOME/Library/Application Support/Auren"
 rm -rf ~/.config/auren ~/.local/state/auren ~/.cache/auren      # your settings and history too
 ```

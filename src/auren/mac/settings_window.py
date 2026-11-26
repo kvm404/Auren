@@ -164,7 +164,7 @@ def version_text(info: dict, upd: dict) -> str:
 def update_plan(info: dict) -> str:
     """What Update now does, said before it does it."""
     if info.get("mode") == "brew":
-        return ("Auren waits until it's idle, stops, and Homebrew installs the new version (brew upgrade auren)."
+        return ("Auren waits until it's idle, stops, and Homebrew installs the new version (brew upgrade auren-macos)."
                 " Then Auren starts again, in about a minute. If that fails, the current version is set up again.")
     return ("Auren waits until it's idle, stops, installs the new version and starts again (about a minute)."
             " A failed install puts the current version back.")
