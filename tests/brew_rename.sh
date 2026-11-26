@@ -69,12 +69,15 @@ test -f "$prefix/opt/auren/libexec/source/install-macos.sh"
 grep -qF "$prefix/opt/auren-macos/libexec/source" "$prefix/bin/auren"
 brew upgrade --formula auren-macos                         # the next version's updater: nothing to do
 
-# A fresh install by the new name trusts itself, as the README says
-brew uninstall --formula auren-macos
-brew untrust --formula "$tap/auren-macos"
-brew install --formula "$tap/auren-macos"
+# A fresh install by the new name trusts itself, as the README says: from a tap at another address
+# (a file:// tap's trust is kept by its address, so this one starts untrusted)
+brew uninstall --force --formula auren-macos
+brew untap "$tap"
+git clone -q --bare "$work/tap.git" "$work/fresh.git"
+brew tap local/auren-fresh "file://$work/fresh.git"
+brew install --formula local/auren-fresh/auren-macos
 [[ $(realpath "$prefix/opt/auren-macos") == "$(realpath "$prefix/Cellar/auren-macos/0.1.9")" ]]
 brew upgrade --formula auren-macos
-brew uninstall --formula auren-macos
-brew untap "$tap"
+brew uninstall --force --formula auren-macos
+brew untap local/auren-fresh
 echo "the rename works"
