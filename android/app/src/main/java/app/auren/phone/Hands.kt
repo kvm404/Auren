@@ -73,7 +73,7 @@ class HandsService : AccessibilityService() {
     suspend fun run(o: JSONObject): JSONObject = try {
         when (o.optString("action")) {
             "screen" -> read()
-            "tap" -> { tap(item(o), o.optBoolean("long")); settle(); read() }
+            "tap" -> { val node = item(o); unchanged(o.optJSONObject("draft")); tap(node, o.optBoolean("long")); settle(); read() }
             "type" -> { type(item(o, field = true), o.optString("text"), o.optBoolean("submit")); settle(); read() }
             "scroll" -> { scroll(o.optString("direction", "down"), if (o.has("n")) item(o) else null); settle(); read() }
             "key" -> { key(o.optString("key")); settle(); read() }
@@ -109,6 +109,15 @@ class HandsService : AccessibilityService() {
         }
         if (field && !node.isEditable) throw Refused("item $n isn't a text field")
         return node
+    }
+
+    /** A tap that sends a typed message: its box still holds just that text (not a draft in another chat). */
+    private fun unchanged(draft: JSONObject?) {
+        draft ?: return
+        val box = nodes[draft.optInt("n", -1)]
+        if (box == null || !box.refresh() || held(box, label(box)) != draft.optString("text")) {
+            throw Refused("the message box doesn't hold what was typed any more: read the phone's screen again")
+        }
     }
 
     private suspend fun tap(node: AccessibilityNodeInfo, long: Boolean) {
@@ -317,10 +326,11 @@ class HandsService : AccessibilityService() {
             val shown = listOf(kind, if (name.isEmpty()) "" else "“$name”").filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "(no label)" }
             out.line("[$number] $shown${if (state.isEmpty()) "" else " (${state.joinToString()})"}")
             val search = n.isEditable && searchy(n)
+            val draft = if (n.isEditable && !search) held(n, own) else null      // a message typed and not sent
             out.items.put(JSONObject().put("n", number).put("label", name).put("field", n.isEditable)
                 .put("search", search).put("password", n.isPassword)
-                // a message typed and not sent: the PC then asks before a tap that may send it
-                .put("draft", n.isEditable && !search && !n.isPassword && held(n, own) != null))
+                // the PC asks (or has the judge check) before a tap that may send it, and names the text
+                .put("draft", draft != null).apply { if (draft != null) put("text", draft) })
             // Its words are its name now: don't list them twice, unless something inside acts on its own (a
             // chat's message box and buttons sit inside one tappable bar), which needs its own number.
             if (own.isBlank() && !n.isScrollable && !holdsActionable(n)) return

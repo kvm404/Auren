@@ -236,6 +236,10 @@ class Hub:
             self._controls.pop(rid, None)
         return {**out, "device": conn.device["id"]}
 
+    def controls(self, device: str) -> bool:
+        """That phone is connected with its phone control on."""
+        return any(c.control and c.device["id"] == device for c in self.conns)
+
     def _control_result(self, conn: Conn, msg: dict) -> None:
         waiting = self._controls.get(str(msg.get("id") or ""))
         if waiting and waiting[0] is conn and not waiting[1].done():        # only the phone it was sent to answers

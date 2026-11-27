@@ -26,8 +26,9 @@ class PhoneError(Exception):
 
 
 _link: Callable[[dict, float], dict] | None = None
-_items: dict[str, dict] = {}         # the last screen's numbered items: number -> {label, field, search, password, draft}
+_items: dict[str, dict] = {}         # the last screen's numbered items: number -> {label, field, search, password, draft, text}
 _device: str | None = None           # the phone that screen came from: numbered actions go only to it
+_screen = ""                         # that screen's text
 _lock = threading.Lock()
 
 
@@ -38,10 +39,10 @@ def attach(link: Callable[[dict, float], dict] | None) -> None:
 
 def forget() -> None:
     """The last screen no longer counts (an action may or may not have happened): read it again first."""
-    global _device
+    global _device, _screen
     with _lock:
         _items.clear()
-        _device = None
+        _device, _screen = None, ""
 
 
 def device() -> str | None:
@@ -50,7 +51,7 @@ def device() -> str | None:
 
 
 def _call(action: str, numbered: bool = False, **args) -> str:
-    global _device
+    global _device, _screen
     if _link is None:
         raise PhoneError("phone control isn't available here (it runs in the Auren daemon)")
     msg = {"action": action, **{k: v for k, v in args.items() if v is not None}}
@@ -72,11 +73,12 @@ def _call(action: str, numbered: bool = False, **args) -> str:
         with _lock:
             _items.clear()
             _device = str(out["device"]) if out.get("device") else None
+            _screen = str(out.get("screen") or "")
             for it in items:
                 if isinstance(it, dict) and it.get("n") is not None:
                     _items[str(it["n"])] = {"label": str(it.get("label") or ""), "field": bool(it.get("field")),
                                             "search": bool(it.get("search")), "password": bool(it.get("password")),
-                                            "draft": bool(it.get("draft"))}
+                                            "draft": bool(it.get("draft")), "text": str(it.get("text") or "")}
     return str(out.get("screen") or "")
 
 
@@ -84,6 +86,21 @@ def drafting() -> bool:
     """The last screen has a message typed and not sent yet (a chat box that holds text)."""
     with _lock:
         return any(it["draft"] for it in _items.values())
+
+
+def draft() -> tuple[str, str] | None:
+    """The message waiting unsent on the last screen, (its box's number, its text), if just one box holds one."""
+    with _lock:
+        found = [(n, it["text"]) for n, it in _items.items() if it["draft"] and it["text"].strip()]
+    return found[0] if len(found) == 1 else None
+
+
+def where() -> tuple[str, str]:
+    """The last screen's app, and its first lines (where a chat shows whose it is), for the judge."""
+    with _lock:
+        lines = [ln.strip() for ln in _screen.splitlines() if ln.strip()]
+    app = lines[0].removeprefix("== ").rsplit(" (", 1)[0] if lines and lines[0].startswith("== ") else "an app"
+    return app, " / ".join(lines[1:9])[:400]
 
 
 def item(target: str) -> tuple[str, dict] | None:
@@ -114,9 +131,11 @@ def screen() -> str:
     return _call("screen")
 
 
-def tap(target: str, long: bool = False, expect: str | None = None) -> str:
+def tap(target: str, long: bool = False, expect: str | None = None, sends: tuple[str, str] | None = None) -> str:
+    """sends: (box number, text) when this tap sends that message: the phone checks the box still holds it."""
     n, it = resolve(target)
-    return _call("tap", True, n=int(n), long=long, expect=it["label"] if expect is None else expect)
+    return _call("tap", True, n=int(n), long=long, expect=it["label"] if expect is None else expect,
+                 draft={"n": int(sends[0]), "text": sends[1]} if sends else None)
 
 
 def type_text(target: str, text: str, submit: bool = False, expect: str | None = None) -> str:

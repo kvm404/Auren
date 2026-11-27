@@ -649,11 +649,20 @@ def phone_screen() -> str:
     return _phone(_run(android.screen))
 
 
+def _phone_message(text: str, how: str) -> str:
+    """A chat message about to go on the phone, for the judge (at Auto): the whole text, how it goes, and
+    the top of the phone's screen, which is where a chat app shows whose chat it is."""
+    app, top = android.where()
+    return (f"Send the message “{text}” {how}, in the app {app} on the user's phone. The top of the phone's "
+            f"screen reads: {top}")
+
+
 @tool(lock=PHONE)
 def phone_tap(target: str, long_press: bool = False) -> str:
     """Tap an item on the phone: its number from the last phone screen, or words from its label. Returns the
     screen after the tap. long_press=True holds it. Taps that buy, pay, send, post, delete, install or erase
-    make the tool ask the user itself: just tap, don't ask in words first."""
+    make the tool ask the user itself, unless the user's own words already asked for that message: just
+    tap, don't ask in words first."""
     try:
         n, it = android.resolve(target)
     except android.PhoneError as e:
@@ -667,35 +676,44 @@ def phone_tap(target: str, long_press: bool = False) -> str:
         kinds, question = {safety.SEND}, f"Tap item {n} (a button with no name) on your phone? A typed message is waiting there, and this may send it."
     else:
         return _phone(_run(android.tap, n, long_press))
-    return _gate(kinds, question, lambda: _phone(android.tap(n, long_press, label)), _still(n, label, android.device()))
+    # A Send for the one message typed on this screen: the phone sends it only if its box still holds that
+    # text, and at Auto the judge may find the user already asked for it.
+    sends = android.draft() if kinds == {safety.SEND} and (not label or safety.SEND_MESSAGE.fullmatch(label)) else None
+    if sends:
+        question = f"Send “{_short(sends[1])}” on your phone?"
+    return _gate(kinds, question, lambda: _phone(android.tap(n, long_press, label, sends)),
+                 _still(n, label, android.device()),
+                 message=_phone_message(sends[1], f"by tapping “{label or 'a button with no name'}”") if sends else "")
+
+
+def _short(text: str) -> str:
+    return text if len(text) <= 60 else text[:57] + "…"
 
 
 @tool(lock=PHONE)
 def phone_type(target: str, text: str, submit: bool = False) -> str:
     """Type text into a numbered text field on the phone, replacing what it holds. submit=True presses the
     keyboard's action key (search, go, send) afterwards. Submitting a search box runs straight away;
-    submitting any other field (a chat message, a form) or typing a password makes the tool ask the user
-    itself: just call it."""
+    submitting any other field (a chat message, a form) makes the tool ask the user itself, unless the
+    user's own words already asked for that message: just call it."""
     try:
         n, it = android.resolve(target)
     except android.PhoneError as e:
         return f"error: {e}"
-    if not it["field"]:
-        return _phone(_run(android.type_text, n, text, submit))         # says it isn't a text field
-    label, where = it["label"], it["label"] or "the field"
-    kinds: set[str] = set()
-    if it["password"]:              # never in the question: questions are logged and shown
-        kinds.add(safety.SECRETS)
-        question = f"Type the password into “{where}” on your phone{' and submit it' if submit else ''}?"
-    else:
-        short = text if len(text) <= 60 else text[:57] + "…"
-        question = f"Type “{short}” into “{where}” on your phone and send it?"
-    if submit and not it["search"]:
-        kinds.add(safety.PUBLISH if safety.PUBLISH_FIELD.search(label) else safety.SEND)
-    if not kinds:
+    if not it["field"] or not submit or it["search"]:
+        if it["field"] and not it["search"] and not it["password"]:
+            _warm_judge()                   # a Send tap may follow
         return _phone(_run(android.type_text, n, text, submit))
-    return _gate(kinds, question, lambda: _phone(android.type_text(n, text, submit, label)),
-                 _still(n, label, android.device()))
+    label, where = it["label"], it["label"] or "the field"
+    publish = bool(safety.PUBLISH_FIELD.search(label))
+    if it["password"]:              # never in the question: questions are logged and shown
+        question = f"Type the password into “{where}” on your phone and submit it?"
+    else:
+        question = f"Type “{_short(text)}” into “{where}” on your phone and {'post' if publish else 'send'} it?"
+    message = "" if publish or it["password"] else _phone_message(text, f"by pressing the keyboard's send key in the box “{where}”")
+    return _gate({safety.PUBLISH if publish else safety.SEND}, question,
+                 lambda: _phone(android.type_text(n, text, True, label)), _still(n, label, android.device()),
+                 message=message)
 
 
 @tool(repeatable=True, lock=PHONE)

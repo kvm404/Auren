@@ -196,7 +196,7 @@ def test_a_post_box_submit_is_publishing_not_sending(rt, ph):
     assert rt.awaiting(SESSION).kinds == {"publish"}
 
 
-def test_a_password_asks_and_never_shows_in_the_question(rt, ph, caplog):
+def test_a_password_is_typed_without_asking_and_never_shows_in_a_question(rt, ph, caplog):
     ph.screen = screen({"label": "Password", "field": True, "password": True})
     call(rt, "phone_screen")
     rt.set_level("never")
@@ -204,7 +204,8 @@ def test_a_password_asks_and_never_shows_in_the_question(rt, ph, caplog):
         call(rt, "phone_type", {"target": "1", "text": "hunter2", "submit": True})
     assert ph.sent[-1]["text"] == "hunter2" and "hunter2" not in caplog.text
     rt.set_level("free")
-    asked = json.loads(call(rt, "phone_type", {"target": "1", "text": "hunter2"}))
+    assert call(rt, "phone_type", {"target": "1", "text": "hunter2"}).startswith("<untrusted")    # like the browser
+    asked = json.loads(call(rt, "phone_type", {"target": "1", "text": "hunter2", "submit": True}))
     assert asked["status"] == "needs_confirmation" and "hunter2" not in asked["ask_user"]
 
 
@@ -297,3 +298,62 @@ def test_a_phone_that_goes_away_or_is_too_slow_doesnt_leave_actions_behind():
     dropped, slow, msgs = asyncio.run(go())
     assert dropped["unknown"] and "disconnected" in dropped["error"] and slow["unknown"]
     assert [m["type"] for m in msgs] == ["control", "control.cancel"] and msgs[0]["id"] == msgs[1]["id"]
+
+
+class _Spy:
+    def __init__(self, verdict="chat"):
+        self.verdict, self.calls = verdict, []
+
+    def allows(self, said, action, image=None):
+        self.calls.append(action)
+        return self.verdict
+
+
+CHAT = ({"label": "Back"}, {"label": "Mom"}, {"label": "Message", "field": True, "draft": True, "text": "I'm late"},
+        {"label": "Send"})
+
+
+def test_at_auto_a_message_the_user_asked_for_goes_without_asking(rt, ph):
+    rt.set_level("free")
+    rt.judge = spy = _Spy()
+    ph.screen = {**screen(*CHAT), "screen": "== WhatsApp (com.whatsapp)\n[1] “Back”\n[2] “Mom”\n[3] field “Message”"}
+    call(rt, "phone_screen")
+    rt.new_turn(SESSION, said="tell mom I'm late on whatsapp")
+    assert call(rt, "phone_tap", {"target": "Send"}).startswith("<untrusted")
+    assert ph.sent[-1] == {"action": "tap", "n": 4, "long": False, "expect": "Send", "draft": {"n": 3, "text": "I'm late"}}
+    [action] = spy.calls
+    assert "“I'm late”" in action and "WhatsApp" in action and "Mom" in action
+
+    rt.new_turn(SESSION, said="and say sorry")
+    assert call(rt, "phone_type", {"target": "3", "text": "sorry", "submit": True}).startswith("<untrusted")
+    assert "“sorry”" in spy.calls[-1] and ph.sent[-1]["submit"] is True
+
+
+def test_when_the_judge_doesnt_find_it_asked_for_it_asks_and_the_yes_sends_that_text(rt, ph):
+    rt.set_level("free")
+    rt.judge = _Spy("")
+    ph.screen = screen(*CHAT)
+    call(rt, "phone_screen")
+    rt.new_turn(SESSION, said="open my chat with mom")
+    asked = json.loads(call(rt, "phone_tap", {"target": "Send"}))
+    assert asked["status"] == "needs_confirmation" and "I'm late" in asked["ask_user"]
+    [ok] = answer_yes(rt)
+    assert ok.ok and ph.sent[-1]["draft"] == {"n": 3, "text": "I'm late"}
+
+
+def test_only_a_plain_send_reaches_the_judge(rt, ph):
+    rt.set_level("free")
+    rt.judge = spy = _Spy()
+    ph.screen = screen({"label": "Post", "field": False}, {"label": "What's on your mind?", "field": True},
+                       {"label": "Message", "field": True, "draft": True, "text": "a"},
+                       {"label": "Notes", "field": True, "draft": True, "text": "b"}, {"label": "Send"})
+    call(rt, "phone_screen")
+    rt.new_turn(SESSION, said="post it and send it")
+    assert _asks(call(rt, "phone_tap", {"target": "Post"}))
+    assert _asks(call(rt, "phone_type", {"target": "2", "text": "hi", "submit": True}))
+    assert _asks(call(rt, "phone_tap", {"target": "Send"}))          # two boxes hold text: which one goes?
+    assert spy.calls == []
+
+
+def _asks(out: str) -> bool:
+    return out.startswith("{") and json.loads(out)["status"] == "needs_confirmation"

@@ -550,7 +550,7 @@ def click_kind(label: str) -> str:
 # the app (accessibility), not from the brain, so they say what a tap does.
 _PHONE_SYSTEM = re.compile(r"\b(install|uninstall|update app|force stop|disable)\b", re.I)
 _PHONE_WIPE = re.compile(r"\b(erase|wipe|factory (data )?reset|reset (phone|all|settings|network|app preferences)|"
-                         r"format|clear (data|storage|all data|cache)|delete all)\b", re.I)
+                         r"format|clear (data|storage|all data)|delete all)\b", re.I)
 _PHONE_SECRETS = re.compile(r"\b(show|reveal|copy|view) (the )?passwords?\b", re.I)
 # A text field whose submit posts in public rather than sends to someone (a feed's composer, a comment box).
 PUBLISH_FIELD = re.compile(r"\b(post|publish|comment|tweet|what'?s on your mind|what'?s happening|add a story)\b", re.I)

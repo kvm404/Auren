@@ -86,6 +86,11 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
 PHONE_KEYS = ("phone.enabled", "phone.port", "phone.lan")    # a reload that changes one restarts the phone server
 # Told to the brain with a request from the phone: the user isn't at the laptop, and reads the reply.
 PHONE_NOTE = "(From the user's phone: they may be away from the laptop. Your reply is shown on the phone as text.)"
+# The same, when that phone's control is on: a request that doesn't say where is about the phone in their hand.
+PHONE_CONTROL_NOTE = ("(From the user's phone, where phone control is on: they may be away from the laptop. Your reply "
+                      "is shown on the phone as text. Something to do in an app or on a device that doesn't say where "
+                      "(\"open WhatsApp\", \"text Mom I'm late\") is for the phone: use the phone tools. Use the "
+                      "laptop only when they name it, or for what only the laptop has.)")
 COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|next|too|as well)\b|[,;]|[.?!]\s*\S", re.I)
 
 
@@ -887,7 +892,8 @@ class Daemon:
         earlier, self._earlier = self._earlier, ()
         to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
         if turn and turn.origin == "phone":
-            to_brain = f"{PHONE_NOTE}\n{to_brain}"
+            control = self.phone is not None and self.phone.controls(turn.device)
+            to_brain = f"{PHONE_CONTROL_NOTE if control else PHONE_NOTE}\n{to_brain}"
         self.set_state("thinking", text, transcript=text)
         self._show("Thinking…", "thinking")
         tools = list(already or [])

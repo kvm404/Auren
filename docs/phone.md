@@ -209,10 +209,19 @@ brain's tools are `phone_screen`, `phone_open_app`, `phone_apps`, `phone_tap`, `
 **Safety.** Phone control follows the PC's safety level. A tap on something that sends, buys, deletes or
 posts asks first, and so do taps that install, uninstall, erase or reset, or show a password (these ask at
 every level but Full access, like the laptop's floor). Pressing the keyboard's action key in a field that
-isn't a search asks too (as a post, not a send, in a comment or post box), and so does typing into a
-password field, whose text is never put in the question. While a typed message waits unsent, a tap on a
-button with no name asks, since it may be the Send. Locking the phone asks like locking the laptop. Full
-access asks nothing.
+isn't a search asks too (as a post, not a send, in a comment or post box). While a typed message waits
+unsent, a tap on a button with no name asks, since it may be the Send. Locking the phone asks like locking
+the laptop (so not at Auto). Typing a password doesn't ask, as in the browser, but its text is never put
+in a question. Full access asks nothing.
+
+At Auto, a message your own words just asked for goes without asking: "tell Mom I'm late on WhatsApp" types
+it and taps Send. The judge ([safety.md](safety.md#the-judge)) reads what you said, the text, and the top
+of the phone's screen, where the chat's name is; if it isn't sure, it asks. The Send tap goes only if the
+box still holds exactly that text.
+
+**Which device.** A request from the desk is for the laptop unless it says "on my phone". A request from
+the phone, while that phone's control is on, is for the phone unless it names the laptop ("open WhatsApp"
+on the phone opens it on the phone).
 
 Every numbered action names the label it was read with, an empty one too, and goes only to the phone that
 screen came from. The PC checks both before a confirmed action runs, and the phone checks the label again on
@@ -224,12 +233,14 @@ field is one. Screen text, app names and the phone's refusals reach the brain as
 on or off. The PC sends `control` (`{id, action, ...}`) to the newest connection that has it on, one at a
 time (a numbered action goes to the phone its screen was read on); `action` is `screen`, `tap` (`n, long,
 expect`), `type` (`n, text, submit, expect`), `scroll` (`direction, n?, expect?`), `key` (`back, home,
-recents, notifications, quick_settings, lock`), `open` (`app`) or `apps` (`query`). The phone runs them one
-at a time and answers `control.result` with `{id, ok, screen, items:[{n, label, field, search, password,
-draft}]}` or `{id, ok: false, error}`; only the phone an action went to can answer it. The PC gives up
-after 20 s and sends `control.cancel` (`{id}`), and the phone drops that action if it hasn't run yet, as it
-drops all of them when the link goes. An action with no answer may still have happened: the PC forgets the
-last screen's numbers, so the brain reads the screen again before the next one.
+recents, notifications, quick_settings, lock`), `open` (`app`) or `apps` (`query`); a `tap` that sends a
+typed message also names it (`draft: {n, text}`) and the phone refuses unless that box holds just that
+text. The phone runs them one at a time and answers `control.result` with `{id, ok, screen, items:[{n,
+label, field, search, password, draft, text?}]}` (`text`: what an unsent message box holds) or `{id, ok:
+false, error}`; only the phone an action went to can answer it. The PC gives up after 20 s and sends
+`control.cancel` (`{id}`), and the phone drops that action if it hasn't run yet, as it drops all of them
+when the link goes. An action with no answer may still have happened: the PC forgets the last screen's
+numbers, so the brain reads the screen again before the next one.
 
 ## Protocol (API v1)
 
