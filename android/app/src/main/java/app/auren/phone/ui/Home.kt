@@ -77,6 +77,8 @@ import app.auren.phone.Line
 import app.auren.phone.Link
 import app.auren.phone.LinkKind
 import app.auren.phone.Remote
+import app.auren.phone.UpdateStatus
+import app.auren.phone.Updates
 import app.auren.phone.Who
 
 @Composable
@@ -87,6 +89,7 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
     val talk by Remote.talk.collectAsStateWithLifecycle()
     val level by Remote.level.collectAsStateWithLifecycle()
     val unread by Remote.unread.collectAsStateWithLifecycle()
+    val update by Updates.status.collectAsStateWithLifecycle()
     val connected = link.kind == LinkKind.CONNECTED
     val mood = moodOf(st.state, st.awaiting, connected)
 
@@ -105,7 +108,12 @@ fun HomeScreen(onInbox: () -> Unit, onSettings: () -> Unit, onPairAgain: () -> U
                     Icon(Icons.Filled.Email, "Inbox", tint = Au.Dim)
                 }
             }
-            IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings", tint = Au.Dim) }
+            IconButton(onClick = onSettings) {
+                BadgedBox(badge = { if (update is UpdateStatus.Available) Badge(containerColor = Au.Gold) }) {
+                    Icon(Icons.Filled.Settings, if (update is UpdateStatus.Available) "Settings, an update is ready" else "Settings",
+                        tint = Au.Dim)
+                }
+            }
         }
 
         AnimatedVisibility(!connected && link.kind != LinkKind.CONNECTING, enter = expandVertically() + fadeIn(),

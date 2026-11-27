@@ -6,5 +6,6 @@ class AurenApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Remote.init(this)
+        Updates.init(this)
     }
 }

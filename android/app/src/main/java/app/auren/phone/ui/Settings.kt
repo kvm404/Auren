@@ -1,5 +1,10 @@
 package app.auren.phone.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,7 +58,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.auren.phone.LinkKind
 import app.auren.phone.codexName
 import app.auren.phone.pathOf
+import app.auren.phone.Release
 import app.auren.phone.Remote
+import app.auren.phone.UpdateStatus
+import app.auren.phone.Updates
 import app.auren.phone.VoiceStatus
 import app.auren.phone.Voices
 import androidx.compose.ui.semantics.Role
@@ -64,8 +72,6 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
     val readAloud by Remote.readAloud.collectAsStateWithLifecycle()
     var confirm by remember { mutableStateOf(false) }
     val pc = Remote.store.pc
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -127,6 +133,9 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
                 color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp)
         }
 
+        Section("Updates")
+        UpdateCard()
+
         if (pc != null) {
             Section("Unpair")
             Card {
@@ -139,8 +148,87 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
                 ) { Text(if (confirm) "Tap again to unpair" else "Unpair", color = Au.Red) }
             }
         }
-        Text("Auren remote $version", color = Au.Faint, fontSize = 11.sp,
-            modifier = Modifier.padding(vertical = 24.dp))
+        Box(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * This app's version and its update from GitHub: check, download, install. Installing needs Android's
+ * "install unknown apps" for Auren, asked for the first time Update is tapped.
+ */
+@Composable
+private fun UpdateCard() {
+    val status by Updates.status.collectAsStateWithLifecycle()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val version = remember { Updates.version }
+    // Android's settings answer nothing: whether it's allowed now is all that counts.
+    val allow = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (!Updates.canInstall()) return@rememberLauncherForActivityResult
+        val r = Updates.status.value.release
+        if (r != null) Updates.install(r) else Updates.check()
+    }
+    val update: (Release) -> Unit = { r ->
+        if (Updates.canInstall()) Updates.install(r)
+        else runCatching {
+            allow.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")))
+        }.onFailure { Remote.say("Allow Auren to install apps in Android's settings") }
+    }
+    fun mb(n: Long) = "%.0f".format(n / 1e6)
+    val note = Modifier.padding(top = 4.dp)
+
+    Card {
+        Text("Auren remote $version", color = Au.Text, fontSize = 15.sp)
+        when (val s = status) {
+            UpdateStatus.Unknown, UpdateStatus.Current, UpdateStatus.Checking -> {
+                Row(note, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        when (s) {
+                            UpdateStatus.Checking -> "Checking GitHub for a newer version…"
+                            UpdateStatus.Current -> "Up to date."
+                            else -> "Updates come from Auren's releases on GitHub."
+                        },
+                        color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f),
+                    )
+                    QuietButton(if (s == UpdateStatus.Current) "Check again" else "Check", Modifier.padding(start = 8.dp),
+                        enabled = s != UpdateStatus.Checking) { Updates.check() }
+                }
+            }
+            is UpdateStatus.Available -> {
+                Text("Auren ${s.release.version} is out.", color = Au.Gold, fontSize = 13.sp, modifier = note)
+                Text("Update downloads it from GitHub" + (if (s.release.size > 0) " (${mb(s.release.size)} MB)" else "") +
+                    " and installs it over this one; the pairing stays. Auren closes while it installs.",
+                    color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = note)
+                Row(Modifier.padding(top = 10.dp)) {
+                    GoldButton("Update") { update(s.release) }
+                    if (s.release.page.isNotEmpty()) QuietButton("What's new", Modifier.padding(start = 8.dp)) {
+                        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(s.release.page))) }
+                    }
+                }
+            }
+            is UpdateStatus.Downloading -> {
+                LinearProgressIndicator(
+                    progress = { if (s.release.size > 0) s.done.toFloat() / s.release.size else 0f },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp), color = Au.Gold, trackColor = Au.Raised,
+                    drawStopIndicator = {},
+                )
+                Text("Downloading Auren ${s.release.version}" +
+                    (if (s.release.size > 0) ", ${mb(s.done)} of ${mb(s.release.size)} MB" else "") + "…",
+                    color = Au.Faint, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+            is UpdateStatus.Installing -> {
+                Text("Installing Auren ${s.release.version}. Android asks you to confirm, then Auren closes: open it again after.",
+                    color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = note)
+                QuietButton("Try again", Modifier.padding(top = 10.dp)) { update(s.release) }
+            }
+            is UpdateStatus.Failed -> Row(note, verticalAlignment = Alignment.CenterVertically) {
+                Text((if (s.release == null) "Couldn't check for updates: " else "Couldn't update: ") + s.why + ".",
+                    color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+                QuietButton("Retry", Modifier.padding(start = 8.dp)) {
+                    val r = s.release
+                    if (r != null) update(r) else Updates.check()
+                }
+            }
+        }
     }
 }
 

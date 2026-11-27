@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Updating itself from Auren's GitHub releases (Updates.kt); Android asks the user to allow it once. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -98,6 +100,11 @@
             android:name=".ConversationService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- The package installer's answer about an update (Updates.kt). -->
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         Remote.start()
+        Updates.checkIfDue()
     }
 
     override fun onStop() {
@@ -99,6 +100,12 @@ private fun App(pairLink: String?, pairLinkUsed: () -> Unit) {
         ) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    // An update's "install this?" screen opens from here, in front: Android blocks it from the background.
+    val confirmUpdate by Updates.confirm.collectAsStateWithLifecycle()
+    LaunchedEffect(confirmUpdate) {
+        confirmUpdate?.let { Updates.confirmOpened(runCatching { ctx.startActivity(it) }.isSuccess) }
     }
 
     BackHandler(screen == Screen.INBOX || screen == Screen.SETTINGS || (screen == Screen.PAIR && Remote.store.pc != null)) {

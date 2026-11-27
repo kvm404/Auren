@@ -11,7 +11,7 @@ receive data as described below. Auren has no separate telemetry or analytics se
 | Claude Code or Codex's model provider | Your transcript or typed request, conversation context, a compact machine profile, personal instructions, routines, and results of tools the model calls |
 | Selected model provider, when screen tools are used | Requested screenshots, including visible app and browser content |
 | Claude Code's model provider, for the full-access send judge | The last six conversation lines, the proposed message and destination, and a screenshot for a screen-based send |
-| GitHub | Release checks and source downloads; authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh` login when available. Browser setup downloads the Open Browser Use release from github.com/iFurySt/open-browser-use |
+| GitHub | Release checks and source downloads; authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh` login when available. Browser setup downloads the Open Browser Use release from github.com/iFurySt/open-browser-use. The phone app asks api.github.com for the latest release when it opens (at most every 6 hours) and downloads its APK from there when you tap Update; these requests carry no account or pairing data |
 | Voice model host (Hugging Face) | The Phonon model and voices download during setup or `auren voice-model`; the daemon then loads them from the cache without going online |
 | Your paired phone, over Tailscale or the local Wi-Fi (TLS pinned to the PC's certificate) | Auren's state (transcripts, replies, questions), phone turns' replies, and what `send_to_phone` sends (text, links, images, files). Phone audio goes from the phone through the PC to AssemblyAI, like the PC's microphone |
 
