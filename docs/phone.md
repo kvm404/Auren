@@ -39,8 +39,8 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
    phone's camera (or run `auren phone app` in a terminal). It downloads `auren-phone-X.Y.Z.apk` for the
    Auren you have, from its GitHub release; a build that isn't a release links to the
    [latest release](https://github.com/kvm404/Auren/releases/latest) instead. Open the download (Android asks
-   you to allow installing from your browser once). A newer release's APK installs over it, keeping the
-   pairing. To build it yourself: `cd android && ./gradlew installDebug` (a debug build can't update a
+   you to allow installing from your browser once). After that the app updates itself: see
+   [Updating the app](#updating-the-app). To build it yourself: `cd android && ./gradlew installDebug` (a debug build can't update a
    release one: uninstall that first), with `android/native/build-phonon.sh` first for the phone's own voice.
 4. On the PC, open the bar panel's **Phone** page and click **Pair a phone** (or run `auren phone pair` in a
    terminal). It shows a QR code; the terminal also prints the same thing as text (`auren://pair?...`), and
@@ -76,6 +76,23 @@ The server checks its addresses every 5 s and moves with them (a new Wi-Fi, Tail
 none it stays off. `auren config set` for any of these takes effect on the next reload: the server
 starts, stops, or moves to the new port, and phones connected to the old one are dropped. `send_to_phone` and its prompt rule are offered to the brain only while at least one phone is
 paired (pairing or revoking the last phone starts a fresh conversation so the brain's tools match).
+
+## Updating the app
+
+The app checks Auren's [latest release](https://github.com/kvm404/Auren/releases/latest) on GitHub when
+it opens (at most every 6 hours while it stays running), never a prerelease. When a newer release has the
+phone app attached, a dot shows on the Settings button, and **Settings → Updates** says which version is
+out, with **Update** and **What's new**. **Check** there asks GitHub right away.
+
+**Update** downloads `auren-phone-X.Y.Z.apk` into the app's cache and checks it before Android sees it: its
+SHA-256 against the release's `auren-phone-X.Y.Z.apk.sha256`, that it is this app, that it's newer, and that
+it's signed with the same key as the one installed. Then Android's installer asks you to confirm and installs
+it over this one, keeping the pairing; the app closes while it does, so open it again after. The first time,
+Android asks you to let Auren install apps (Settings → Apps → Special app access → Install unknown apps).
+
+A build of your own (`./gradlew installDebug`) has another signing key, so it can't take a release's update:
+Update says so. Uninstall it and install the release once; from then on it updates itself. It updates only the phone
+app: update Auren on the PC as usual (`auren update`, or your package manager).
 
 ## On macOS
 

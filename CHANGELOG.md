@@ -9,6 +9,11 @@
   run `auren phone allow`): it opens just that port on just the blocked path, after your password. Before, only `auren doctor` said so, and a phone on
   the Wi-Fi simply couldn't connect.
 
+- **The phone app updates itself.** It checks Auren's latest GitHub release when it opens, and when a
+  newer one has the app attached, Settings → Updates offers it: **Update** downloads it, checks its
+  SHA-256 and signing key, and installs it over this one (Android asks you to confirm), keeping the
+  pairing.
+
 ### Fixed
 
 - Screen, page and pane text can no longer close the "untrusted" wrapper around it early and slip
