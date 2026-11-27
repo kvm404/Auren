@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Phone control: Auren can use your Android phone for you. It opens apps, reads the screen, taps, types,
+  scrolls and presses system keys, so "open WhatsApp and tell Mom I'm late" works from the desk. Turn it
+  on in the app's Settings (Phone control, then Android's Accessibility settings). Risky taps and sends
+  follow the PC's safety level; installing, erasing, revealing a password and posting ask at every level
+  but Full access. Passwords never leave the phone. See [docs/phone.md](docs/phone.md#phone-control).
+
+### Fixed
+
+- Screen, page and pane text can no longer close the "untrusted" wrapper around it early and slip
+  words of its own outside it.
+
 ## 0.1.9
 
 ### Added

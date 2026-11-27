@@ -45,7 +45,8 @@ INTEGRATIONS = {
     "screen": Integration("screen", "mouse control",
                           frozenset({"click_at", "drag_at", "scroll_at", "excalidraw_draw", "excalidraw_read",
                                      "spotify_play"})),
-    "phone": Integration("phone", "phone remote", frozenset({"send_to_phone"}), key="phone.enabled"),
+    "phone": Integration("phone", "phone remote", frozenset({"send_to_phone", "phone_screen", "phone_tap", "phone_type",
+                                                                 "phone_scroll", "phone_key", "phone_open_app", "phone_apps"}), key="phone.enabled"),
 }
 
 

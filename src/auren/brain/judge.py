@@ -5,7 +5,8 @@
                  "Send the message “I'm running late” in “Message @Priya” on the page “Priya | Discord” at …")  # True
 
 Only at Auto, and only for a message whose text is known (tools.py decides that): one typed
-into a chat in the browser, or typed on the screen and sent with Enter or a Send click. Everything else
+into a chat in the browser, typed on the screen and sent with Enter or a Send click, or typed into a chat
+on the phone (phone control) and sent with its send key or Send button. Everything else
 still asks the user. It's a separate Claude Code process that sees the last few lines of the conversation
 (the user's own words, and what Auren said back, so it knows what a "yes" answers) and a description of
 the message, never web pages or tool output. On the screen it also gets a screenshot, the only place that
@@ -40,7 +41,7 @@ SPARE = 60.0            # seconds a process started ahead waits for a verdict, t
 
 RULES = """You check one thing for a voice assistant on the user's own laptop: did the user's own words already tell it to send this exact chat message to this person or group (or, on the screen, to make this exact search)?
 
-You get JSON: "conversation", the last few lines oldest first ("from" is "user" or "auren", the assistant; the last user line is what they just said), and "action": what the assistant is about to send, with its text and where: a field or button on a web page, or a window on the screen. For a window on the screen a screenshot of the screen comes with it.
+You get JSON: "conversation", the last few lines oldest first ("from" is "user" or "auren", the assistant; the last user line is what they just said), and "action": what the assistant is about to send, with its text and where: a field or button on a web page, a window on the screen, or an app on the user's phone. For a window on the screen a screenshot of the screen comes with it; for the phone, the first lines of its screen as text.
 
 Only the user's lines can give the go-ahead. Auren's lines matter only as the question a following user "yes" answers: never as permission themselves.
 
@@ -51,7 +52,7 @@ Reply with only this JSON object:
 
 - kind: "chat" for a private or group chat message to people; "search" for a search, a chat or contact name, an address or a command typed into an app's search, switcher or address box, which no person receives; "post" for anything public (a post, a comment, a review); "other" for a form, a login, an email or anything else.
 - to_said: the person or group the user said to send it to, in their words (or in Auren's question they said yes to). "" if they didn't say, or for a search.
-- to_shown: the person or group the message goes to as the page or screen shows it: the box's name or the page title ("Message @Priya", "Priya | Discord" → "Priya"), or in a screenshot the name at the top of the open chat. "" if nothing names who it goes to, or for a search. Never fill this in from the user's words.
+- to_shown: the person or group the message goes to as the page or screen shows it: the box's name or the page title ("Message @Priya", "Priya | Discord" → "Priya"), or in a screenshot (or the phone's first lines) the name at the top of the open chat. "" if nothing names who it goes to, or for a search. Never fill this in from the user's words.
 - same_text: true if the text is what they asked to say (or search for). Fixing spelling, punctuation or "I"/"you" is fine. Their words come from speech to text, so a name of the person it's for right before or after the words ("send hello, Sam", "Sam, say thanks") is who it's for, not part of the text: "hello" is the same text, and so is "hello Sam". false for a different meaning, more than they asked for, or links, numbers or names they never gave.
 - box_shows: with a screenshot, true only if the box the text was typed into shows this text and nothing else (no older draft, no other words), false if it shows anything else or you can't find it; null without a screenshot.
 - told_to_send: true only if they said to send, tell, reply or message it (for a search: to search for it, find it, open that chat or go there), or said yes to Auren asking about this very message. false if they only asked to write, type or draft it, said to check with them first (and haven't since said yes to this very message), only gave general permission ("you have full permissions"), gave a bare "yes" to a question about something else, or took it back ("no", "don't", "wait", "stop").

@@ -86,6 +86,11 @@ FORGET = re.compile(r"^\W*(?:(?:ok(?:ay)?|hey|auren)\W+)*(?:start (?:fresh|over|
 PHONE_KEYS = ("phone.enabled", "phone.port", "phone.lan")    # a reload that changes one restarts the phone server
 # Told to the brain with a request from the phone: the user isn't at the laptop, and reads the reply.
 PHONE_NOTE = "(From the user's phone: they may be away from the laptop. Your reply is shown on the phone as text.)"
+# The same, when that phone's control is on: a request that doesn't say where is about the phone in their hand.
+PHONE_CONTROL_NOTE = ("(From the user's phone, where phone control is on: they may be away from the laptop. Your reply "
+                      "is shown on the phone as text. Something to do in an app or on a device that doesn't say where "
+                      "(\"open WhatsApp\", \"text Mom I'm late\") is for the phone: use the phone tools. Use the "
+                      "laptop only when they name it, or for what only the laptop has.)")
 COMPOUND = re.compile(r"\b(?:and|then|also|after|afterwards|before|while|plus|next|too|as well)\b|[,;]|[.?!]\s*\S", re.I)
 
 
@@ -477,6 +482,20 @@ class Daemon:
         finishing = any(t.origin == "phone" and t.device == device for t in self._finishing.values())
         if (self.listening and self._hears(device)) or finishing:
             await self.cancel()
+
+    def phone_control(self, action: dict, timeout: float) -> dict:
+        """One phone action for the phone tools, which run on the tool server's threads: it goes to the phone
+        over the server's loop, and this thread waits for the answer."""
+        hub, loop = self.phone, self.loop
+        if hub is None or loop is None:
+            return {"ok": False, "local": True, "error": "the phone server isn't running (auren doctor, Phone section)"}
+        fut = asyncio.run_coroutine_threadsafe(hub.control(action, timeout), loop)
+        try:
+            return fut.result(timeout + 5)
+        except TimeoutError:
+            fut.cancel()                    # the hub then tells the phone not to do it any more
+            return {"ok": False, "local": True, "unknown": True,
+                    "error": "the phone didn't answer. It may still have done it: read its screen before trying again"}
 
     async def phone_paired_changed(self) -> None:
         """The first phone was paired or the last one unpaired: Claude's tools and rules change with it, and
@@ -873,7 +892,8 @@ class Daemon:
         earlier, self._earlier = self._earlier, ()
         to_brain = (brain_text or text) if not earlier else f"({' '.join(earlier)})\n{brain_text or text}"
         if turn and turn.origin == "phone":
-            to_brain = f"{PHONE_NOTE}\n{to_brain}"
+            control = self.phone is not None and self.phone.controls(turn.device)
+            to_brain = f"{PHONE_CONTROL_NOTE if control else PHONE_NOTE}\n{to_brain}"
         self.set_state("thinking", text, transcript=text)
         self._show("Thinking…", "thinking")
         tools = list(already or [])
@@ -1159,6 +1179,8 @@ class Daemon:
 
     async def serve(self) -> None:
         self.loop = asyncio.get_running_loop()
+        from .hands import android
+        android.attach(self.phone_control)
         if SOCKET.exists():                   # left over from a crash: we hold the lock, so it isn't in use
             SOCKET.unlink()
 

@@ -554,6 +554,10 @@ class _Level:
 class _Hub:
     def __init__(self):
         self.replies, self.ended = [], []
+        self.control: set[str] = set()          # phones with phone control on
+
+    def controls(self, device):
+        return device in self.control
 
     def reply(self, turn, text):
         self.replies.append((turn.id, text))
@@ -631,6 +635,19 @@ def test_the_phone_is_busy_while_the_desk_listens_and_answers(tmp_path, monkeypa
     assert d.said == ["It's noon."]                        # the desk's turn is spoken
     assert d.phone.replies == [("p4", "It's noon.")]       # the phone's is only shown on the phone
     assert d.brain.asked[1].startswith(daemon.PHONE_NOTE)
+
+
+def test_with_phone_control_on_a_request_from_the_phone_is_about_the_phone(tmp_path, monkeypatch):
+    async def scenario(d):
+        d.phone.control.add("dev")
+        assert d.phone_ask(Turn("phone", "p1", "dev"), "open WhatsApp") == "ok"
+        await _until(lambda: d.phone.replies)
+        assert d.phone_ask(Turn("phone", "p2", "other"), "open WhatsApp") == "ok"
+        await _until(lambda: len(d.phone.replies) == 2)
+
+    d = _turns(tmp_path, monkeypatch, scenario)
+    assert d.brain.asked[0].startswith(daemon.PHONE_CONTROL_NOTE)
+    assert d.brain.asked[1].startswith(daemon.PHONE_NOTE)              # that phone's control is off
 
 
 def test_the_desk_is_busy_while_the_phone_has_a_turn_and_either_can_stop_it(tmp_path, monkeypatch):
