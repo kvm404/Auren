@@ -11,6 +11,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -348,12 +349,27 @@ UFW_RULES = Path("/etc/ufw/user.rules")
 
 def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | None:
     """Omarchy turns ufw on, and ufw drops incoming connections, so a phone can't reach the server until the port
-    is allowed. ufw's own rule file is world-readable, so this needs no root. None when ufw isn't running."""
-    if _run(["systemctl", "is-active", "ufw"])[1] != "active":
+    is allowed. None when ufw isn't running."""
+    gaps = ufw_gaps(port, lan_ips, tailscale)
+    if gaps is None:
         return None
+    blocked, cmds = gaps
+    if not cmds:
+        return Check("Phone", "firewall", OK, f"ufw allows port {port}")
+    why = f"ufw blocks port {port} over {' and '.join(blocked)}"
+    fix = "auren phone allow, or: " + "; ".join("sudo " + shlex.join(c) for c in cmds)
+    return Check("Phone", "firewall", WARN, f"{why}: the phone can't reach this PC that way", fix)
+
+
+def ufw_gaps(port: int, lan_ips: list[str], tailscale: bool) -> tuple[list[str], list[list[str]]] | None:
+    """Which of the phone's paths ufw blocks ("Wi-Fi/LAN", "Tailscale") and the ufw commands that open
+    port `port` on just those paths (none when nothing is blocked). None when ufw isn't running. ufw's own rule
+    file is world-readable, so this needs no root."""
     try:
         rules = UFW_RULES.read_text()
     except OSError:
+        return None
+    if _run(["systemctl", "is-active", "ufw"])[1] != "active":
         return None
     # Each path separately: a rule only for tailscale0 doesn't open the LAN, nor one for another subnet.
     # Tailscale's own firewall rules (on unless tailscale up --netfilter-mode=off/nodivert) let everything on
@@ -381,17 +397,16 @@ def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | No
         elif not dev:
             ts_ok = ts_ok or net is None
             lan_ok = lan_ok or net is None or any(ipaddress.ip_address(ip) in net for ip in lan_ips)
-    if lan_ok and ts_ok:
-        return Check("Phone", "firewall", OK, f"ufw allows port {port}")
-    fix = []
-    if lan_ips and not lan_ok:
+    cmds = []
+    if not lan_ok:
         nets = sorted({str(ipaddress.ip_network(f"{ip}/16", strict=False)) for ip in lan_ips})
-        fix += [f"sudo ufw allow from {n} to any port {port} proto tcp comment 'auren phone'" for n in nets]
-    if tailscale and not ts_ok:
-        fix.append(f"sudo ufw allow in on tailscale0 to any port {port} proto tcp comment 'auren phone'")
-    blocked = "Wi-Fi/LAN" if ts_ok else "Tailscale" if lan_ok else ""
-    why = f"ufw blocks port {port} over {blocked}" if blocked else f"ufw blocks port {port}"
-    return Check("Phone", "firewall", WARN, f"{why}: the phone can't reach this PC that way", "; ".join(fix))
+        cmds += [["ufw", "allow", "from", n, "to", "any", "port", str(port), "proto", "tcp", "comment", "auren phone"]
+                 for n in nets]
+    if not ts_ok:
+        cmds.append(["ufw", "allow", "in", "on", "tailscale0", "to", "any", "port", str(port), "proto", "tcp",
+                     "comment", "auren phone"])
+    blocked = [p for p, ok in (("Wi-Fi/LAN", lan_ok), ("Tailscale", ts_ok)) if not ok]
+    return blocked, cmds
 
 
 def _tailscale_lets_in() -> bool:

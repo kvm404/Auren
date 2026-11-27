@@ -285,7 +285,7 @@ Panel {
 
   // Pairing: auren phone pair --json writes the QR code (a PNG) and prints a line for it, then one when a
   // phone paired or the code expired. Cancel (or closing the panel) stops it, and the code stops working.
-  property var pairing: ({})          // { uri, qr, expires, where, warn } while the code is up
+  property var pairing: ({})          // { uri, qr, expires, where, warn, firewall } while the code is up
   property string pairStage: ""       // "", "starting", "showing", "paired", "expired", "error"
   property string pairNote: ""
   Process {
@@ -312,8 +312,30 @@ Panel {
   function startPairing() {
     if (pairProc.running) return
     appShown = false
-    pairing = ({}); pairNote = ""; pairStage = "starting"
+    pairing = ({}); pairNote = ""; allowNote = ""; pairStage = "starting"
     pairProc.running = true
+  }
+
+  // Let phones in: ufw blocks the phone's port (pairing says so in `firewall`). auren phone allow opens just that
+  // port on just the blocked paths, through pkexec, so Omarchy's password prompt asks first.
+  property string allowNote: ""
+  Process {
+    id: allowProc
+    command: [root.aurenBin, "phone", "allow", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var r
+        try { r = JSON.parse(String(text || "").trim().split("\n").pop()) } catch (e) { r = { error: "auren phone allow didn't answer." } }
+        if (r.ok) { var p = Object.assign({}, root.pairing); p.firewall = ""; root.pairing = p; root.allowNote = "Phones can get in now." }
+        else root.allowNote = r.error || "That didn't work: auren doctor says why."
+      }
+    }
+  }
+  function allowPhones() {
+    if (allowProc.running) return
+    allowNote = ""
+    allowProc.running = true
   }
   function cancelPairing() {
     if (pairStage === "starting" || pairStage === "showing") pairStage = ""
@@ -322,7 +344,10 @@ Panel {
   readonly property int pairLeft: Math.max(0, Math.round((root.pairing.expires || 0) - root.now))
   Timer { interval: 1000; running: root.pairStage === "showing"; repeat: true; onTriggered: root.now = Date.now() / 1000 }
   readonly property var pairActions: pairProc.running || pairStage === "starting" || pairStage === "showing"
-    ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }]
+    ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }].concat(
+        root.pairing.firewall ? [{ label: allowProc.running ? "Asking…" : "Let phones in", icon: "󰒃",
+          tip: "Opens Auren's phone port in the firewall (ufw), only where it's blocked. Asks for your password",
+          enabled: !allowProc.running, run: root.allowPhones }] : [])
     : [{ label: root.phones.length ? "Pair another phone" : "Pair a phone", icon: "󰄜",
          tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing },
        { label: root.appShown ? "Hide the app code" : "Get the app", icon: "󰀲",
@@ -1601,6 +1626,15 @@ Panel {
                   visible: !!root.pairing.warn
                   text: root.pairing.warn || ""
                   color: Color.accent
+                }
+                Caption {
+                  visible: !!root.pairing.firewall
+                  text: (root.pairing.firewall || "") + " Let phones in opens Auren's port (it asks for your password)."
+                  color: Color.accent
+                }
+                Caption {
+                  visible: root.allowNote !== ""
+                  text: root.allowNote
                 }
               }
             }

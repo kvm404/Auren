@@ -33,6 +33,8 @@ def phone_dir(tmp_path, monkeypatch):
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(phone, "tailscale_ip", lambda: (None, "Tailscale is off"))     # never this machine's
+    from auren import doctor
+    monkeypatch.setattr(doctor, "UFW_RULES", tmp_path / "no-ufw.rules")               # nor its firewall
     return d
 
 
@@ -2084,3 +2086,99 @@ def test_without_networksetup_a_mac_keeps_only_en_interfaces(monkeypatch):
     monkeypatch.setattr(mac_phone, "_run", lambda cmd: answers.get(cmd[0]))
     assert mac_phone.lan_addresses() == (["192.168.1.23", "10.20.30.40"], "")
     assert mac_phone.pick_lan(links, {"foo0", "en0"}) == ["192.168.1.23", "192.168.77.1"]   # listed: trusted
+
+
+# --- letting phones through the firewall ---------------------------------------------------------------------
+
+def _ufw(monkeypatch, tmp_path, rules: str, netfilter: int = 2):
+    from auren import doctor
+    path = tmp_path / "user.rules"
+    path.write_text(rules)
+    monkeypatch.setattr(doctor, "UFW_RULES", path)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps({"NetfilterMode": netfilter}))
+                        if cmd[1:] == ["debug", "prefs"] else (0, "active"))
+    monkeypatch.setattr(phone.sys, "platform", "linux")
+    return path
+
+
+LAN = [{"ip": "192.168.1.20", "via": "lan", "ok": True}]
+OMARCHY_DEFAULT = "-A ufw-user-input -p tcp --dport 53317 -j ACCEPT\n"       # LocalSend only
+
+
+def test_pairing_says_when_the_firewall_keeps_phones_out(monkeypatch, tmp_path, capsys):
+    """Omarchy's ufw opens only LocalSend: a phone on the Wi-Fi can't reach the PC, and pairing used to say
+    nothing about it (only auren doctor did)."""
+    _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": LAN, "missing": {}})
+    monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert phone.main(["pair", "--json"]) == 130
+    line = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert "keeps phones out on this Wi-Fi" in line["firewall"]
+    assert phone.main(["pair", "--no-qr"]) == 130
+    assert "auren phone allow" in capsys.readouterr().out
+
+
+def test_the_firewall_check_names_only_the_blocked_paths(monkeypatch, tmp_path):
+    rules = _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    ts = [{"ip": "100.92.1.2", "via": "tailscale"}]
+    fw = phone.firewall(8735, LAN + ts)              # Tailscale's own rules let tailscale0 in: only the Wi-Fi
+    assert fw["cmds"] == [["ufw", "allow", "from", "192.168.0.0/16", "to", "any", "port", "8735", "proto", "tcp",
+                           "comment", "auren phone"]]
+    assert "Tailscale" not in fw["why"]
+    _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT, netfilter=1)                 # ufw decides for tailscale0 too
+    fw = phone.firewall(8735, LAN + ts)
+    assert len(fw["cmds"]) == 2 and fw["cmds"][1][:5] == ["ufw", "allow", "in", "on", "tailscale0"]
+    assert "on this Wi-Fi or over Tailscale" in fw["why"]
+    rules.write_text("-A ufw-user-input -s 192.168.1.0/24 -j ACCEPT\n")       # a rule for the whole LAN
+    assert phone.firewall(8735, LAN) == {}
+    rules.write_text(OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone.sys, "platform", "darwin")                       # macOS asks by itself
+    assert phone.firewall(8735, LAN) == {}
+
+
+def test_allow_runs_ufw_through_pkexec_and_says_why_not(monkeypatch):
+    import subprocess
+    ran = []
+
+    def run(cmd, **_):
+        ran.append(cmd)
+        return subprocess.CompletedProcess(cmd, answer[0], "", answer[1])
+    monkeypatch.setattr(phone.subprocess, "run", run)
+    monkeypatch.setattr(phone.shutil, "which", lambda name: f"/usr/bin/{name}")
+    cmds = [["ufw", "allow", "from", "192.168.0.0/16", "to", "any", "port", "8735", "proto", "tcp",
+             "comment", "auren phone"]]
+    answer = (0, "")
+    assert phone.allow(cmds) == ""
+    assert ran == [["/usr/bin/pkexec", "/usr/bin/ufw", *cmds[0][1:]]]       # one argv, no shell
+    answer = (126, "Error executing command as another user: Not authorized")
+    assert "refused" in phone.allow(cmds)
+    answer = (127, "Error executing command as another user: No authentication agent found.")
+    assert "sudo" in phone.allow(cmds)
+    answer = (1, "ERROR: Bad port")
+    assert phone.allow(cmds) == "ufw failed: ERROR: Bad port"
+    monkeypatch.setattr(phone.shutil, "which", lambda name: None)
+    assert "pkexec isn't installed" in phone.allow(cmds)
+
+
+def test_auren_phone_allow_opens_the_port_and_checks_again(monkeypatch, tmp_path, capsys):
+    rules = _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("192.168.1.20", "lan")], {}))
+    asked = []
+
+    def ufw_adds_the_rule(cmds):
+        asked.append(cmds)
+        rules.write_text(OMARCHY_DEFAULT + "-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT\n")
+        return ""
+    monkeypatch.setattr(phone, "allow", ufw_adds_the_rule)
+    assert phone.main(["allow", "--json"]) == 0 and json.loads(capsys.readouterr().out) == {"ok": True}
+    assert len(asked) == 1
+    assert phone.main(["allow"]) == 0 and "already lets phones in" in capsys.readouterr().out
+    assert len(asked) == 1                                                     # nothing to open: no password asked
+    rules.write_text(OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "allow", lambda cmds: "Not allowed: the password prompt was closed or refused.")
+    assert phone.main(["allow", "--json"]) == 1
+    assert "refused" in json.loads(capsys.readouterr().out)["error"]
+    monkeypatch.setattr(phone, "allow", lambda cmds: "")                     # ran, yet ufw still blocks
+    assert phone.main(["allow", "--json"]) == 1
+    assert "still keeps phones out" in json.loads(capsys.readouterr().out)["error"]

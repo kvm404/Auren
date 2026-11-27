@@ -5,7 +5,7 @@
 #
 # shots: a comma list of page[:state], pages 0-6 (Home, Mascot, Voice, Brain, Vocabulary, Phone, Updates), states:
 # available, confirm, updating, failed (Updates page), refused (Vocabulary page), pairing (a QR code up),
-# tsoff (Tailscale off on the PC), nophone (none paired, not listening), app (Get the app's QR code) (Phone page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
+# firewall (a QR code up, and ufw keeps phones out), tsoff (Tailscale off on the PC), nophone (none paired, not listening), app (Get the app's QR code) (Phone page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
 # awaiting (Auren is asking two yes/no questions: every page of that run shows it), autosend (auto-send is on,
 # after 5 s: every page of that run too).
 # PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does. PANEL_PACKAGED=1 shows an install
@@ -18,7 +18,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="$(realpath -m "${1:-$repo/.panel-preview}")"
-shots="${2:-0,1,2,3,4,4:refused,5,5:pairing,5:app,5:tsoff,5:nophone,6,6:available,6:confirm,6:updating,6:failed,1:cursor}"
+shots="${2:-0,1,2,3,4,4:refused,5,5:pairing,5:firewall,5:app,5:tsoff,5:nophone,6,6:available,6:confirm,6:updating,6:failed,1:cursor}"
 omarchy=/usr/share/omarchy/shell
 [[ -d $omarchy/Ui ]] || { echo "needs the Omarchy shell ($omarchy)" >&2; exit 1; }
 

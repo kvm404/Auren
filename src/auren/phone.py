@@ -28,6 +28,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import stat
@@ -639,6 +640,72 @@ def tailscale_off(st: dict) -> str:
             f" elsewhere, {turn_on}: the phone picks up the address the next time it connects here.")
 
 
+def firewall(port: int, bound: list[dict]) -> dict:
+    """Does ufw keep phones out of the server at `bound` ([{"ip", "via"}]) on `port`? {} when it lets them in,
+    when ufw isn't running, and on a Mac (its firewall asks by itself); else {"why", "cmds"}: what it blocks and
+    the ufw commands that open just this port on just those paths (auren phone allow runs them)."""
+    if sys.platform == "darwin":
+        return {}
+    from .doctor import ufw_gaps
+    gaps = ufw_gaps(port, [a["ip"] for a in bound if a.get("via") == "lan"],
+                    any(a.get("via") == "tailscale" for a in bound))
+    if not gaps or not gaps[1]:
+        return {}
+    where = " or ".join({"Wi-Fi/LAN": "on this Wi-Fi", "Tailscale": "over Tailscale"}[p] for p in gaps[0])
+    return {"why": f"The firewall (ufw) keeps phones out {where}.",
+            "cmds": gaps[1]}
+
+
+def allow(cmds: list[list[str]]) -> str:
+    """Run ufw commands as root through pkexec, which shows the desktop's password prompt (or asks in the
+    terminal): "" when they all ran, else why not."""
+    pkexec = shutil.which("pkexec")
+    if not pkexec:
+        return "pkexec isn't installed: run the commands with sudo (auren doctor prints them)"
+    ufw = shutil.which("ufw") or "/usr/bin/ufw"
+    for cmd in cmds:
+        try:
+            r = subprocess.run([pkexec, ufw, *cmd[1:]], capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"Couldn't run ufw: {e}"
+        err = (r.stderr or r.stdout).strip()
+        if r.returncode in (126, 127):           # pkexec: dismissed, wrong password, or no prompt to ask with
+            return ("Nothing is here to ask for your password: run the commands with sudo (auren doctor prints them)"
+                    if "authentication agent" in err else "Not allowed: the password prompt was closed or refused.")
+        if r.returncode:
+            return f"ufw failed: {err or f'exit {r.returncode}'}"
+    return ""
+
+
+def _allow(as_json: bool) -> int:
+    """auren phone allow: open the phone's port in ufw on the paths it blocks (the panel's Let phones in)."""
+    from .settings import current as settings
+
+    def done(msg: str, ok: bool) -> int:
+        print(json.dumps({"ok": True} if ok else {"error": msg}) if as_json else msg,
+              file=sys.stdout if ok or as_json else sys.stderr)
+        return 0 if ok else 1
+    if sys.platform == "darwin":
+        return done("On a Mac, macOS asks by itself the first time Auren listens for a phone: auren doctor says more.",
+                    True)
+    conf = settings()
+    port = int(conf.get("phone.port") or 8735)
+    addrs, _ = addresses(conf.get("phone.lan", True) is not False)
+    bound = [{"ip": ip, "via": via} for ip, via in addrs]
+    fw = firewall(port, bound)
+    if not fw:
+        return done("The firewall already lets phones in.", True)
+    if not as_json:
+        print("This runs, as root (it asks for your password):")
+        for c in fw["cmds"]:
+            print("  " + shlex.join(c))
+    if why := allow(fw["cmds"]):
+        return done(why, False)
+    if firewall(port, bound):
+        return done("ufw ran, but still keeps phones out: auren doctor says why.", False)
+    return done(f"Done: ufw lets phones in on port {port}.", True)
+
+
 def app_link(version: str | None = None) -> tuple[str, str]:
     """Where to download the phone app that goes with this Auren: (url, version). A release (X.Y.Z) has it
     attached as auren-phone-X.Y.Z.apk, so the link downloads it straight away; a build that isn't one (a
@@ -756,8 +823,10 @@ def _pair_json() -> int:
         os.chmod(tmp, 0o600)                     # it holds the code
         tmp.replace(qr)
         before = {d["id"] for d in devices()}
+        fw = firewall(int(st["port"]), bound)
         out(uri=uri, qr=str(qr), expires=expires,
-            where=[{"ip": x["ip"], "via": x["via"]} for x in bound], warn=tailscale_off(st))
+            where=[{"ip": x["ip"], "via": x["via"]} for x in bound], warn=tailscale_off(st),
+            firewall=fw.get("why", ""))
         while time.time() < expires:
             new = [d for d in devices() if d["id"] not in before]
             if new:
@@ -790,7 +859,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("id")
     g = sub.add_parser("app", help="a QR code to download the phone app (scan it with the phone's camera)")
     g.add_argument("--json", action="store_true", help="for the bar panel: the link and a PNG of its QR code")
+    al = sub.add_parser("allow", help="let phones through the firewall (ufw) on this port: asks for your password")
+    al.add_argument("--json", action="store_true", help="for the bar panel: {ok} or {error}")
     a = ap.parse_args(argv)
+    if a.cmd == "allow":
+        return _allow(a.json)
     if a.cmd == "app":
         return _app(a.json)
 
@@ -833,6 +906,8 @@ def main(argv: list[str] | None = None) -> int:
           f" port {st['port']}.")
     if warn := tailscale_off(st):
         print(f"\n{warn}")
+    if fw := firewall(int(st["port"]), bound):
+        print(f"\n{fw['why']} To let phones in: auren phone allow")
     if a.no_wait:
         return 0
     try:
