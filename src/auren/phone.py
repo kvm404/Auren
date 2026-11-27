@@ -640,38 +640,62 @@ def tailscale_off(st: dict) -> str:
             f" elsewhere, {turn_on}: the phone picks up the address the next time it connects here.")
 
 
+def lan_networks(ips: list[str]) -> list[str]:
+    """The subnets of these LAN addresses, by their interface's prefix (192.168.31.214 -> 192.168.31.0/24): a
+    firewall rule for one lets in just the phones on that network. A /24 when the prefix can't be found."""
+    prefix = {}
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+        out = subprocess.run(["ip", "-j", "-4", "addr", "show", "up"], capture_output=True, text=True, timeout=5)
+        for link in json.loads(out.stdout or "[]"):
+            for a in link.get("addr_info") or []:
+                prefix[str(a.get("local", ""))] = int(a.get("prefixlen") or 24)
+    return sorted({str(ipaddress.ip_interface(f"{ip}/{prefix.get(ip, 24)}").network) for ip in ips})
+
+
 def firewall(port: int, bound: list[dict]) -> dict:
     """Does ufw keep phones out of the server at `bound` ([{"ip", "via"}]) on `port`? {} when it lets them in,
-    when ufw isn't running, and on a Mac (its firewall asks by itself); else {"why", "cmds"}: what it blocks and
-    the ufw commands that open just this port on just those paths (auren phone allow runs them)."""
+    when ufw isn't running, and on a Mac (its firewall asks by itself); {"unknown": why} when ufw is on but its
+    rules can't be read; else {"why", "cmds"}: what it blocks and the ufw commands that open just this port on
+    just those paths (auren phone allow runs them; none when only a deny rule blocks it)."""
     if sys.platform == "darwin":
         return {}
     from .doctor import ufw_gaps
-    gaps = ufw_gaps(port, [a["ip"] for a in bound if a.get("via") == "lan"],
-                    any(a.get("via") == "tailscale" for a in bound))
-    if not gaps or not gaps[1]:
+    lan = [a["ip"] for a in bound if a.get("via") == "lan"]
+    try:
+        gaps = ufw_gaps(port, lan_networks(lan) if lan else [], any(a.get("via") == "tailscale" for a in bound))
+    except OSError as e:
+        return {"unknown": f"ufw is on, but its rules couldn't be read ({e.strerror or e})."}
+    if not gaps or not gaps["blocked"]:
         return {}
-    where = " or ".join({"Wi-Fi/LAN": "on this Wi-Fi", "Tailscale": "over Tailscale"}[p] for p in gaps[0])
-    return {"why": f"The firewall (ufw) keeps phones out {where}.",
-            "cmds": gaps[1]}
+    where = " or ".join({"Wi-Fi/LAN": "on this Wi-Fi", "Tailscale": "over Tailscale"}[p] for p in gaps["blocked"])
+    why = f"The firewall (ufw) keeps phones out {where}."
+    if gaps["denied"]:
+        why += " A ufw deny rule blocks Auren's port: sudo ufw status numbered shows it, to delete."
+    return {"why": why, "cmds": gaps["cmds"]}
+
+
+PKEXEC = "/usr/bin/pkexec"
+UFW = ("/usr/bin/ufw", "/usr/sbin/ufw")        # fixed paths: never a ufw found first in the user's PATH
 
 
 def allow(cmds: list[list[str]]) -> str:
     """Run ufw commands as root through pkexec, which shows the desktop's password prompt (or asks in the
     terminal): "" when they all ran, else why not."""
-    pkexec = shutil.which("pkexec")
-    if not pkexec:
-        return "pkexec isn't installed: run the commands with sudo (auren doctor prints them)"
-    ufw = shutil.which("ufw") or "/usr/bin/ufw"
+    ufw = next((u for u in UFW if os.access(u, os.X_OK)), None)
+    if not os.access(PKEXEC, os.X_OK) or not ufw:
+        return f"{'ufw' if not ufw else 'pkexec'} isn't installed: run the commands with sudo (auren doctor prints them)"
     for cmd in cmds:
         try:
-            r = subprocess.run([pkexec, ufw, *cmd[1:]], capture_output=True, text=True, timeout=300)
+            r = subprocess.run([PKEXEC, ufw, *cmd[1:]], capture_output=True, text=True, timeout=300)
         except (OSError, subprocess.TimeoutExpired) as e:
             return f"Couldn't run ufw: {e}"
         err = (r.stderr or r.stdout).strip()
-        if r.returncode in (126, 127):           # pkexec: dismissed, wrong password, or no prompt to ask with
-            return ("Nothing is here to ask for your password: run the commands with sudo (auren doctor prints them)"
-                    if "authentication agent" in err else "Not allowed: the password prompt was closed or refused.")
+        if r.returncode == 126:                  # pkexec: the password prompt was closed
+            return "Not allowed: the password prompt was closed."
+        if r.returncode == 127:                  # pkexec: not authorized, no prompt to ask with, or another error
+            if "authentication agent" in err:
+                return "Nothing is here to ask for your password: run the commands with sudo (auren doctor prints them)"
+            return "Not allowed: the password was refused." if "Not authorized" in err else f"pkexec failed: {err}"
         if r.returncode:
             return f"ufw failed: {err or f'exit {r.returncode}'}"
     return ""
@@ -693,16 +717,20 @@ def _allow(as_json: bool) -> int:
     addrs, _ = addresses(conf.get("phone.lan", True) is not False)
     bound = [{"ip": ip, "via": via} for ip, via in addrs]
     fw = firewall(port, bound)
+    if "unknown" in fw:
+        return done(fw["unknown"], False)
     if not fw:
         return done("The firewall already lets phones in.", True)
+    if not fw["cmds"]:
+        return done(fw["why"], False)
     if not as_json:
         print("This runs, as root (it asks for your password):")
         for c in fw["cmds"]:
             print("  " + shlex.join(c))
     if why := allow(fw["cmds"]):
         return done(why, False)
-    if firewall(port, bound):
-        return done("ufw ran, but still keeps phones out: auren doctor says why.", False)
+    if after := firewall(port, bound):
+        return done(after.get("unknown") or "ufw ran, but still keeps phones out: auren doctor says why.", False)
     return done(f"Done: ufw lets phones in on port {port}.", True)
 
 
@@ -906,8 +934,8 @@ def main(argv: list[str] | None = None) -> int:
           f" port {st['port']}.")
     if warn := tailscale_off(st):
         print(f"\n{warn}")
-    if fw := firewall(int(st["port"]), bound):
-        print(f"\n{fw['why']} To let phones in: auren phone allow")
+    if why := firewall(int(st["port"]), bound).get("why"):
+        print(f"\n{why} To let phones in: auren phone allow")
     if a.no_wait:
         return 0
     try:

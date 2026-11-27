@@ -312,30 +312,39 @@ Panel {
   function startPairing() {
     if (pairProc.running) return
     appShown = false
-    pairing = ({}); pairNote = ""; allowNote = ""; pairStage = "starting"
+    pairing = ({}); pairNote = ""; if (!allowProc.running) allowNote = ""; pairStage = "starting"
     pairProc.running = true
   }
 
   // Let phones in: ufw blocks the phone's port (pairing says so in `firewall`). auren phone allow opens just that
   // port on just the blocked paths, through pkexec, so Omarchy's password prompt asks first.
+  // The answer belongs to the pairing it was asked from (`allowFor`, its code): one that ended meanwhile keeps
+  // its note, and a newer pairing keeps its own warning.
   property string allowNote: ""
+  property string allowFor: ""
+  property bool allowWaiting: false
   Process {
     id: allowProc
     command: [root.aurenBin, "phone", "allow", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        var r
-        try { r = JSON.parse(String(text || "").trim().split("\n").pop()) } catch (e) { r = { error: "auren phone allow didn't answer." } }
-        if (r.ok) { var p = Object.assign({}, root.pairing); p.firewall = ""; root.pairing = p; root.allowNote = "Phones can get in now." }
-        else root.allowNote = r.error || "That didn't work: auren doctor says why."
-      }
+      onStreamFinished: root.allowDone(String(text || ""))
     }
+    // A command that can't start ends without any output: say so after the output had its chance.
+    onRunningChanged: if (!running) Qt.callLater(function() { if (root.allowWaiting) root.allowDone("") })
   }
   function allowPhones() {
     if (allowProc.running) return
-    allowNote = ""
+    allowNote = ""; allowFor = pairing.uri || ""; allowWaiting = true
     allowProc.running = true
+  }
+  function allowDone(out) {
+    if (!allowWaiting) return
+    allowWaiting = false
+    var r
+    try { r = JSON.parse(out.trim().split("\n").pop()) } catch (e) { r = { error: "auren phone allow didn't answer: auren doctor says why." } }
+    if (r.ok && pairing.uri && pairing.uri === allowFor) { var p = Object.assign({}, pairing); p.firewall = ""; pairing = p }
+    allowNote = r.ok ? "Phones can get in now." : (r.error || "That didn't work: auren doctor says why.")
   }
   function cancelPairing() {
     if (pairStage === "starting" || pairStage === "showing") pairStage = ""
@@ -1584,6 +1593,10 @@ Panel {
               visible: root.pairStage === "starting"
               text: "Opening a pairing…"
             }
+            Caption {         // Let phones in's answer: outside the QR code, so it stays when the pairing ends
+              visible: root.allowNote !== ""
+              text: root.allowNote
+            }
             Row {         // the QR code, while it works
               width: parent.width
               spacing: Style.space(14)
@@ -1631,10 +1644,6 @@ Panel {
                   visible: !!root.pairing.firewall
                   text: (root.pairing.firewall || "") + " Let phones in opens Auren's port (it asks for your password)."
                   color: Color.accent
-                }
-                Caption {
-                  visible: root.allowNote !== ""
-                  text: root.allowNote
                 }
               }
             }

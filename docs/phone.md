@@ -20,13 +20,18 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
    ufw, and a rule that allows everything from your LAN covers the port too. Pairing checks this and says
    so when ufw keeps phones out; the bar panel then offers **Let phones in**, which runs
    `auren phone allow`: it opens just this port on just the blocked path, through `pkexec`, so Omarchy's
-   password prompt asks first. `auren doctor`'s **Phone** section says the same. The rules look like this
-   (LAN and Tailscale only), if you'd rather add them yourself:
+   password prompt asks first. `auren doctor`'s **Phone** section says the same. The rules are for your
+   Wi-Fi's own subnet (its interface's prefix) and the tailnet's addresses, and look like this if you'd
+   rather add them yourself (the second only when Tailscale's own firewall rules are off):
 
    ```sh
-   sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
-   sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
+   sudo ufw allow from 192.168.1.0/24 to any port 8735 proto tcp comment 'auren phone'
+   sudo ufw allow in on tailscale0 from 100.64.0.0/10 to any port 8735 proto tcp comment 'auren phone'
    ```
+
+   The check reads ufw's rules in order, as ufw does: a deny rule for the port that comes first wins, and
+   then `auren phone allow` doesn't add a rule that wouldn't count; it says to delete that one
+   (`sudo ufw status numbered`) instead.
 
    On a Mac, see [On macOS](#on-macos) for its firewall.
 3. Install the app: on the bar panel's **Phone** page, click **Get the app** and scan the QR code with the

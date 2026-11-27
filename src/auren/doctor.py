@@ -7,6 +7,7 @@ are often only in the first).
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
 import os
@@ -333,7 +334,8 @@ def phone_checks() -> list[Check]:
         from .mac.doctor import firewall_check as mac_firewall
         fw = mac_firewall(int(conf.get("phone.port") or 8735)) if addrs else None
     else:
-        fw = firewall_check(int(conf.get("phone.port") or 8735), lan_ips, bool(ts)) if addrs else None
+        fw = firewall_check(int(conf.get("phone.port") or 8735), phone.lan_networks(lan_ips), bool(ts)) \
+            if addrs else None
     if fw:
         out.append(fw)
     paired = phone.devices()
@@ -347,44 +349,82 @@ def phone_checks() -> list[Check]:
 UFW_RULES = Path("/etc/ufw/user.rules")
 
 
-def firewall_check(port: int, lan_ips: list[str], tailscale: bool) -> Check | None:
+def firewall_check(port: int, lan_nets: list[str], tailscale: bool) -> Check | None:
     """Omarchy turns ufw on, and ufw drops incoming connections, so a phone can't reach the server until the port
-    is allowed. None when ufw isn't running."""
-    gaps = ufw_gaps(port, lan_ips, tailscale)
+    is allowed. `lan_nets`: the subnets the server listens on (phone.lan_networks). None when ufw isn't running."""
+    try:
+        gaps = ufw_gaps(port, lan_nets, tailscale)
+    except OSError as e:
+        return Check("Phone", "firewall", WARN, f"ufw is on, but its rules couldn't be read ({e.strerror or e})",
+                     "sudo ufw status")
     if gaps is None:
         return None
-    blocked, cmds = gaps
-    if not cmds:
+    if not gaps["blocked"]:
         return Check("Phone", "firewall", OK, f"ufw allows port {port}")
-    why = f"ufw blocks port {port} over {' and '.join(blocked)}"
-    fix = "auren phone allow, or: " + "; ".join("sudo " + shlex.join(c) for c in cmds)
-    return Check("Phone", "firewall", WARN, f"{why}: the phone can't reach this PC that way", fix)
+    fix = []
+    if gaps["cmds"]:
+        fix.append("auren phone allow, or: " + "; ".join("sudo " + shlex.join(c) for c in gaps["cmds"]))
+    if gaps["denied"]:
+        fix.append(f"a ufw deny rule comes first over {' and '.join(gaps['denied'])}: find it with"
+                   " sudo ufw status numbered, and delete it")
+    return Check("Phone", "firewall", WARN, f"ufw blocks port {port} over {' and '.join(gaps['blocked'])}: the"
+                 " phone can't reach this PC that way", "; ".join(fix))
 
 
-def ufw_gaps(port: int, lan_ips: list[str], tailscale: bool) -> tuple[list[str], list[list[str]]] | None:
-    """Which of the phone's paths ufw blocks ("Wi-Fi/LAN", "Tailscale") and the ufw commands that open
-    port `port` on just those paths (none when nothing is blocked). None when ufw isn't running. ufw's own rule
-    file is world-readable, so this needs no root."""
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _ports(spec: str) -> list[tuple[int, int]]:
+    """iptables' --dport(s): "8735", "8000,8735", "8700:8800" -> inclusive ranges."""
+    out = []
+    for part in spec.split(","):
+        a, _, b = part.partition(":")
+        with contextlib.suppress(ValueError):
+            out.append((int(a), int(b or a)))
+    return out
+
+
+def _decides(source, path, allow: bool) -> bool:
+    """Does a rule from `source` (None: anywhere) decide `path`: an allow for all of it, a deny for any of it?"""
+    if source is None:
+        return True
+    if source.version != path.version:
+        return False
+    return path.subnet_of(source) if allow else path.overlaps(source)
+
+
+def ufw_gaps(port: int, lan_nets: list[str], tailscale: bool) -> dict | None:
+    """Where ufw keeps phones out of `port`: {"blocked": the paths ("Wi-Fi/LAN", "Tailscale"), "denied": those of
+    them a deny rule blocks (an allow added after it wouldn't count), "cmds": the ufw commands that open just this
+    port on the other blocked ones}. None when ufw isn't running; OSError when it is but its rules can't be read
+    (they're world-readable, so this needs no root)."""
     try:
         rules = UFW_RULES.read_text()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        if _run(["systemctl", "is-active", "ufw"])[1] != "active":
+            return None
+        raise
     if _run(["systemctl", "is-active", "ufw"])[1] != "active":
         return None
-    # Each path separately: a rule only for tailscale0 doesn't open the LAN, nor one for another subnet.
-    # Tailscale's own firewall rules (on unless tailscale up --netfilter-mode=off/nodivert) let everything on
-    # tailscale0 in, before ufw sees it.
-    lan_ok, ts_ok = not lan_ips, not tailscale or _tailscale_lets_in()
+    # ufw takes the first rule that matches, so each path is decided by the first rule that lets in all of it
+    # (an allow) or keeps out any of it (a deny). Each LAN subnet separately: a rule for another subnet, or for
+    # part of this one, doesn't open it. Tailscale's own firewall rules (on unless tailscale up
+    # --netfilter-mode=off/nodivert) let everything on tailscale0 in, before ufw sees it.
+    nets = {ipaddress.ip_network(n, strict=False): None for n in lan_nets}     # None: no rule decided it yet
+    ts = None if tailscale and not _tailscale_lets_in() else True
     for line in rules.splitlines():
-        if not line.startswith("-A ufw-user-input") or not re.search(r"-j ACCEPT\b", line):
+        target = re.search(r"-j (ACCEPT|DROP|REJECT)\b", line)
+        if not line.startswith("-A ufw-user-input") or not target:
             continue
-        # This port, or every port (ufw allow from 192.168.1.0/24); TCP or any protocol; not narrowed to one
-        # destination address or to a source port.
+        allow = target[1] == "ACCEPT"
         dport = re.search(r"--dports? (\S+)", line)
-        if dport and str(port) not in re.split(r"[,:]", dport[1]):
+        if dport and not any(a <= port <= b for a, b in _ports(dport[1])):
             continue
         proto = re.search(r"-p (\S+)", line)
-        if proto and proto[1] not in ("tcp", "all") or re.search(r"-d \S|--sports? ", line):
+        # An allow narrowed to one destination address or a source port isn't counted; a deny is, to be safe.
+        if proto and proto[1] not in ("tcp", "all") or allow and re.search(r"-d \S|--sports? ", line):
             continue
         dev = re.search(r"-i (\S+)", line)
         src = re.search(r"-s (\S+)", line)
@@ -392,21 +432,20 @@ def ufw_gaps(port: int, lan_ips: list[str], tailscale: bool) -> tuple[list[str],
             net = ipaddress.ip_network(src[1], strict=False) if src else None
         except ValueError:
             continue
-        if dev and dev[1] == "tailscale0":
-            ts_ok = True
-        elif not dev:
-            ts_ok = ts_ok or net is None
-            lan_ok = lan_ok or net is None or any(ipaddress.ip_address(ip) in net for ip in lan_ips)
-    cmds = []
-    if not lan_ok:
-        nets = sorted({str(ipaddress.ip_network(f"{ip}/16", strict=False)) for ip in lan_ips})
-        cmds += [["ufw", "allow", "from", n, "to", "any", "port", str(port), "proto", "tcp", "comment", "auren phone"]
-                 for n in nets]
-    if not ts_ok:
-        cmds.append(["ufw", "allow", "in", "on", "tailscale0", "to", "any", "port", str(port), "proto", "tcp",
-                     "comment", "auren phone"])
-    blocked = [p for p, ok in (("Wi-Fi/LAN", lan_ok), ("Tailscale", ts_ok)) if not ok]
-    return blocked, cmds
+        if ts is None and (not dev or dev[1] == "tailscale0") and _decides(net, TAILNET, allow):
+            ts = allow
+        for n in nets:
+            # An allow on another interface isn't counted (it might not be this one); a deny is, to be safe.
+            if nets[n] is None and (not dev or not allow and dev[1] != "tailscale0") and _decides(net, n, allow):
+                nets[n] = allow
+    cmds = [["ufw", "allow", "from", str(n), "to", "any", "port", str(port), "proto", "tcp", "comment", "auren phone"]
+            for n, ok in nets.items() if ok is None]
+    if ts is None:
+        cmds.append(["ufw", "allow", "in", "on", "tailscale0", "from", str(TAILNET), "to", "any", "port", str(port),
+                     "proto", "tcp", "comment", "auren phone"])
+    paths = (("Wi-Fi/LAN", list(nets.values())), ("Tailscale", [ts]))
+    return {"blocked": [p for p, oks in paths if any(ok is not True for ok in oks)],
+            "denied": [p for p, oks in paths if False in oks], "cmds": cmds}
 
 
 def _tailscale_lets_in() -> bool:
