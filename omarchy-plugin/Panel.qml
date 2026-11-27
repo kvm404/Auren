@@ -1599,20 +1599,7 @@ Panel {
               color: Color.accent
             }
 
-            Choice {
-              width: parent.width
-              title: "PAIR"
-              options: root.asOptions(root.pairActions)
-              foreground: root.fg; fontFamily: root.font
-              cursorIndex: root.has(0) ? root.cursorCol : -1
-              onPicked: function(v, i) { root.runAction(root.pairActions, i) }
-              onHoveredIndex: function(i) { root.hover(0, i) }
-            }
-            Caption {
-              visible: root.pairStage === "starting"
-              text: "Opening a pairing…"
-            }
-            Column {          // the firewall step, before the QR code: ufw keeps phones out
+            Column {          // the firewall step, above its buttons and before the QR code: ufw keeps phones out
               width: parent.width
               spacing: Style.space(6)
               visible: root.firewallFirst
@@ -1631,6 +1618,19 @@ Panel {
                   : "")
                 color: Color.accent
               }
+            }
+            Choice {
+              width: parent.width
+              title: "PAIR"
+              options: root.asOptions(root.pairActions)
+              foreground: root.fg; fontFamily: root.font
+              cursorIndex: root.has(0) ? root.cursorCol : -1
+              onPicked: function(v, i) { root.runAction(root.pairActions, i) }
+              onHoveredIndex: function(i) { root.hover(0, i) }
+            }
+            Caption {
+              visible: root.pairStage === "starting"
+              text: "Opening a pairing…"
             }
             Caption {         // Let phones in's answer: outside the QR code, so it stays when the pairing ends
               visible: root.allowNote !== ""
