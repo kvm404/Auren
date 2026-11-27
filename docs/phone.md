@@ -189,59 +189,6 @@ Share text, a link or an image from any Android app to Auren, then pick:
 | PC clipboard | Copied with `wl-copy` (on a Mac, the pasteboard; an image as PNG) |
 | Open on PC | A link opens in the browser, an image in the viewer, text shows as a notification |
 
-## Phone control
-
-Auren on the PC can use the phone the way you do: open apps, read what's on the screen, tap, type, scroll
-and press Back, Home and the other system keys. "Open WhatsApp and tell Mom I'm late" works from the desk.
-
-**Turning it on.** In the app, open Settings, then Phone control, then *Turn on in Accessibility*, and turn
-on **Auren phone control**. Android greys it out for an app that wasn't installed from a store: open App
-info for Auren, tap ⋮, choose *Allow restricted settings*, and try again. While it's on, the app stays
-connected to the PC with no screen showing, so the PC can reach the phone at any time. The microphone
-still stops when the app leaves.
-
-**How it reads.** The accessibility service (`HandsService`) reads the app in front (and the notification
-shade or a system dialog when one is open) into text plus numbered items: what can be tapped, typed into,
-switched or scrolled. A row with no words of its own (a chat in a list) is named by what it holds. The
-brain's tools are `phone_screen`, `phone_open_app`, `phone_apps`, `phone_tap`, `phone_type`,
-`phone_scroll` and `phone_key`; each action returns the screen after it, marked untrusted.
-
-**Safety.** Phone control follows the PC's safety level. A tap on something that sends, buys, deletes or
-posts asks first, and so do taps that install, uninstall, erase or reset, or show a password (these ask at
-every level but Full access, like the laptop's floor). Pressing the keyboard's action key in a field that
-isn't a search asks too (as a post, not a send, in a comment or post box). While a typed message waits
-unsent, a tap on a button with no name asks, since it may be the Send. Locking the phone asks like locking
-the laptop (so not at Auto). Typing a password doesn't ask, as in the browser, but its text is never put
-in a question. Full access asks nothing.
-
-At Auto, a message your own words just asked for goes without asking: "tell Mom I'm late on WhatsApp" types
-it and taps Send. The judge ([safety.md](safety.md#the-judge)) reads what you said, the text, and the top
-of the phone's screen, where the chat's name is; if it isn't sure, it asks. The Send tap goes only if the
-box still holds exactly that text.
-
-**Which device.** A request from the desk is for the laptop unless it says "on my phone". A request from
-the phone, while that phone's control is on, is for the phone unless it names the laptop ("open WhatsApp"
-on the phone opens it on the phone).
-
-Every numbered action names the label it was read with, an empty one too, and goes only to the phone that
-screen came from. The PC checks both before a confirmed action runs, and the phone checks the label again on
-its live screen before acting, so a screen that changed meanwhile refuses instead of tapping something else.
-Auren's own app is never read or tapped. Password fields never leave the phone: the screen says only that a
-field is one. Screen text, app names and the phone's refusals reach the brain as untrusted data.
-
-**Messages.** The phone sends `control.ready` (`{on}`) after each hello and whenever the service is turned
-on or off. The PC sends `control` (`{id, action, ...}`) to the newest connection that has it on, one at a
-time (a numbered action goes to the phone its screen was read on); `action` is `screen`, `tap` (`n, long,
-expect`), `type` (`n, text, submit, expect`), `scroll` (`direction, n?, expect?`), `key` (`back, home,
-recents, notifications, quick_settings, lock`), `open` (`app`) or `apps` (`query`); a `tap` that sends a
-typed message also names it (`draft: {n, text}`) and the phone refuses unless that box holds just that
-text. The phone runs them one at a time and answers `control.result` with `{id, ok, screen, items:[{n,
-label, field, search, password, draft, text?}]}` (`text`: what an unsent message box holds) or `{id, ok:
-false, error}`; only the phone an action went to can answer it. The PC gives up after 20 s and sends
-`control.cancel` (`{id}`), and the phone drops that action if it hasn't run yet, as it drops all of them
-when the link goes. An action with no answer may still have happened: the PC forgets the last screen's
-numbers, so the brain reads the screen again before the next one.
-
 ## Protocol (API v1)
 
 Base URL `https://<address>:<port>`, any address from the QR code or the last hello. HTTPS and WSS only:
