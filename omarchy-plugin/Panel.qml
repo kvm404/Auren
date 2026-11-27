@@ -285,7 +285,7 @@ Panel {
 
   // Pairing: auren phone pair --json writes the QR code (a PNG) and prints a line for it, then one when a
   // phone paired or the code expired. Cancel (or closing the panel) stops it, and the code stops working.
-  property var pairing: ({})          // { uri, qr, expires, where, warn, firewall } while the code is up
+  property var pairing: ({})          // { uri, qr, expires, where, warn, firewall, can_allow } while the code is up
   property string pairStage: ""       // "", "starting", "showing", "paired", "expired", "error"
   property string pairNote: ""
   Process {
@@ -307,11 +307,15 @@ Panel {
         root.pairNote = "Pairing stopped. auren doctor says why."
       }
       root.pairing = ({})
+      if (root.freshCode) {
+        root.freshCode = false
+        Qt.callLater(function() { var note = root.allowNote; root.startPairing(); root.allowNote = note })
+      }
     }
   }
   function startPairing() {
     if (pairProc.running) return
-    appShown = false
+    appShown = false; codeAnyway = false
     pairing = ({}); pairNote = ""; if (!allowProc.running) allowNote = ""; pairStage = "starting"
     pairProc.running = true
   }
@@ -320,9 +324,15 @@ Panel {
   // port on just the blocked paths, through pkexec, so Omarchy's password prompt asks first.
   // The answer belongs to the pairing it was asked from (`allowFor`, its code): one that ended meanwhile keeps
   // its note, and a newer pairing keeps its own warning.
+  // While ufw keeps phones out, the firewall step comes first and the QR code waits (a phone scanning it would
+  // only fail): Show the code anyway is for a phone on Tailscale, or opening the port by hand. Once phones can
+  // get in, a new code replaces the one that waited, so it gets its full 5 minutes.
   property string allowNote: ""
   property string allowFor: ""
   property bool allowWaiting: false
+  property bool codeAnyway: false
+  property bool freshCode: false
+  readonly property bool firewallFirst: pairStage === "showing" && !!pairing.firewall && !codeAnyway
   Process {
     id: allowProc
     command: [root.aurenBin, "phone", "allow", "--json"]
@@ -343,7 +353,10 @@ Panel {
     allowWaiting = false
     var r
     try { r = JSON.parse(out.trim().split("\n").pop()) } catch (e) { r = { error: "auren phone allow didn't answer: auren doctor says why." } }
-    if (r.ok && pairing.uri && pairing.uri === allowFor) { var p = Object.assign({}, pairing); p.firewall = ""; pairing = p }
+    if (r.ok && pairing.uri && pairing.uri === allowFor) {
+      if (firewallFirst) { freshCode = true; cancelPairing() }
+      else { var p = Object.assign({}, pairing); p.firewall = ""; pairing = p }
+    }
     allowNote = r.ok ? "Phones can get in now." : (r.error || "That didn't work: auren doctor says why.")
   }
   function cancelPairing() {
@@ -352,11 +365,17 @@ Panel {
   }
   readonly property int pairLeft: Math.max(0, Math.round((root.pairing.expires || 0) - root.now))
   Timer { interval: 1000; running: root.pairStage === "showing"; repeat: true; onTriggered: root.now = Date.now() / 1000 }
-  readonly property var pairActions: pairProc.running || pairStage === "starting" || pairStage === "showing"
+  readonly property var letIn: ({ label: allowProc.running ? "Asking…" : "Let phones in", icon: "󰒃",
+    tip: "Opens Auren's phone port in the firewall (ufw), only where it's blocked. Asks for your password",
+    enabled: !allowProc.running, run: root.allowPhones })
+  readonly property var pairActions: root.firewallFirst
+    ? (root.pairing.can_allow ? [root.letIn] : []).concat([
+        { label: "Show the code anyway", icon: "󰐲", tip: "For a phone on Tailscale, or once you've opened the port yourself",
+          enabled: !allowProc.running, run: function() { root.codeAnyway = true } },
+        { label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }])
+    : pairProc.running || pairStage === "starting" || pairStage === "showing"
     ? [{ label: "Cancel", icon: "󰅖", tip: "The code stops working at once", run: root.cancelPairing }].concat(
-        root.pairing.firewall ? [{ label: allowProc.running ? "Asking…" : "Let phones in", icon: "󰒃",
-          tip: "Opens Auren's phone port in the firewall (ufw), only where it's blocked. Asks for your password",
-          enabled: !allowProc.running, run: root.allowPhones }] : [])
+        root.pairing.firewall && root.pairing.can_allow ? [root.letIn] : [])
     : [{ label: root.phones.length ? "Pair another phone" : "Pair a phone", icon: "󰄜",
          tip: "A one-time QR code for the Auren app (works for 5 minutes)", enabled: root.daemonAlive, run: root.startPairing },
        { label: root.appShown ? "Hide the app code" : "Get the app", icon: "󰀲",
@@ -1593,6 +1612,26 @@ Panel {
               visible: root.pairStage === "starting"
               text: "Opening a pairing…"
             }
+            Column {          // the firewall step, before the QR code: ufw keeps phones out
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.firewallFirst
+              Text {
+                width: parent.width
+                text: root.pairing.can_allow ? "First, let phones in." : "First, the firewall."
+                color: root.fg
+                font.family: root.font
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                wrapMode: Text.Wrap
+              }
+              Caption {
+                text: (root.pairing.firewall || "") + (root.pairing.can_allow
+                  ? " Let phones in opens just Auren's port, after your password; then the code shows up."
+                  : "")
+                color: Color.accent
+              }
+            }
             Caption {         // Let phones in's answer: outside the QR code, so it stays when the pairing ends
               visible: root.allowNote !== ""
               text: root.allowNote
@@ -1600,7 +1639,7 @@ Panel {
             Row {         // the QR code, while it works
               width: parent.width
               spacing: Style.space(14)
-              visible: root.pairStage === "showing" && !!root.pairing.qr
+              visible: root.pairStage === "showing" && !!root.pairing.qr && !root.firewallFirst
               Rectangle {
                 id: qrBox
                 width: Style.space(176)
@@ -1642,7 +1681,8 @@ Panel {
                 }
                 Caption {
                   visible: !!root.pairing.firewall
-                  text: (root.pairing.firewall || "") + " Let phones in opens Auren's port (it asks for your password)."
+                  text: (root.pairing.firewall || "") + (root.pairing.can_allow
+                    ? " Let phones in opens Auren's port (it asks for your password)." : "")
                   color: Color.accent
                 }
               }

@@ -854,7 +854,7 @@ def _pair_json() -> int:
         fw = firewall(int(st["port"]), bound)
         out(uri=uri, qr=str(qr), expires=expires,
             where=[{"ip": x["ip"], "via": x["via"]} for x in bound], warn=tailscale_off(st),
-            firewall=fw.get("why", ""))
+            firewall=fw.get("why", ""), can_allow=bool(fw.get("cmds")))
         while time.time() < expires:
             new = [d for d in devices() if d["id"] not in before]
             if new:
@@ -925,6 +925,8 @@ def main(argv: list[str] | None = None) -> int:
     bound = listening(st)
     uri = pair_uri([a["ip"] for a in reach(bound)], int(st["port"]), code, st["fp"])
     before = {d["id"] for d in devices()}
+    if why := firewall(int(st["port"]), bound).get("why"):      # first: before the code, which can't work yet
+        print(f"{why} To let phones in first: auren phone allow\n")
     if not a.no_qr:
         print(_qr(uri))
     print("Scan this with the Auren app (Pair), or paste the line below into it:\n")
@@ -934,8 +936,6 @@ def main(argv: list[str] | None = None) -> int:
           f" port {st['port']}.")
     if warn := tailscale_off(st):
         print(f"\n{warn}")
-    if why := firewall(int(st["port"]), bound).get("why"):
-        print(f"\n{why} To let phones in: auren phone allow")
     if a.no_wait:
         return 0
     try:

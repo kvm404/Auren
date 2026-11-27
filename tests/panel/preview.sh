@@ -5,7 +5,7 @@
 #
 # shots: a comma list of page[:state], pages 0-6 (Home, Mascot, Voice, Brain, Vocabulary, Phone, Updates), states:
 # available, confirm, updating, failed (Updates page), refused (Vocabulary page), pairing (a QR code up),
-# firewall (a QR code up, and ufw keeps phones out), tsoff (Tailscale off on the PC), nophone (none paired, not listening), app (Get the app's QR code) (Phone page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
+# firewall (ufw keeps phones out: the firewall step, before the QR code), tsoff (Tailscale off on the PC), nophone (none paired, not listening), app (Get the app's QR code) (Phone page), cursor, nav, down (the keyboard cursor; down goes to the page's last row),
 # awaiting (Auren is asking two yes/no questions: every page of that run shows it), autosend (auto-send is on,
 # after 5 s: every page of that run too).
 # PANEL_MAX_HEIGHT=500 caps the panel's height like a short screen does. PANEL_PACKAGED=1 shows an install

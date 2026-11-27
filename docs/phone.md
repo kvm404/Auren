@@ -18,7 +18,8 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
 2. Check the firewall. Omarchy turns on `ufw`, which drops incoming connections, so if nothing lets port
    8735 in, the app can't reach the PC. Often something already does: Tailscale lets its own traffic past
    ufw, and a rule that allows everything from your LAN covers the port too. Pairing checks this and says
-   so when ufw keeps phones out; the bar panel then offers **Let phones in**, which runs
+   so when ufw keeps phones out; the bar panel then shows that step before the QR code, with **Let phones
+   in** (or **Show the code anyway**, for a phone on Tailscale), which runs
    `auren phone allow`: it opens just this port on just the blocked path, through `pkexec`, so Omarchy's
    password prompt asks first. `auren doctor`'s **Phone** section says the same. The rules are for your
    Wi-Fi's own subnet (its interface's prefix) and the tailnet's addresses, and look like this if you'd
@@ -56,7 +57,7 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
 
 | Command | Does |
 |---|---|
-| `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn, firewall}` (`qr` a PNG, deleted after; `firewall`: what ufw blocks, or ""), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
+| `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn, firewall, can_allow}` (`qr` a PNG, deleted after; `firewall`: what ufw blocks, or ""; `can_allow`: `auren phone allow` can open it, so not only a deny rule), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
 | `auren phone allow [--json]` | Let phones through ufw: runs the `ufw allow` rules for this port on the paths ufw blocks, as root through `pkexec` (it asks for your password), then checks again. Nothing to do: it says so and asks nothing. `--json` (the bar panel): `{ok}` or `{error}` |
 | `auren phone app [--json]` | A QR code to download the app for this version (`--json`, the bar panel: `{url, qr, version}`, `qr` a PNG) |
 | `auren phone devices [--json]` | The paired phones: id, name, when paired, last seen |

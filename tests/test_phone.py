@@ -2116,9 +2116,21 @@ def test_pairing_says_when_the_firewall_keeps_phones_out(monkeypatch, tmp_path, 
     monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
     assert phone.main(["pair", "--json"]) == 130
     line = json.loads(capsys.readouterr().out.splitlines()[0])
-    assert "keeps phones out on this Wi-Fi" in line["firewall"]
+    assert "keeps phones out on this Wi-Fi" in line["firewall"] and line["can_allow"] is True
     assert phone.main(["pair", "--no-qr"]) == 130
-    assert "auren phone allow" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.index("auren phone allow") < out.index("auren://pair")      # before the code, which can't work yet
+
+
+def test_pairing_offers_no_allow_when_only_a_deny_rule_blocks(monkeypatch, tmp_path, capsys):
+    _ufw(monkeypatch, tmp_path, "-A ufw-user-input -p tcp --dport 8735 -j DROP\n"
+         "-A ufw-user-input -p tcp --dport 8735 -j ACCEPT\n")
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": LAN, "missing": {}})
+    monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert phone.main(["pair", "--json"]) == 130
+    line = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert "deny rule" in line["firewall"] and line["can_allow"] is False
 
 
 def test_the_firewall_check_names_only_the_blocked_paths(monkeypatch, tmp_path):

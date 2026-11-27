@@ -5,8 +5,8 @@
 ### Added
 
 - Pairing a phone now says when the firewall (ufw) keeps phones out, which Omarchy's does on the Wi-Fi
-  until port 8735 is allowed. The bar panel's **Let phones in** (or `auren phone allow`) opens just that
-  port on just the blocked path, after your password. Before, only `auren doctor` said so, and a phone on
+  until port 8735 is allowed. The bar panel then asks to **Let phones in** before it shows the code (or
+  run `auren phone allow`): it opens just that port on just the blocked path, after your password. Before, only `auren doctor` said so, and a phone on
   the Wi-Fi simply couldn't connect.
 
 ### Fixed

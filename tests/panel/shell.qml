@@ -62,7 +62,7 @@ ShellRoot {
         where: [{ ip: "100.101.102.103", via: "tailscale" }, { ip: "192.168.1.20", via: "lan" }], warn: "" } }
       if (kind === "firewall") { p.pairStage = "showing"; p.pairing = { qr: run + "/phone-pair.png", expires: now + 263,
         where: [{ ip: "192.168.1.20", via: "lan" }], warn: "",
-        firewall: "The firewall (ufw) keeps phones out on this Wi-Fi." } }
+        firewall: "The firewall (ufw) keeps phones out on this Wi-Fi.", can_allow: true } }
       if (kind === "tsoff") p.phoneSt = { on: true, port: 8735, addrs: [{ ip: "192.168.1.20", via: "lan", ok: true }],
         missing: { tailscale: "Tailscale is off or logged out: tailscale up" }, connected: [] }
       if (kind === "nophone") { p.phoneSt = { on: false, idle: true }; p.phones = [] }
