@@ -127,9 +127,6 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
                 color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp)
         }
 
-        Section("Phone control")
-        HandsCard()
-
         if (pc != null) {
             Section("Unpair")
             Card {
@@ -144,41 +141,6 @@ fun SettingsScreen(onBack: () -> Unit, onUnpaired: () -> Unit) {
         }
         Text("Auren remote $version", color = Au.Faint, fontSize = 11.sp,
             modifier = Modifier.padding(vertical = 24.dp))
-    }
-}
-
-/**
- * Phone control: Auren on the PC uses this phone through Android's accessibility service. Android turns it
- * on (Accessibility, Auren phone control); a sideloaded app first needs "Allow restricted settings".
- */
-@Composable
-private fun HandsCard() {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val on by app.auren.phone.HandsService.on.collectAsStateWithLifecycle()
-    Card {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Let Auren use this phone", color = Au.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-            Text(if (on) "On" else "Off", color = if (on) Au.Text else Au.Faint, fontSize = 13.sp)
-        }
-        Text(
-            "Ask Auren to open an app, read the screen, tap, type or scroll. Risky taps and sends follow the PC's " +
-                "safety level. While it's on, the app stays connected to the PC.",
-            color = Au.Dim, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp),
-        )
-        OutlinedButton(
-            onClick = {
-                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-            },
-            modifier = Modifier.padding(top = 10.dp),
-        ) { Text(if (on) "Turn off in Accessibility" else "Turn on in Accessibility", color = Au.Text) }
-        if (!on) {
-            Text(
-                "Find Auren phone control under Downloaded apps. If Android greys it out, open App info for Auren, " +
-                    "tap ⋮, choose Allow restricted settings, and try again.",
-                color = Au.Faint, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 8.dp),
-            )
-        }
     }
 }
 
