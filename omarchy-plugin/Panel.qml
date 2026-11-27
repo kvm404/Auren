@@ -309,7 +309,10 @@ Panel {
       root.pairing = ({})
       if (root.freshCode) {
         root.freshCode = false
-        Qt.callLater(function() { var note = root.allowNote; root.startPairing(); root.allowNote = note })
+        Qt.callLater(function() {         // not once the panel closed: nothing would show the code
+          if (!root.opened) return
+          var note = root.allowNote; root.startPairing(); root.allowNote = note
+        })
       }
     }
   }
@@ -354,12 +357,13 @@ Panel {
     var r
     try { r = JSON.parse(out.trim().split("\n").pop()) } catch (e) { r = { error: "auren phone allow didn't answer: auren doctor says why." } }
     if (r.ok && pairing.uri && pairing.uri === allowFor) {
-      if (firewallFirst) { freshCode = true; cancelPairing() }
+      if (firewallFirst) { cancelPairing(); freshCode = true }
       else { var p = Object.assign({}, pairing); p.firewall = ""; pairing = p }
     }
     allowNote = r.ok ? "Phones can get in now." : (r.error || "That didn't work: auren doctor says why.")
   }
   function cancelPairing() {
+    freshCode = false                 // Cancel, or closing the panel, also drops a fresh code on its way
     if (pairStage === "starting" || pairStage === "showing") pairStage = ""
     if (pairProc.running) pairProc.signal(15)
   }
