@@ -17,6 +17,7 @@ from starlette.testclient import TestClient, WebSocketDenialResponse
 from auren import daemon, ears, integrations, phone, phone_server, tools
 from auren.daemon import Turn
 
+REAL_LAN_NETWORKS = phone.lan_networks
 REAL_TAILSCALE_IP = phone.tailscale_ip         # before the fixture stubs it (tests never ask this machine's)
 REAL_INSTALLED = integrations._installed       # before conftest replaces it with "everything is installed"
 SESSION = daemon.SESSION
@@ -33,6 +34,9 @@ def phone_dir(tmp_path, monkeypatch):
         monkeypatch.setattr(phone, name, value)
     monkeypatch.setattr(phone_server, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(phone, "tailscale_ip", lambda: (None, "Tailscale is off"))     # never this machine's
+    from auren import doctor
+    monkeypatch.setattr(doctor, "UFW_RULES", tmp_path / "no-ufw.rules")               # nor its firewall
+    monkeypatch.setattr(phone, "lan_networks", lambda ips: sorted(f"{ip.rsplit('.', 1)[0]}.0/24" for ip in ips))
     return d
 
 
@@ -189,13 +193,13 @@ def test_doctor_says_how_to_open_the_port_when_ufw_blocks_it(monkeypatch, tmp_pa
     rules.write_text("-A ufw-user-input -p tcp --dport 53317 -j ACCEPT\n")
     monkeypatch.setattr(doctor, "UFW_RULES", rules)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
-    blocked = doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True)
+    blocked = doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=True)
     assert blocked.status == doctor.WARN
-    assert "from 192.168.0.0/16 to any port 8735" in blocked.fix and "in on tailscale0" in blocked.fix
+    assert "from 192.168.0.0/24 to any port 8735" in blocked.fix and "in on tailscale0" in blocked.fix
     rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT\n")
-    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=False).status == doctor.OK
+    assert doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=False).status == doctor.OK
     monkeypatch.setattr(doctor, "_run", lambda cmd: (3, "inactive"))
-    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True) is None       # no ufw: nothing to say
+    assert doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=True) is None       # no ufw: nothing to say
 
 
 # --- the inbox -----------------------------------------------------------------------------------
@@ -1807,13 +1811,13 @@ def test_doctor_checks_each_path_through_the_firewall(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "UFW_RULES", rules)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
     rules.write_text("-A ufw-user-input -i tailscale0 -p tcp --dport 8735 -j ACCEPT\n")
-    lan = doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True)
+    lan = doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=True)
     assert lan.status == doctor.WARN and "Wi-Fi/LAN" in lan.detail
-    assert "from 192.168.0.0/16" in lan.fix and "tailscale0" not in lan.fix
+    assert "from 192.168.0.0/24" in lan.fix and "tailscale0" not in lan.fix
     rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 10.0.0.0/8 -j ACCEPT\n")     # another subnet
-    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=False).status == doctor.WARN
+    assert doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=False).status == doctor.WARN
     rules.write_text("-A ufw-user-input -p tcp --dport 8735 -j ACCEPT\n")                    # from anywhere
-    assert doctor.firewall_check(8735, ["192.168.0.105"], tailscale=True).status == doctor.OK
+    assert doctor.firewall_check(8735, ["192.168.0.0/24"], tailscale=True).status == doctor.OK
 
 
 def test_phone_pair_refuses_a_dead_daemons_status(monkeypatch, capsys):
@@ -1891,17 +1895,17 @@ def test_doctor_sees_a_rule_for_every_port_and_tailscales_own(monkeypatch, tmp_p
     prefs = {"NetfilterMode": 2}
     monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps(prefs)) if cmd[1:] == ["debug", "prefs"] else (0, "active"))
     rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
-    assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.OK
+    assert doctor.firewall_check(8735, ["192.168.31.0/24"], tailscale=True).status == doctor.OK
     for other in ("-A ufw-user-input -p udp -s 192.168.31.0/24 -j ACCEPT",           # UDP only
                   "-A ufw-user-input -p tcp --dport 22 -s 192.168.31.0/24 -j ACCEPT",  # another port
                   "-A ufw-user-input -p udp -d 172.17.0.1 --dport 53 -s 192.168.0.0/16 -j ACCEPT"):
         rules.write_text(other + "\n")
-        assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.WARN
+        assert doctor.firewall_check(8735, ["192.168.31.0/24"], tailscale=True).status == doctor.WARN
     rules.write_text("-A ufw-user-input -p tcp -m multiport --dports 8000,8735 -j ACCEPT\n")
-    assert doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True).status == doctor.OK
+    assert doctor.firewall_check(8735, ["192.168.31.0/24"], tailscale=True).status == doctor.OK
     prefs["NetfilterMode"] = 1                                       # nodivert: ufw decides for tailscale0 too
     rules.write_text("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT\n")
-    ts = doctor.firewall_check(8735, ["192.168.31.214"], tailscale=True)
+    ts = doctor.firewall_check(8735, ["192.168.31.0/24"], tailscale=True)
     assert ts.status == doctor.WARN and "Tailscale" in ts.detail and "tailscale0" in ts.fix
 
 
@@ -2047,7 +2051,7 @@ def test_the_firewall_check_counts_only_rules_that_let_the_phone_in(monkeypatch,
     rules = tmp_path / "user.rules"
     monkeypatch.setattr(doctor, "UFW_RULES", rules)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (0, "active"))
-    lan = ["192.168.31.214"]
+    lan = ["192.168.31.0/24"]
     for line, ok in [("-A ufw-user-input -s 192.168.31.0/24 -j ACCEPT", True),
                      ("-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT", True),
                      ("-A ufw-user-input -p gre -j ACCEPT", False),             # another protocol
@@ -2084,3 +2088,185 @@ def test_without_networksetup_a_mac_keeps_only_en_interfaces(monkeypatch):
     monkeypatch.setattr(mac_phone, "_run", lambda cmd: answers.get(cmd[0]))
     assert mac_phone.lan_addresses() == (["192.168.1.23", "10.20.30.40"], "")
     assert mac_phone.pick_lan(links, {"foo0", "en0"}) == ["192.168.1.23", "192.168.77.1"]   # listed: trusted
+
+
+# --- letting phones through the firewall ---------------------------------------------------------------------
+
+def _ufw(monkeypatch, tmp_path, rules: str, netfilter: int = 2):
+    from auren import doctor
+    path = tmp_path / "user.rules"
+    path.write_text(rules)
+    monkeypatch.setattr(doctor, "UFW_RULES", path)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (0, json.dumps({"NetfilterMode": netfilter}))
+                        if cmd[1:] == ["debug", "prefs"] else (0, "active"))
+    monkeypatch.setattr(phone.sys, "platform", "linux")
+    return path
+
+
+LAN = [{"ip": "192.168.1.20", "via": "lan", "ok": True}]
+OMARCHY_DEFAULT = "-A ufw-user-input -p tcp --dport 53317 -j ACCEPT\n"       # LocalSend only
+
+
+def test_pairing_says_when_the_firewall_keeps_phones_out(monkeypatch, tmp_path, capsys):
+    """Omarchy's ufw opens only LocalSend: a phone on the Wi-Fi can't reach the PC, and pairing used to say
+    nothing about it (only auren doctor did)."""
+    _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": LAN, "missing": {}})
+    monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert phone.main(["pair", "--json"]) == 130
+    line = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert "keeps phones out on this Wi-Fi" in line["firewall"] and line["can_allow"] is True
+    assert phone.main(["pair", "--no-qr"]) == 130
+    out = capsys.readouterr().out
+    assert out.index("auren phone allow") < out.index("auren://pair")      # before the code, which can't work yet
+
+
+def test_pairing_offers_no_allow_when_only_a_deny_rule_blocks(monkeypatch, tmp_path, capsys):
+    _ufw(monkeypatch, tmp_path, "-A ufw-user-input -p tcp --dport 8735 -j DROP\n"
+         "-A ufw-user-input -p tcp --dport 8735 -j ACCEPT\n")
+    monkeypatch.setattr(phone, "_serving", lambda since, wait=None: {
+        "on": True, "port": 8735, "fp": "ab" * 32, "pid": os.getpid(), "addrs": LAN, "missing": {}})
+    monkeypatch.setattr(phone.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert phone.main(["pair", "--json"]) == 130
+    line = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert "deny rule" in line["firewall"] and line["can_allow"] is False
+
+
+def test_the_firewall_check_names_only_the_blocked_paths(monkeypatch, tmp_path):
+    rules = _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    ts = [{"ip": "100.92.1.2", "via": "tailscale"}]
+    fw = phone.firewall(8735, LAN + ts)              # Tailscale's own rules let tailscale0 in: only the Wi-Fi
+    assert fw["cmds"] == [["ufw", "allow", "from", "192.168.1.0/24", "to", "any", "port", "8735", "proto", "tcp",
+                           "comment", "auren phone"]]
+    assert "Tailscale" not in fw["why"]
+    _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT, netfilter=1)                 # ufw decides for tailscale0 too
+    fw = phone.firewall(8735, LAN + ts)
+    assert len(fw["cmds"]) == 2 and fw["cmds"][1][:5] == ["ufw", "allow", "in", "on", "tailscale0"]
+    assert "on this Wi-Fi or over Tailscale" in fw["why"]
+    rules.write_text("-A ufw-user-input -s 192.168.1.0/24 -j ACCEPT\n")       # a rule for the whole LAN
+    assert phone.firewall(8735, LAN) == {}
+    rules.write_text(OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone.sys, "platform", "darwin")                       # macOS asks by itself
+    assert phone.firewall(8735, LAN) == {}
+
+
+def test_allow_runs_ufw_through_pkexec_and_says_why_not(monkeypatch):
+    import subprocess
+    ran = []
+
+    def run(cmd, **_):
+        ran.append(cmd)
+        return subprocess.CompletedProcess(cmd, answer[0], "", answer[1])
+    monkeypatch.setattr(phone.subprocess, "run", run)
+    monkeypatch.setattr(phone.shutil, "which", lambda name: f"/home/me/.local/bin/{name}")   # never from PATH
+    monkeypatch.setattr(phone.os, "access", lambda path, mode: path in ("/usr/bin/pkexec", "/usr/bin/ufw"))
+    cmds = [["ufw", "allow", "from", "192.168.0.0/16", "to", "any", "port", "8735", "proto", "tcp",
+             "comment", "auren phone"]]
+    answer = (0, "")
+    assert phone.allow(cmds) == ""
+    assert ran == [["/usr/bin/pkexec", "/usr/bin/ufw", *cmds[0][1:]]]       # one argv, no shell
+    answer = (126, "Error executing command as another user: Request dismissed")
+    assert "closed" in phone.allow(cmds)
+    answer = (127, "Error executing command as another user: Not authorized")
+    assert "refused" in phone.allow(cmds)
+    answer = (127, "Error executing command as another user: No authentication agent found.")
+    assert "sudo" in phone.allow(cmds)
+    answer = (127, "Cannot run program /usr/bin/ufw: No such file or directory")
+    assert phone.allow(cmds) == "pkexec failed: Cannot run program /usr/bin/ufw: No such file or directory"
+    answer = (1, "ERROR: Bad port")
+    assert phone.allow(cmds) == "ufw failed: ERROR: Bad port"
+    monkeypatch.setattr(phone.os, "access", lambda path, mode: path == "/usr/bin/ufw")
+    assert "pkexec isn't installed" in phone.allow(cmds)
+
+
+def test_auren_phone_allow_opens_the_port_and_checks_again(monkeypatch, tmp_path, capsys):
+    rules = _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("192.168.1.20", "lan")], {}))
+    asked = []
+
+    def ufw_adds_the_rule(cmds):
+        asked.append(cmds)
+        rules.write_text(OMARCHY_DEFAULT + "-A ufw-user-input -p tcp --dport 8735 -s 192.168.0.0/16 -j ACCEPT\n")
+        return ""
+    monkeypatch.setattr(phone, "allow", ufw_adds_the_rule)
+    assert phone.main(["allow", "--json"]) == 0 and json.loads(capsys.readouterr().out) == {"ok": True}
+    assert len(asked) == 1
+    assert phone.main(["allow"]) == 0 and "already lets phones in" in capsys.readouterr().out
+    assert len(asked) == 1                                                     # nothing to open: no password asked
+    rules.write_text(OMARCHY_DEFAULT)
+    monkeypatch.setattr(phone, "allow", lambda cmds: "Not allowed: the password prompt was closed or refused.")
+    assert phone.main(["allow", "--json"]) == 1
+    assert "refused" in json.loads(capsys.readouterr().out)["error"]
+    monkeypatch.setattr(phone, "allow", lambda cmds: "")                     # ran, yet ufw still blocks
+    assert phone.main(["allow", "--json"]) == 1
+    assert "still keeps phones out" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_the_firewall_check_follows_ufws_first_match(monkeypatch, tmp_path):
+    """ufw takes the first rule that matches: an allow added after a deny never counts."""
+    from auren import doctor
+    rules = _ufw(monkeypatch, tmp_path, "-A ufw-user-input -p tcp --dport 8735 -j DROP\n"
+                 "-A ufw-user-input -p tcp --dport 8735 -s 192.168.1.0/24 -j ACCEPT\n")
+    gaps = doctor.ufw_gaps(8735, ["192.168.1.0/24"], tailscale=False)
+    assert gaps == {"blocked": ["Wi-Fi/LAN"], "denied": ["Wi-Fi/LAN"], "cmds": []}
+    check = doctor.firewall_check(8735, ["192.168.1.0/24"], tailscale=False)
+    assert check.status == doctor.WARN and "ufw status numbered" in check.fix and "auren phone allow" not in check.fix
+    fw = phone.firewall(8735, LAN)
+    assert fw["cmds"] == [] and "deny rule" in fw["why"]
+    rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 192.168.1.0/24 -j ACCEPT\n"     # the allow first
+                     "-A ufw-user-input -p tcp --dport 8735 -j DROP\n")
+    assert phone.firewall(8735, LAN) == {}
+    rules.write_text("-A ufw-user-input -p tcp --dport 8735 -s 192.168.1.66 -j REJECT\n"      # one phone's address
+                     "-A ufw-user-input -p tcp --dport 8735 -j ACCEPT\n")
+    assert doctor.ufw_gaps(8735, ["192.168.1.0/24"], tailscale=False)["denied"] == ["Wi-Fi/LAN"]
+
+
+@pytest.mark.parametrize("rule, covered", [
+    ("-A ufw-user-input -p tcp --dport 8700:8800 -j ACCEPT", True),                 # a range
+    ("-A ufw-user-input -p tcp -m multiport --dports 22,8700:8800 -j ACCEPT", True),
+    ("-A ufw-user-input -p tcp --dport 8700:8734 -j ACCEPT", False),
+    ("-A ufw-user-input -p tcp --dport 8735 -s 192.168.1.20 -j ACCEPT", False),     # only the PC's own address
+    ("-A ufw-user-input -p tcp --dport 8735 -s 192.168.1.0/25 -j ACCEPT", False),   # half the subnet
+    ("-A ufw-user-input -i wlan0 -p tcp --dport 8735 -j ACCEPT", False),            # an interface it can't tell
+])
+def test_the_firewall_check_counts_a_rule_only_for_all_of_the_subnet(monkeypatch, tmp_path, rule, covered):
+    from auren import doctor
+    _ufw(monkeypatch, tmp_path, rule + "\n")
+    assert (doctor.ufw_gaps(8735, ["192.168.1.0/24"], tailscale=False)["blocked"] == []) is covered
+
+
+def test_the_firewall_check_takes_each_lan_and_tailscale_separately(monkeypatch, tmp_path):
+    from auren import doctor
+    _ufw(monkeypatch, tmp_path, "-A ufw-user-input -s 192.168.1.0/24 -j ACCEPT\n"
+         "-A ufw-user-input -i tailscale0 -p tcp --dport 8735 -s 100.101.102.103 -j ACCEPT\n", netfilter=1)
+    gaps = doctor.ufw_gaps(8735, ["10.0.0.0/24", "192.168.1.0/24"], tailscale=True)
+    assert gaps["blocked"] == ["Wi-Fi/LAN", "Tailscale"]                    # one tailnet address isn't the tailnet
+    assert [c[c.index("from") + 1] for c in gaps["cmds"]] == ["10.0.0.0/24", "100.64.0.0/10"]
+    assert gaps["cmds"][1][:7] == ["ufw", "allow", "in", "on", "tailscale0", "from", "100.64.0.0/10"]
+
+
+def test_a_firewall_it_cant_read_isnt_called_open(monkeypatch, tmp_path, capsys):
+    """ufw on, its rules unreadable: neither pairing nor auren phone allow says phones can get in."""
+    from auren import doctor
+    rules = _ufw(monkeypatch, tmp_path, OMARCHY_DEFAULT)
+    monkeypatch.setattr(type(rules), "read_text", lambda self, *a, **k: (_ for _ in ()).throw(PermissionError(13, "Permission denied")))
+    with pytest.raises(OSError):
+        doctor.ufw_gaps(8735, ["192.168.1.0/24"], tailscale=False)
+    assert doctor.firewall_check(8735, ["192.168.1.0/24"], tailscale=False).status == doctor.WARN
+    assert "couldn't be read" in phone.firewall(8735, LAN)["unknown"]
+    monkeypatch.setattr(phone, "addresses", lambda lan=True: ([("192.168.1.20", "lan")], {}))
+    monkeypatch.setattr(phone, "allow", lambda cmds: pytest.fail("nothing to run"))
+    assert phone.main(["allow", "--json"]) == 1
+    assert "couldn't be read" in json.loads(capsys.readouterr().out)["error"]
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (3, "inactive"))           # unreadable, ufw off: no firewall
+    assert doctor.ufw_gaps(8735, ["192.168.1.0/24"], tailscale=False) is None
+
+
+def test_lan_networks_use_the_interfaces_prefix(monkeypatch):
+    import subprocess
+    out = json.dumps([{"ifname": "wlan0", "addr_info": [{"local": "192.168.31.214", "prefixlen": 24}]},
+                      {"ifname": "eth0", "addr_info": [{"local": "10.1.2.3", "prefixlen": 16}]}])
+    monkeypatch.setattr(phone.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert REAL_LAN_NETWORKS(["192.168.31.214", "10.1.2.3", "172.16.5.9"]) == [
+        "10.1.0.0/16", "172.16.5.0/24", "192.168.31.0/24"]                   # unknown: a /24

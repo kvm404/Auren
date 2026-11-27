@@ -15,16 +15,24 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
    bridge over one), never on `0.0.0.0`, a public address, or Docker/VM/VPN interfaces. Either path is enough; with both, the app uses Wi-Fi at
    home and Tailscale away. It listens only while a phone is paired or a pairing is open: until you run
    `auren phone pair`, nothing on the network can reach it.
-2. Check the firewall: run `auren doctor` and look at its **Phone** section. Omarchy turns on `ufw`,
-   which drops incoming connections, so if nothing lets port 8735 in, the app can't reach the PC. Often
-   something already does: Tailscale lets its own traffic past ufw, and a rule that allows everything from
-   your LAN covers the port too. Doctor knows both. If it warns, it prints the commands for your own
-   addresses, which look like this (LAN and Tailscale only):
+2. Check the firewall. Omarchy turns on `ufw`, which drops incoming connections, so if nothing lets port
+   8735 in, the app can't reach the PC. Often something already does: Tailscale lets its own traffic past
+   ufw, and a rule that allows everything from your LAN covers the port too. Pairing checks this and says
+   so when ufw keeps phones out; the bar panel then shows that step before the QR code, with **Let phones
+   in** (or **Show the code anyway**, for a phone on Tailscale), which runs
+   `auren phone allow`: it opens just this port on just the blocked path, through `pkexec`, so Omarchy's
+   password prompt asks first. `auren doctor`'s **Phone** section says the same. The rules are for your
+   Wi-Fi's own subnet (its interface's prefix) and the tailnet's addresses, and look like this if you'd
+   rather add them yourself (the second only when Tailscale's own firewall rules are off):
 
    ```sh
-   sudo ufw allow from 192.168.0.0/16 to any port 8735 proto tcp comment 'auren phone'
-   sudo ufw allow in on tailscale0 to any port 8735 proto tcp comment 'auren phone'
+   sudo ufw allow from 192.168.1.0/24 to any port 8735 proto tcp comment 'auren phone'
+   sudo ufw allow in on tailscale0 from 100.64.0.0/10 to any port 8735 proto tcp comment 'auren phone'
    ```
+
+   The check reads ufw's rules in order, as ufw does: a deny rule for the port that comes first wins, and
+   then `auren phone allow` doesn't add a rule that wouldn't count; it says to delete that one
+   (`sudo ufw status numbered`) instead.
 
    On a Mac, see [On macOS](#on-macos) for its firewall.
 3. Install the app: on the bar panel's **Phone** page, click **Get the app** and scan the QR code with the
@@ -49,7 +57,8 @@ window instead of the bar panel, and the firewall is macOS's own: see [On macOS]
 
 | Command | Does |
 |---|---|
-| `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn}` (`qr` a PNG, deleted after), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
+| `auren phone pair [--no-wait] [--no-qr] [--json]` | A new one-time code (any earlier one stops working). It opens the pairing, which starts the daemon's server, and waits for it to listen. `--json` (the bar panel): a line `{uri, qr, expires, where, warn, firewall, can_allow}` (`qr` a PNG, deleted after; `firewall`: what ufw blocks, or ""; `can_allow`: `auren phone allow` can open it, so not only a deny rule), then `{paired}`, `{expired}`, `{error}` or, on SIGTERM, `{cancelled}` |
+| `auren phone allow [--json]` | Let phones through ufw: runs the `ufw allow` rules for this port on the paths ufw blocks, as root through `pkexec` (it asks for your password), then checks again. Nothing to do: it says so and asks nothing. `--json` (the bar panel): `{ok}` or `{error}` |
 | `auren phone app [--json]` | A QR code to download the app for this version (`--json`, the bar panel: `{url, qr, version}`, `qr` a PNG) |
 | `auren phone devices [--json]` | The paired phones: id, name, when paired, last seen |
 | `auren phone revoke <id>` | Unpair one. Its token stops working at once and its open connection is closed |
