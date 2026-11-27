@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.auren.phone.ui.Au
 import app.auren.phone.ui.AurenTheme
@@ -103,7 +104,7 @@ private fun App(pairLink: String?, pairLinkUsed: () -> Unit) {
     }
 
     // An update's "install this?" screen opens from here, in front: Android blocks it from the background.
-    val confirmUpdate by Updates.confirm.collectAsStateWithLifecycle()
+    val confirmUpdate by Updates.confirm.collectAsStateWithLifecycle(minActiveState = Lifecycle.State.RESUMED)
     LaunchedEffect(confirmUpdate) {
         confirmUpdate?.let { Updates.confirmOpened(runCatching { ctx.startActivity(it) }.isSuccess) }
     }

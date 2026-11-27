@@ -17,8 +17,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -107,6 +109,9 @@ object Updates {
     val confirm: StateFlow<Intent?> = _confirm
     private var job: Job? = null
     private var checkedAt = 0L               // elapsedRealtime of the last check that got an answer; 0: none yet
+    @Volatile private var call: Call? = null  // the request in flight, so Cancel stops a download at once
+    /** The install session the installer's answers count for: an abandoned one's answer is ignored. */
+    @Volatile private var session = -1
     private val dir get() = File(app.cacheDir, "update")
 
     private val self: PackageInfo get() = app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
@@ -121,8 +126,10 @@ object Updates {
     /** The app came to the front: check, unless this run already did lately. */
     fun checkIfDue() {
         if (checkedAt != 0L && SystemClock.elapsedRealtime() - checkedAt < EVERY_MS) return
-        val s = _status.value       // never in the middle of an update, nor over one it found
-        if (s is UpdateStatus.Unknown || s is UpdateStatus.Current || (s is UpdateStatus.Failed && s.release == null)) check()
+        // Never in the middle of one; a release found earlier is looked up again (it may be gone, or a newer one out).
+        val s = _status.value
+        if (s is UpdateStatus.Checking || s is UpdateStatus.Downloading || s is UpdateStatus.Installing) return
+        check()
     }
 
     fun check() {
@@ -149,8 +156,12 @@ object Updates {
         if (job?.isActive == true) return
         job = scope.launch {
             try {
+                _confirm.value = null
                 _status.value = UpdateStatus.Downloading(r, 0)
-                val apk = withContext(Dispatchers.IO) { download(r) { _status.value = UpdateStatus.Downloading(r, it) } }
+                val apk = withContext(Dispatchers.IO) {
+                    // Only while still downloading: a Cancel in between stays.
+                    download(r) { n -> _status.update { if (it is UpdateStatus.Downloading) UpdateStatus.Downloading(r, n) else it } }
+                }
                 withContext(Dispatchers.IO) { vet(apk) }
                 _status.value = UpdateStatus.Installing(r)
                 withContext(Dispatchers.IO) { commit(apk) }
@@ -162,6 +173,14 @@ object Updates {
         }
     }
 
+    /** Stops a download; the update stays on offer. */
+    fun cancel() {
+        val s = _status.value as? UpdateStatus.Downloading ?: return
+        _status.value = UpdateStatus.Available(s.release)
+        job?.cancel()
+        call?.cancel()
+    }
+
     /** The activity opened (or couldn't open) [confirm]. */
     fun confirmOpened(ok: Boolean) {
         _confirm.value = null
@@ -170,6 +189,7 @@ object Updates {
 
     /** The package installer's answer about the session [commit] started (UpdateReceiver). */
     fun result(i: Intent) {
+        if (i.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) != session) return
         val r = _status.value.release
         when (val code = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
@@ -190,10 +210,14 @@ object Updates {
 
     // --- off the main thread ---------------------------------------------------------------------
 
-    private fun get(url: String, api: Boolean = false): Response {
+    /** [deadline]: the whole request, in seconds; the APK has none (Cancel stops it, and a stall still times out). */
+    private fun get(url: String, api: Boolean = false, deadline: Long = 30): Response {
         val req = Request.Builder().url(url).header("User-Agent", "Auren-phone")
             .apply { if (api) header("Accept", "application/vnd.github+json") }.build()
-        val res = http.newCall(req).execute()
+        val c = http.newCall(req)
+        if (deadline > 0) c.timeout().timeout(deadline, TimeUnit.SECONDS)
+        call = c
+        val res = c.execute()
         if (!res.isSuccessful) {
             res.close()
             throw HttpError(res.code)
@@ -209,14 +233,19 @@ object Updates {
 
     /** The APK in the cache, checked against the release's SHA-256: a copy already there is used again. */
     private fun download(r: Release, progress: (Long) -> Unit): File {
-        val want = get(r.sums).use { Releases.sha(it.body!!.string().take(4096), r.file) }
-            ?: throw IOException("the release's checksum doesn't name ${r.file}")
+        val sums = get(r.sums).use {
+            val src = it.body!!.source()
+            src.request(4097)                      // a checksum file is one line: never read a big one whole
+            if (src.buffer.size > 4096) throw IOException("the release's checksum file is too big")
+            src.buffer.readUtf8()
+        }
+        val want = Releases.sha(sums, r.file) ?: throw IOException("the release's checksum doesn't name ${r.file}")
         dir.mkdirs()
         val out = File(dir, r.file)
         if (out.isFile && sha256(out) == want) return out
         out.delete()
         val part = File(dir, r.file + ".part")
-        get(r.apk).use { res ->
+        get(r.apk, deadline = 0).use { res ->
             res.body!!.byteStream().use { input ->
                 part.outputStream().use { output ->
                     val buf = ByteArray(1 shl 16)
@@ -250,7 +279,11 @@ object Updates {
      */
     private fun vet(apk: File) {
         val pm = app.packageManager
-        val got = pm.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES)
+        // Android 10 reads an archive's certificates only when GET_SIGNATURES asks too.
+        @Suppress("DEPRECATION")
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES or
+            (if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) PackageManager.GET_SIGNATURES else 0)
+        val got = pm.getPackageArchiveInfo(apk.path, flags)
             ?: throw IOException("the download isn't an app Android can read")
         val me = self
         if (got.packageName != me.packageName) throw IOException("the download is a different app")
@@ -271,6 +304,7 @@ object Updates {
             setSize(apk.length())
         }
         val id = installer.createSession(params)
+        session = id
         installer.openSession(id).use { s ->
             try {
                 s.openWrite("auren.apk", 0, apk.length()).use { out ->

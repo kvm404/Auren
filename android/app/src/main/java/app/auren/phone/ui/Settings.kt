@@ -214,6 +214,7 @@ private fun UpdateCard() {
                 Text("Downloading Auren ${s.release.version}" +
                     (if (s.release.size > 0) ", ${mb(s.done)} of ${mb(s.release.size)} MB" else "") + "…",
                     color = Au.Faint, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                QuietButton("Cancel", Modifier.padding(top = 10.dp)) { Updates.cancel() }
             }
             is UpdateStatus.Installing -> {
                 Text("Installing Auren ${s.release.version}. Android asks you to confirm, then Auren closes: open it again after.",
